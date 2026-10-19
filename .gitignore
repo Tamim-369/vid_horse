@@ -33,6 +33,7 @@ htmlcov/
 
 # Generated pipeline output
 output/
+.cache/
 
 # Logs
 *.log

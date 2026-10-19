@@ -1,8 +1,64 @@
 """Build pipelines from settings."""
 
+from __future__ import annotations
+
+from blocks import ScriptGenerationBlock, TopicResearchBlock
+from blocks.asset_research import AssetOptions, AssetResearchBlock
+from config.settings import Settings, get_settings
+from core.interfaces import ArticleFetcher, LLMProvider
 from pipeline.orchestrator import ContentPipeline
+from providers.llm import create_llm_provider
+from providers.sources import MediaWikiArticleFetcher, build_http_client
+from providers.sources.mediawiki import MediaWikiClient
 
 
-def build_content_pipeline() -> ContentPipeline:
-    """Wire up the default content pipeline."""
-    ...
+def build_content_pipeline(
+    settings: Settings | None = None,
+    *,
+    llm: LLMProvider | None = None,
+    fetcher: ArticleFetcher | None = None,
+) -> ContentPipeline:
+    """Wire up the default research + script pipeline."""
+
+    settings = settings or get_settings()
+    llm = llm or create_llm_provider(settings)
+    if fetcher is None:
+        fetcher = MediaWikiArticleFetcher(
+            client=build_http_client(settings),
+            language=settings.wikipedia_language,
+            delay=settings.request_delay,
+            max_chars=settings.research_max_chars,
+        )
+    commons = MediaWikiClient(
+        "https://commons.wikimedia.org/w/api.php",
+        client=build_http_client(settings),
+        delay=settings.request_delay,
+    )
+    wiki = MediaWikiClient(
+        f"https://{settings.wikipedia_language}.wikipedia.org/w/api.php",
+        client=build_http_client(settings),
+        delay=settings.request_delay,
+    )
+    return ContentPipeline(
+        topic_research=TopicResearchBlock(
+            llm, fetcher, max_chars=settings.research_max_chars
+        ),
+        script_generation=ScriptGenerationBlock(
+            llm,
+            max_attempts=settings.max_retries + 1,
+            chunk_size=settings.script_long_chunk_size,
+            scene_count=settings.script_long_scenes,
+            hook_candidates=settings.script_hook_candidates,
+        ),
+        asset_research=AssetResearchBlock(
+            wiki,
+            commons,
+            options=AssetOptions(
+                assets_per_scene=settings.assets_per_scene,
+                search_limit=settings.asset_search_limit,
+                entity_limit=settings.asset_entity_limit,
+                thumb_width=settings.asset_thumb_width,
+                min_score=settings.asset_min_score,
+            ),
+        ),
+    )

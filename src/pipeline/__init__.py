@@ -1,6 +1,6 @@
 """Pipeline orchestration."""
 
 from pipeline.factory import build_content_pipeline
-from pipeline.orchestrator import ContentPipeline
+from pipeline.orchestrator import ContentPipeline, PipelineResult
 
-__all__ = ["ContentPipeline", "build_content_pipeline"]
+__all__ = ["ContentPipeline", "PipelineResult", "build_content_pipeline"]

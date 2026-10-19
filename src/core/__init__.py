@@ -1,1 +1,61 @@
 """Core domain: models, interfaces and errors."""
+
+from core.errors import (
+    BlockError,
+    ConfigurationError,
+    LLMError,
+    PipelineError,
+    ProviderError,
+    SearchError,
+    VideoAIError,
+)
+from core.interfaces import (
+    ArticleFetcher,
+    LLMMessage,
+    LLMProvider,
+    SearchProvider,
+    SearchResult,
+)
+from core.models import (
+    ArticleText,
+    PopularityTier,
+    ResearchBrief,
+    ScriptFormat,
+    ScriptPlan,
+    ScriptScene,
+    SourceTheory,
+    StrictModel,
+    Theory,
+    TheoryMetrics,
+    TheorySource,
+    TimelineEvent,
+    VideoScript,
+)
+
+__all__ = [
+    "ArticleFetcher",
+    "ArticleText",
+    "BlockError",
+    "ConfigurationError",
+    "LLMError",
+    "LLMMessage",
+    "LLMProvider",
+    "PipelineError",
+    "PopularityTier",
+    "ProviderError",
+    "ResearchBrief",
+    "ScriptFormat",
+    "ScriptScene",
+    "ScriptPlan",
+    "SearchError",
+    "SearchProvider",
+    "SearchResult",
+    "SourceTheory",
+    "StrictModel",
+    "Theory",
+    "TheoryMetrics",
+    "TheorySource",
+    "TimelineEvent",
+    "VideoAIError",
+    "VideoScript",
+]
