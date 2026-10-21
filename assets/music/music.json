@@ -1,0 +1,82 @@
+{
+  "reference_loudness_rms": 0.171,
+  "notes": "gain_db equalizes each track's perceived bed loudness to the reference (normal.mp3). Licenses verified 2026-10-21: Pixabay entries free for commercial video, no attribution; Tunetank personal license covers monetized YouTube (tunetank.com/legal/license).",
+  "tracks": [
+    {
+      "file": "normal.mp3",
+      "source": "pipeline default (our pull)",
+      "license": "verify before monetized upload",
+      "mood": "the channel's neutral dark pulse: steady mid-weight, gentle builds",
+      "genres": ["cosmic", "conspiracy"],
+      "gain_db": 0.0
+    },
+    {
+      "file": "full.mp3",
+      "source": "pipeline default (our pull)",
+      "license": "verify before monetized upload",
+      "mood": "long version of the default pulse with a rising late section; for 3min+ formats",
+      "genres": [],
+      "gain_db": -0.8
+    },
+    {
+      "file": "forest-deep-drone.mp3",
+      "title": "Silent Forest",
+      "artist": "Elijah_K",
+      "source": "https://pixabay.com/",
+      "license": "Pixabay Content License",
+      "attribution": "none required; do not redistribute as music files",
+      "mood": "wall of bass, doorless stillness; menacing calm",
+      "genres": ["horror"],
+      "gain_db": -4.2
+    },
+    {
+      "file": "unease-suspense.mp3",
+      "artist": "leberch",
+      "source": "https://pixabay.com/",
+      "license": "Pixabay Content License",
+      "attribution": "none required",
+      "mood": "sustained unease, mid-heavy, barely moves; eyes-on-you",
+      "genres": ["conspiracy"],
+      "gain_db": -2.4
+    },
+    {
+      "file": "ancient-airy-mist.mp3",
+      "title": "Ancient Mystery",
+      "artist": "Sonican",
+      "source": "https://pixabay.com/music/mystery-ancient-mystery-238994",
+      "license": "Pixabay Content License",
+      "attribution": "none required",
+      "mood": "airy, temple-at-dusk spaciousness; quiet and vast",
+      "genres": ["cosmic-vast"],
+      "gain_db": 6.0
+    },
+    {
+      "file": "swell-tension.mp3",
+      "artist": "Tunetank",
+      "source": "https://tunetank.com/",
+      "license": "Tunetank Personal (free account download; youtube monetization safe; claim removal tool available)",
+      "attribution": "none required for personal/social use",
+      "mood": "true cinematic swells that rise and drop; highest dynamics here",
+      "genres": ["horror-swell", "drama"],
+      "gain_db": 5.5
+    },
+    {
+      "file": "investigation-calm.mp3",
+      "artist": "Tunetank",
+      "source": "https://tunetank.com/",
+      "license": "Tunetank Personal (free account download; youtube monetization safe)",
+      "attribution": "none required for personal/social use",
+      "mood": "level drone, classic investigation-doc cadence",
+      "genres": ["history"],
+      "gain_db": 1.7
+    },
+    {
+      "file": "decrease_volume.mp3",
+      "source": "pipeline default (our pull)",
+      "license": "verify before monetized upload",
+      "mood": "a genuinely distinct piece (zero correlation to normal/full); heavier top end",
+      "genres": [],
+      "gain_db": -1.6
+    }
+  ]
+}

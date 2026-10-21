@@ -82,6 +82,106 @@ def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]
     return groups
 
 
+def _transcribe_words(
+    line: str, wav: Path, offset: float, model
+) -> tuple[list[str], list[float], list[float]]:
+    """Word list and absolute (start, end) times for one narration line.
+
+    Shared stream: subtitle cues and per-word subject timing both come
+    from the SAME transcription pass so they can never disagree.
+    """
+
+    segments, _info = model.transcribe(
+        str(wav),
+        word_timestamps=True,
+        language="en",
+        initial_prompt=line,
+    )
+    words: list[str] = []
+    starts: list[float] = []
+    ends: list[float] = []
+    metadata = torchaudio.info(str(wav))
+    audio_end = metadata.num_frames / metadata.sample_rate
+    seen: list[str] = []
+    for segment in segments:
+        words_in_segment = [w for w in (segment.words or []) if w.word.strip()]
+        if not words_in_segment:
+            continue
+        # initial_prompt occasionally comes back as a hallucinated echo:
+        # the whole line re-transcribed into the trailing silence with
+        # slightly different words. Anything that repeats words we have
+        # already heard in this line is an echo, not narration.
+        tokens = [w.word.strip().lower().strip(".,!?;:'\"") for w in words_in_segment]
+        cursor = 0
+        matched = 0
+        for token in tokens:
+            scan = token in seen[cursor:]
+            if scan:
+                matched += 1
+                cursor = seen.index(token, cursor) + 1
+        if tokens and matched / len(tokens) >= 0.8:
+            logger.debug("Dropping echo segment on %s", wav.name)
+            continue
+        seen.extend(tokens)
+        # timestamps past the wav's own samples are padding artefacts
+        if max(w.end for w in words_in_segment) > audio_end + 0.1:
+            continue
+        for word in words_in_segment:
+            words.append(word.word.strip())
+            starts.append(max(0.0, word.start) + offset)
+            ends.append(max(0.0, word.end) + offset)
+    if len(words) != len(line.split()):
+        logger.debug(
+            "ASR heard %d words for a %d-word line; trusting the audio",
+            len(words),
+            len(line.split()),
+        )
+    return words, starts, ends
+
+
+def align_speech(
+    lines: list[str],
+    wavs: list[Path],
+    offsets: list[float],
+    line_ends: list[float] | None = None,
+    *,
+    model_size: str = "base.en",
+    device: str = "cpu",
+) -> tuple[list[list[tuple[str, float, float]]], list[Cue]]:
+    """Transcribe the voice and return both word timings and subtitle cues.
+
+    ``offsets`` are each line's start time in the assembled video — the card
+    start frame times from the renderer, in seconds. ``line_ends`` are the
+    matching card end times; cues never cross them. The script line itself is
+    fed as ``initial_prompt`` so ASR reproduces the narration's own words
+    (proper nouns included); whisper supplies only the timing.
+
+    The word lists are absolute (line offset included) ``(word, start, end)``
+    per line, newest callers use them to fire subject images at the narration
+    word; the cues are the 3-4 word karaoke groups.
+    """
+
+    from faster_whisper import WhisperModel
+
+    model = WhisperModel(model_size, device=device, compute_type="int8")
+    word_lines: list[list[tuple[str, float, float]]] = []
+    cues: list[Cue] = []
+    for index, (line, wav, offset) in enumerate(
+        zip(lines, wavs, offsets, strict=True)
+    ):
+        words, starts, ends = _transcribe_words(line, wav, offset, model)
+        word_lines.append(list(zip(words, starts, ends, strict=False)))
+        line_cues = _cues(words, starts, ends)
+        if line_ends is not None:
+            line_end = line_ends[index]
+            line_cues = [
+                replace(cue, end=min(cue.end, line_end - 0.02))
+                for cue in line_cues
+            ]
+        cues.extend(line_cues)
+    return word_lines, cues
+
+
 def align_cues(
     lines: list[str],
     wavs: list[Path],
@@ -91,78 +191,11 @@ def align_cues(
     model_size: str = "base.en",
     device: str = "cpu",
 ) -> list[Cue]:
-    """Transcribe the voice segments and map their word cues onto the timeline.
+    """Transcribe the voice segments and map their word cues onto the timeline."""
 
-    ``offsets`` are each line's start time in the assembled video — the card
-    start frame times from the renderer, in seconds. ``line_ends`` are the
-    matching card end times; cues never cross them. The script line itself is
-    fed as ``initial_prompt`` so ASR reproduces the narration's own words
-    (proper nouns included); whisper supplies only the timing.
-    """
-
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel(model_size, device=device, compute_type="int8")
-    cues: list[Cue] = []
-    for index, (line, wav, offset) in enumerate(
-        zip(lines, wavs, offsets, strict=True)
-    ):
-        segments, _info = model.transcribe(
-            str(wav),
-            word_timestamps=True,
-            language="en",
-            initial_prompt=line,
-        )
-        words: list[str] = []
-        starts: list[float] = []
-        ends: list[float] = []
-        metadata = torchaudio.info(str(wav))
-        audio_end = metadata.num_frames / metadata.sample_rate
-        seen: list[str] = []
-        for segment in segments:
-            words_in_segment = [
-                w for w in (segment.words or []) if w.word.strip()
-            ]
-            if not words_in_segment:
-                continue
-            # initial_prompt occasionally comes back as a hallucinated echo:
-            # the whole line re-transcribed into the trailing silence with
-            # slightly different words. Anything that repeats words we have
-            # already heard in this line is an echo, not narration.
-            tokens = [w.word.strip().lower().strip(".,!?;:'\"") for w in words_in_segment]
-            cursor = 0
-            matched = 0
-            for token in tokens:
-                scan = token in seen[cursor:]
-                if scan:
-                    matched += 1
-                    cursor = seen.index(token, cursor) + 1
-            if tokens and matched / len(tokens) >= 0.8:
-                logger.debug("Dropping echo segment on %s", wav.name)
-                continue
-            seen.extend(tokens)
-            # timestamps past the wav's own samples are padding artefacts
-            if max(w.end for w in words_in_segment) > audio_end + 0.1:
-                continue
-            for word in words_in_segment:
-                words.append(word.word.strip())
-                starts.append(max(0.0, word.start) + offset)
-                ends.append(max(0.0, word.end) + offset)
-        if len(words) != len(line.split()):
-            logger.debug(
-                "ASR heard %d words for a %d-word line; trusting the audio",
-                len(words),
-                len(line.split()),
-            )
-        line_cues = _cues(words, starts, ends)
-        if line_ends is not None:
-            line_end = line_ends[index]
-            line_cues = [
-                replace(cue, end=min(cue.end, line_end - 0.02))
-                for cue in line_cues
-            ]
-        cues.extend(line_cues)
-    return cues
+    return align_speech(
+        lines, wavs, offsets, line_ends, model_size=model_size, device=device
+    )[1]
 
 
 def _ass_time(seconds: float) -> str:

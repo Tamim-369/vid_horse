@@ -55,7 +55,7 @@ class TopicResearchBlock(Block):
         )
         brief = generate_parsed(
             self._llm,
-            build_messages(theory.name, article),
+            build_messages(theory.name, article, factual="space" in theory.categories),
             lambda raw: parse_brief(raw, fallback_title=theory.name),
             attempts=self._max_attempts,
             temperature=self._temperature,

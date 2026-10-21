@@ -55,25 +55,144 @@ class ClipScorer:
     ) -> float | None:
         """Cosine similarity between the subject text and the thumbnail."""
 
+        return self.analyze(subject_text, thumb_url, client)[0]
+
+    def analyze(
+        self,
+        subject_text: str,
+        thumb_url: str | None,
+        client: httpx.Client,
+    ) -> tuple[float | None, bool, bool]:
+        """Score one thumbnail from a single download.
+
+        Returns ``(similarity, collage_like, texty)``. ``collage_like``
+        means the image is a multi-panel sheet — photo collages with
+        white interior gutters — whose separate panels never match a
+        single narration moment on the vertical feed. ``texty`` means
+        OCR finds a wall of words on the pixels: a poster or diagram,
+        not a photograph of the subject.
+        """
+
         if not self._load() or not thumb_url:
-            return None
+            return None, False, False
         try:
             response = client.get(thumb_url)
             response.raise_for_status()
             import PIL.Image
 
-            image = self._preprocess(
-                PIL.Image.open(BytesIO(response.content)).convert("RGB")
-            )
+            image = PIL.Image.open(BytesIO(response.content)).convert("RGB")
         except Exception as exc:  # noqa: BLE001
             logger.debug("Thumbnail fetch/prep failed for %s: %s", thumb_url, exc)
-            return None
+            return None, False, False
+        return (
+            self._similarity(subject_text, image),
+            self._collage_like(image),
+            self._texty(image),
+        )
+
+    def _similarity(self, subject_text: str, image) -> float | None:
+        prepared = self._preprocess(image)
         with torch.no_grad():
             text = self._tokenize([subject_text[:180]])
-            image_features = self._model.encode_image(image.unsqueeze(0))
+            image_features = self._model.encode_image(prepared.unsqueeze(0))
             text_features = self._model.encode_text(text)
             image_features /= image_features.norm(dim=-1, keepdim=True)
             text_features /= text_features.norm(dim=-1, keepdim=True)
             return float(
                 (image_features @ text_features.T).squeeze().item()
             )
+
+    def _collage_like(self, image) -> bool:
+        """Multi-panel sheets: 2+ interior seams between panels.
+
+        A seam is a short near-flat column/row (any shade — white padding
+        or the thin dark bars of NASA photo collages) whose shade sits at
+        an extreme and contrasts with the panel beside it. Uniform sky or
+        starfield regions fail on width (too wide), shade (not extreme),
+        and contrast. Runs must sit inside the image so page margins and
+        single photos never count; a 3-panel sheet has 2 seams, a 2x2
+        grid has 1 of each.
+        """
+
+        import numpy as np
+
+        scaled = image.copy()
+        scaled.thumbnail((1024, 1024))
+        grid = np.asarray(scaled.convert("L"), dtype=np.float64)
+
+        total = 0
+        for axis in (0, 1):
+            strip = grid if axis == 0 else grid.T
+            ptp = np.ptp(strip, axis=0)
+            mean = strip.mean(axis=0)
+            flat = ptp <= 60
+            n = len(flat)
+            index = 0
+            while index < n - 4:
+                if not flat[index]:
+                    index += 1
+                    continue
+                end = index
+                while end < n and flat[end]:
+                    end += 1
+                width = end - index
+                shade = float(mean[index:end].mean())
+                extreme = shade <= 45 or shade >= 215
+                neighbours = []
+                if index > 0 and not flat[index - 1]:
+                    neighbours.append(float(mean[index - 1]))
+                if end < n and not flat[end]:
+                    neighbours.append(float(mean[end]))
+                contrast = neighbours and max(
+                    abs(shade - nb) for nb in neighbours
+                ) >= 60
+                if 1 <= width <= 8 and extreme and index > 2 and end < n - 3 and contrast:
+                    total += 1
+                index = max(end, index + 1)
+        return total >= 2
+
+    def _texty(self, image) -> bool:
+        """Posters and diagrams: OCR reads many confident words.
+
+        Artist concepts and photographs carry no readable text beyond an
+        occasional one-word label; an infographic carries a title plus
+        caption lines — dozens of characters at high confidence. Any
+        tesseract failure counts as not-texty so detection never blocks
+        a usable image.
+        """
+
+        import subprocess
+
+        try:
+            scaled = image.copy()
+            scaled.thumbnail((1024, 1024))
+            buffer = BytesIO()
+            scaled.save(buffer, format="PNG")
+            result = subprocess.run(
+                ["tesseract", "stdin", "stdout", "--psm", "11", "tsv"],
+                input=buffer.getvalue(),
+                capture_output=True,
+                timeout=20,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("OCR unavailable, skipping texty check: %s", exc)
+            return False
+        words = 0
+        chars = 0
+        strong = 0
+        for line in result.stdout.decode("utf-8", "replace").splitlines()[1:]:
+            parts = line.split("\t")
+            if len(parts) < 12 or parts[0] != "5":
+                continue
+            try:
+                conf = float(parts[10])
+            except ValueError:
+                continue
+            text = parts[11].strip()
+            if conf < 60 or len(text) < 3 or not text.isalnum():
+                continue
+            words += 1
+            chars += len(text)
+            if conf >= 80:
+                strong += 1
+        return strong >= 3 or words >= 6 or chars >= 30

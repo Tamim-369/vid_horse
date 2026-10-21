@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from pydantic import BaseModel
@@ -42,6 +43,11 @@ _MAGICAL_WORDS = (
 )
 
 _STOPWORDS = frozenset(_MAGICAL_WORDS.split())
+
+_CAMERA_WORDS = frozenset({
+    "archive", "archives", "footage", "monitor", "monitors",
+    "timeline", "catalog", "catalogs", "catalogue", "catalogues",
+})
 
 CHOOSER_SYSTEM = """You are the image editor who makes the final pick for
 one narration moment of a video. One image is selected from the candidates
@@ -211,6 +217,11 @@ _WORD_SPLIT = re.compile(r"[^A-Za-z0-9']+")
 _CAMEL_SPLIT = re.compile(r"(?<=[a-z])(?=[A-Z])")
 _EDGE_PUNCT = ".,:;!?\"'“”‘’()[]"
 
+# Below this CLIP similarity a thumbnail does not depict the scene's
+# subject well enough to appear — dark space shots score ~0.2+, a railway
+# sign that matched some metric noun scores ~0.17, junk scores ~0.0.
+_CLIP_FLOOR = 0.18
+
 
 def content_tokens(text: str) -> set[str]:
     """Lowercased content words of ``text`` (stopwords and single letters out)."""
@@ -226,7 +237,10 @@ def proper_phrases(text: str) -> list[str]:
     Sentence-initial camera words (``Night``, ``Close‑up``,
     ``Film poster``...) never survive: a phrase is dropped when all its
     tokens are stopwords, and phrases are ranked so multi-word real
-    subjects beat bare single words.
+    subjects beat bare single words. Storyboard nouns (``Archive``,
+    ``Timeline``, ``Catalog``...) are camera words too: on Commons they
+    return page scans and library shelves ("Archive of Contemporary
+    Music", "Card catalog card") instead of the subject.
     """
 
     text = text.replace("‑", "-")
@@ -253,7 +267,7 @@ def proper_phrases(text: str) -> list[str]:
         seen.add(phrase)
         tokens = {w for w in _WORD_SPLIT.split(phrase.lower()) if w and len(w) > 1}
         strong = tokens - _STOPWORDS
-        if not strong:
+        if not strong or strong & _CAMERA_WORDS:
             continue
         scored.append((len(strong), sum(len(w) for w in strong), phrase))
     scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
@@ -579,6 +593,9 @@ class AssetResearchBlock:
                 break
             unclaimed = len(chosen)
             self._route_query(action, text_scene, chosen, target, used)
+            # one image per subject: a route that caught several frames must
+            # not starve the next subject of its own shot
+            del chosen[unclaimed + 1 :]
             for asset in chosen[unclaimed:]:
                 asset.trigger = action.trigger
 
@@ -638,13 +655,61 @@ class AssetResearchBlock:
         # matters across paths (routed, entity, filler), not just inside
         # whichever candidate pool it came from.
         if self._clip is not None and self._http is not None and chosen:
-            for asset in chosen:
-                similarity = self._clip.score(
-                    text_scene, asset.thumb_url or asset.url, self._http
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(
+                    pool.map(
+                        lambda asset: self._clip.analyze(
+                            text_scene, asset.thumb_url or asset.url, self._http
+                        ),
+                        chosen,
+                    )
                 )
+            for asset, (similarity, _collage_like, _texty) in zip(
+                chosen, results, strict=True
+            ):
                 asset.clip_score = similarity
+            healthy = [
+                asset
+                for asset, (sim, collage_like, texty) in zip(chosen, results, strict=True)
+                if not (collage_like or texty)
+                and (sim is None or sim >= _CLIP_FLOOR)
+            ]
+            if healthy:
+                chosen = healthy
+            else:
+                # everything the scene caught was junk (a metric noun that
+                # matches railway signs, off-topic posters); the topic's own
+                # name is the last chance to buy a real shot
+                rescue = self._rescue_visuals(text_scene, brief.title, used)
+                if rescue:
+                    chosen = rescue
         self._timing_for(chosen, scene.narration)
         return chosen
+
+    def _rescue_visuals(
+        self, text_scene: str, topic: str, used: set[str]
+    ) -> list[VisualAsset]:
+        """Last-hope search under the scene's topic name, CLIP-checked."""
+
+        rescue: list[VisualAsset] = []
+        for score, info in self._search_ranked(topic, text_scene):
+            if score < self._options.min_score:
+                break
+            similarity = None
+            if self._clip is not None and self._http is not None:
+                similarity, collage_like, texty = self._clip.analyze(
+                    text_scene, info.get("thumburl") or info.get("url"), self._http
+                )
+                if collage_like or texty:
+                    continue
+                if similarity is not None and similarity < _CLIP_FLOOR:
+                    continue
+                else:
+                    info["_clip_score"] = similarity
+            self._take(info, rescue, used)
+            if len(rescue) >= 2:
+                break
+        return rescue
 
     def _timing_for(self, chosen: list[VisualAsset], narration: str) -> None:
         """Pin each visual to its narration trigger; order and stagger the rest."""
@@ -792,12 +857,22 @@ class AssetResearchBlock:
                 variants.append(tight)
 
         ranked: list[tuple[int, dict]] = []
-        for variant in variants:
-            for score, info in self._search_ranked(variant, scene):
-                if not any(info["file"] == seen[1]["file"] for seen in ranked):
+        seen: set[str] = set()
+        if len(variants) > 1:
+            with ThreadPoolExecutor(max_workers=min(3, len(variants))) as pool:
+                variant_lists = list(
+                    pool.map(lambda v: self._search_ranked(v, scene), variants)
+                )
+        else:
+            variant_lists = [self._search_ranked(variants[0], scene)] if variants else []
+        for variant_hits in variant_lists:
+            for score, info in variant_hits:
+                if info["file"] not in seen:
+                    seen.add(info["file"])
                     ranked.append((score, info))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         eligible: list[tuple[int, dict]] = []
+        clip_scored: list[tuple[float, int, dict]] = []
         for score, info in ranked:
             if len(eligible) >= self._chooser_pool:
                 break
@@ -816,25 +891,39 @@ class AssetResearchBlock:
         if self._clip is not None and self._http is not None and eligible:
             subject_text = f"{action.intent} {action.query}".strip()
             clip_scored: list[tuple[float, int, dict]] = []
-            for index, (_score, info) in enumerate(eligible):
-                similarity = self._clip.score(
-                    subject_text,
-                    info.get("thumburl") or info.get("url"),
-                    self._http,
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(
+                    pool.map(
+                        lambda pair: self._clip.analyze(
+                            subject_text,
+                            pair[1].get("thumburl") or pair[1].get("url"),
+                            self._http,
+                        ),
+                        eligible,
+                    )
                 )
+            for index, (similarity, collage_like, texty) in enumerate(results):
+                if collage_like or texty:
+                    # multi-panel sheets read as clutter; text posters
+                    # violate the no-text-as-image rule
+                    continue
+                if similarity is not None and similarity < _CLIP_FLOOR:
+                    # pixels that don't depict the subject at all
+                    continue
                 if similarity is None:
                     similarity = -1.0 + 0.001 * index
                 else:
+                    info = eligible[index][1]
                     info["_clip_score"] = similarity
-                clip_scored.append((similarity, index, info))
+                clip_scored.append((similarity, index, eligible[index][1]))
             clip_scored.sort(key=lambda pair: (-pair[0], pair[1]))
             eligible = [(score, info) for _sim, _idx, info in clip_scored]
         # A top shot that clearly depicts the subject needs no editor: when
         # CLIP both likes the pick and separates it from the runner-up the
         # pixels settle it and the LLM's flaky veto never runs.
         margin = 1.0
-        if eligible:
-            top_sim = clip_scored[0][0] if eligible else -1.0
+        if clip_scored:
+            top_sim = clip_scored[0][0]
             next_sim = clip_scored[1][0] if len(clip_scored) > 1 else -1.0
             margin = top_sim - next_sim
             confident = top_sim >= 0.30 and margin >= 0.02
@@ -886,22 +975,40 @@ class AssetResearchBlock:
         if passing and self._clip is not None and self._http is not None:
             subject_text = f"{relevance} {search_words}".strip()
             clip_scored: list[tuple[float, int, dict]] = []
-            for index, info in enumerate(passing):
-                similarity = self._clip.score(
-                    subject_text,
-                    info.get("thumburl") or info.get("url"),
-                    self._http,
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                results = list(
+                    pool.map(
+                        lambda info: self._clip.analyze(
+                            subject_text,
+                            info.get("thumburl") or info.get("url"),
+                            self._http,
+                        ),
+                        passing,
+                    )
                 )
+            for index, (similarity, collage_like, texty) in enumerate(results):
+                if collage_like or texty:
+                    # multi-panel sheets read as clutter; text posters
+                    # violate the no-text-as-image rule
+                    continue
+                if similarity is not None and similarity < _CLIP_FLOOR:
+                    # pixels that don't depict the subject at all: a metric
+                    # noun matching "MPC" must not become a bridge sign
+                    continue
                 if similarity is None:
                     similarity = -1.0 + 0.001 * index
                 else:
-                    info["_clip_score"] = similarity
-                clip_scored.append((similarity, index, info))
+                    passing[index]["_clip_score"] = similarity
+                clip_scored.append((similarity, index, passing[index]))
             clip_scored.sort(key=lambda pair: (-pair[0], pair[1]))
             for _sim, _idx, info in clip_scored:
+                if len(chosen) >= target:
+                    break
                 self._take(info, chosen, used)
         else:
             for info in passing:
+                if len(chosen) >= target:
+                    break
                 self._take(info, chosen, used)
 
     # -- helpers ---------------------------------------------------------------
@@ -933,7 +1040,11 @@ class AssetResearchBlock:
         phrases = proper_phrases(scene.visual)
         if phrases:
             return phrases[0]
-        nouns = sorted(content_tokens(scene.visual), key=lambda w: -len(w))
+        nouns = sorted(
+            content_tokens(scene.visual),
+            key=lambda w: -len(w),
+        )
+        nouns = [w for w in nouns if w not in _CAMERA_WORDS]
         if not nouns:
             return ""
         return f"{brief.title} {nouns[0]}".strip()

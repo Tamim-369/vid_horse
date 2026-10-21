@@ -255,6 +255,9 @@ def _design_sfx(settings, slug: str, script: VideoScript) -> Path | None:
 def render_cmd(
     slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
+    music: str = typer.Option(
+        "", "--music", help="Bed override, e.g. 'swell-tension.mp3'."
+    ),
 ) -> None:
     """Assemble the final vertical mp4 from script, assets and voice tracks."""
 
@@ -272,12 +275,21 @@ def render_cmd(
         _fail(f"No {format} assets for '{slug}'. Run 'videoai assets {slug}' first.")
     script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
     pack = AssetPack.model_validate_json(assets_path.read_text(encoding="utf-8"))
+    genre = None
+    brief_path = directory / "brief.json"
+    if brief_path.exists():
+        genre = ResearchBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        ).genre
 
     stem = "voice" if format == "short" else f"voice-{format}"
     out_path = directory / f"{slug}-{format}.mp4"
     with console.status(f"Assembling the {format} video..."):
         try:
-            render(script, pack, directory / "audio", out_path, stem=stem)
+            render(
+            script, pack, directory / "audio", out_path,
+            stem=stem, genre=genre, music=music,
+        )
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])
     console.print("[green]Video ready[/green] -> " + str(out_path))

@@ -346,6 +346,9 @@ def _build_scenes(
         narration = clean(" ".join(part for part in block["narration"] if part))
         if not narration:
             continue
+        problems = runon_problems(narration)
+        if problems:
+            raise ScriptParseError("; ".join(problems))
         visual = clean(" ".join(block["visual"])) or "—"
         seconds = _estimate_seconds(narration, words_per_second)
         try:
@@ -353,6 +356,32 @@ def _build_scenes(
         except ValidationError as exc:
             raise ScriptParseError(f"scene text rejected: {exc}") from exc
     return scenes
+
+
+_MAX_UNBROKEN_WORDS = 12
+_BREAKS = re.compile(r"[,.!?;:\u2014\u2026-]+|\s\-\-")
+
+
+def runon_problems(narration: str) -> list[str]:
+    """Reasons a narration line reads as one breath-less run-on.
+
+    The voice pauses — slightly but audibly — at every punctuation mark;
+    a long line without any causes the narrator to read it like a paragraph.
+    The offending clause is quoted so the corrective retry knows where.
+    """
+
+    clauses = _BREAKS.split(narration)
+    longest = max(clauses, key=lambda clause: len(clause.split()))
+    size = len(longest.split())
+    if size <= _MAX_UNBROKEN_WORDS:
+        return []
+    snippet = " ".join(longest.split()[:12])
+    return [
+        f'a narration line runs {size} words with no comma, dash or full stop '
+        f'between them: "{snippet}..." — the voice reads it like a paragraph '
+        "without a breath; land a comma, dash or full stop every 6-10 words, "
+        "never more than 12"
+    ]
 
 
 def _estimate_seconds(narration: str, words_per_second: float) -> int:

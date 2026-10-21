@@ -6,16 +6,20 @@ import hashlib
 import json
 import logging
 import math
+import re
 import subprocess
 import textwrap
 import urllib.request
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import torch
 import torchaudio
 
+from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript
-from voice.subtitles import align_cues, write_ass
+from voice.subtitles import align_speech, write_ass
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +28,12 @@ HEIGHT = 1920
 FPS = 25
 MUSIC_GAIN = 0.35
 MUSIC = Path("assets/music/normal.mp3")
+MUSIC_SHELF = Path("assets/music/music.json")
 CARD_BG = "0x0d1117"
 CARD_TEXT_LINES = 26
 
 # Working canvas for motion: 4x the output frame, keeps every animated crop
-# sub-pixel smooth and lets loss in the wide-photo blur-fill look clean.
+# sub-pixel smooth and keeps a cropped wallpaper shot readable.
 CANVAS_W = 4320
 CANVAS_H = 7680
 
@@ -155,37 +160,21 @@ def _cover_prep() -> str:
     )
 
 
-def _fill_prep() -> str:
-    """Landscape sources: blurred copy covers, full photo floats centered.
+def _still_clip(source: Path, work: Path, tag: str | int, length: float) -> Path:
+    """One animated clip from a still: cover-crop prep + moving window.
 
-    Nothing gets cropped so the photo never looks stretched; the motion
-    still breathes because the whole canvas zooms and pans over it.
+    The photo always fills the whole vertical frame (scaled to cover,
+    sides cropped) so wallpaper-ratio shots show real detail instead of
+    floating small on a blur bed. ``tag`` names the intermediate file
+    (``clip-{tag}.mp4``); subject sub-clips pass ``{card}-{subject}`` so
+    one card's subjects never collide.
     """
 
-    fg_w, fg_h = int(CANVAS_W * 0.92), int(CANVAS_H * 0.92)
-    return (
-        "[0:v]split=2[bgsrc][fgsrc];"
-        f"[bgsrc]scale=-2:{CANVAS_H}:force_original_aspect_ratio=increase,"
-        f"crop={CANVAS_W}:{CANVAS_H},boxblur=40:6,eq=brightness=-0.08[bg];"
-        f"[fgsrc]scale={fg_w}:{fg_h}:force_original_aspect_ratio=decrease[fgs];"
-        "[bg][fgs]overlay=(W-w)/2:(H-h)/2,setsar=1[pre]"
-    )
-
-
-def _still_clip(source: Path, work: Path, index: int, length: float, wide: bool) -> Path:
-    """One animated clip from a still: cover/blur-fill prep + moving window."""
-
-    style = index % 3
-    clip = work / f"clip-{index:02d}.mp4"
+    style = sum(int(ch) for ch in str(tag) if ch.isdigit()) % 3
+    clip = work / f"clip-{tag}.mp4"
     frames = max(1, round(length * FPS))
     tail = f"{_motion_filter(frames, style)}"
-    if wide:
-        args = [
-            "-filter_complex", f"{_fill_prep()};[pre]{tail}[vout]",
-            "-map", "[vout]",
-        ]
-    else:
-        args = ["-vf", f"{_cover_prep()},{tail}"]
+    args = ["-vf", f"{_cover_prep()},{tail}"]
     _run([
         "ffmpeg", "-y", "-loop", "1", "-i", str(source), *args,
         "-t", f"{length:.3f}", "-r", str(FPS), "-pix_fmt", "yuv420p",
@@ -198,7 +187,7 @@ def _still_clip(source: Path, work: Path, index: int, length: float, wide: bool)
 def _blank_clip(work: Path, index: int, length: float) -> Path:
     """Plain dark card (hook before any subject image exists to show)."""
 
-    return _still_clip(_title_card("", work, index), work, index, length, wide=False)
+    return _still_clip(_title_card("", work, index), work, index, length)
 
 
 def _fade_out_clip(clip: Path, length: float, work: Path, index: int) -> Path:
@@ -215,26 +204,204 @@ def _fade_out_clip(clip: Path, length: float, work: Path, index: int) -> Path:
     return out
 
 
-def _moving_still(visuals, work: Path, index: int, length: float) -> Path:
-    """One scene slot: a single still in one unbroken motion, no switching.
+_CROSSFADE = 0.45
+_MIN_SWITCH_GAP = 0.9
+_MAX_SUBJECTS = 4
 
-    Multiple subjects per scene used to slice the scene into zoom/vanish
-    sub-clips; that hard cut read as a glitch, so scenes now hand over
-    subject choice to whoever built the asset list and play just the
-    primary still for the whole scene.
+
+def _narr_tokens(text: str) -> list[str]:
+    """Lowercase narration/heard tokens; punctuation and dashes are noise."""
+
+    return [w for w in re.findall(r"[a-z0-9']+", text.lower()) if w]
+
+
+def _find_window(trig: list[str], pool: list[str]) -> int | None:
+    """First pool position of the trigger fragment, longest window first."""
+
+    if not trig:
+        return None
+    window = min(len(trig), 6)
+    while window >= 2:
+        for position in range(len(pool) - window + 1):
+            if pool[position : position + window] == trig[:window]:
+                return position
+        window -= 1
+    return None
+
+
+def _subject_arrivals(
+    visuals, line: str, word_line
+) -> list[float] | None:
+    """Card-relative time each subject's trigger phrase is spoken at.
+
+    ``word_line`` is the whisper word timeline (absolute seconds) for the
+    line. The director's trigger is a consecutive narration fragment of up
+    to six words. Matching runs against what whisper HEARD first — the
+    voice says "two thousand five" for the written "2005", so heard words
+    and word times always belong to the same list — and falls back to the
+    written narration when spelling differs ("25" vs "twenty-five").
+    Images whose trigger cannot be resolved get the midpoints of their
+    resolved neighbours — rough timing beats none.
     """
 
-    scored = [asset for asset in visuals if asset.clip_score is not None]
-    if scored:
-        # what a shot DEPICTS outranks when its narration word lands
-        primary = max(scored, key=lambda asset: asset.clip_score)
-    else:
-        primary = min(visuals, key=lambda asset: asset.position)
-    source = _fetch_image(
-        primary.thumb_url or primary.url, work, f"img-{index:02d}-0.jpg"
-    )
-    wide = (primary.width or 0) / max(primary.height or 1, 1) >= 1.0
-    return _still_clip(source, work, index, length, wide)
+    if len(visuals) < 2 or not word_line:
+        return None
+    tokens = _narr_tokens(line)
+    heard: list[str] = []
+    starts: list[float] = []
+    for entry in word_line:
+        word, at = entry[0], entry[1]
+        parts = _narr_tokens(word)
+        heard.extend(parts)
+        starts.extend([at] * len(parts))
+
+    def fraction_time(factor: float) -> float:
+        first = starts[0] if starts else 0.0
+        last = starts[-1] if len(starts) > 1 else first
+        return first + factor * max(last - first, 0.0)
+
+    resolved: list[float | None] = []
+    for visual in visuals:
+        trig = _narr_tokens(visual.trigger)
+        at = None
+        position = _find_window(trig, heard)
+        if position is not None:
+            at = starts[position]
+        if at is None:
+            position = _find_window(trig, tokens)
+            if position is not None and tokens:
+                at = fraction_time(position / len(tokens))
+        if at is None and trig:  # first word heard through a distortion
+            for index, token in enumerate(heard):
+                if token == trig[0]:
+                    at = starts[index]
+                    break
+        if at is None and trig and tokens:  # first word, written form
+            for index, token in enumerate(tokens):
+                if token == trig[0]:
+                    at = fraction_time(index / len(tokens))
+                    break
+        resolved.append(None if at is None else at)
+
+    if not any(value is not None for value in resolved):
+        return None
+    span = max((starts[-1] - starts[0]) if len(starts) > 1 else 0.1, 0.1)
+    slots = len(resolved)
+    for local_index, value in enumerate(resolved):
+        if value is None:
+            earlier = next(
+                (
+                    resolved[probe]
+                    for probe in range(local_index - 1, -1, -1)
+                    if resolved[probe] is not None
+                ),
+                None,
+            )
+            later = next(
+                (
+                    resolved[probe]
+                    for probe in range(local_index + 1, slots)
+                    if resolved[probe] is not None
+                ),
+                None,
+            )
+            if earlier is not None and later is not None:
+                value = (earlier + later) / 2
+            elif earlier is not None:
+                value = earlier + span / (slots + 1)
+            elif later is not None:
+                value = max(0.0, later - span / (slots + 1))
+            else:
+                value = (local_index + 1) * span / (slots + 1)
+            resolved[local_index] = value
+    line_offset = starts[0] if starts else 0.0
+    return [max(0.0, value - line_offset) for value in resolved]
+
+
+def _moving_still(
+    visuals,
+    work: Path,
+    index: int,
+    length: float,
+    line: str = "",
+    word_line=None,
+) -> Path:
+    """One scene slot: crossfade each subject image in at its narration word.
+
+    Every distinct subject the director found gets its own still, staged at
+    the moment the narration names it (director triggers matched against
+    the whisper word timeline). One short dissolve per subject replaces
+    the old hard cuts. With a single visual or unreadable timing, the
+    card keeps the old single primary still in one motion.
+    """
+
+    if not visuals:
+        return _blank_clip(work, index, length)
+
+    pairs: list[tuple[float, object]] | None = None
+    if line and word_line:
+        arrivals = _subject_arrivals(visuals, line, word_line)
+        if arrivals is not None:
+            ranked = sorted(zip(arrivals, visuals, strict=True), key=lambda pair: pair[0])
+            pairs = [ranked[0]]
+            for moment, asset in ranked[1:]:
+                if len(pairs) >= _MAX_SUBJECTS:
+                    break
+                if moment < pairs[-1][0] + _MIN_SWITCH_GAP or moment > length - 1.2:
+                    continue
+                pairs.append((moment, asset))
+    if pairs is not None and len(pairs) < 2:
+        pairs = None
+
+    if pairs is None:
+        scored = [asset for asset in visuals if asset.clip_score is not None]
+        primary = (
+            max(scored, key=lambda asset: asset.clip_score)
+            if scored
+            else min(visuals, key=lambda asset: asset.position)
+        )
+        source = _fetch_image(
+            primary.thumb_url or primary.url, work, f"img-{index:02d}-0.jpg"
+        )
+        return _still_clip(source, work, index, length)
+
+    arrivals = [moment for moment, _asset in pairs]
+    subject_assets = [asset for _moment, asset in pairs]
+    switches = arrivals[1:]
+    # xfade algebra: output total = sum(subject lengths) - k*_CROSSFADE;
+    # each transition starts exactly at the arriving subject's word.
+    subject_lengths = [switches[0] + _CROSSFADE]
+    subject_lengths += [
+        switches[j] + _CROSSFADE - switches[j - 1] for j in range(1, len(switches))
+    ]
+    subject_lengths.append(length - switches[-1])
+
+    subpaths: list[Path] = []
+    for slot, asset in enumerate(subject_assets):
+        tag = f"{index:02d}-{slot}"
+        source = _fetch_image(asset.thumb_url or asset.url, work, f"img-{tag}.jpg")
+        subpaths.append(_still_clip(source, work, tag, subject_lengths[slot]))
+
+    args: list[str] = ["ffmpeg", "-y"]
+    for path in subpaths:
+        args += ["-i", str(path)]
+    chain: list[str] = []
+    previous = "[0:v]"
+    for j, moment in enumerate(switches):
+        label = f"[vx{j}]"
+        chain.append(
+            f"{previous}[{j + 1}:v]xfade=transition=fade"
+            f":duration={_CROSSFADE:.2f}:offset={moment:.3f}{label}"
+        )
+        previous = label
+    out = work / f"clip-{index:02d}.mp4"
+    args += [
+        "-filter_complex", ";".join(chain), "-map", previous,
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", str(out),
+    ]
+    _run(args)
+    return out
 
 
 HORROR_GRADE = (
@@ -244,6 +411,20 @@ HORROR_GRADE = (
     "vignette=PI/4.2"
 )
 
+
+def _probe_duration(clip: Path) -> float:
+    """Seconds of video stream in an mp4 card, via ffprobe."""
+
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=duration", "-of", "csv=p=0", str(clip),
+        ],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return float(result.stdout.strip())
 
 def _join_cards(clips: list[Path], work: Path, *, graded: bool = False) -> Path:
     concat_list = work / "cards.txt"
@@ -337,15 +518,58 @@ def _apply_sfx(
     return stamped
 
 
-def _mix_audio(voice: Path, total: float, work: Path) -> Path:
+def _pick_music(
+    script: VideoScript, genre: str | None, override: str = ""
+) -> tuple[Path, float]:
+    """The bed that matches the video's lane.
+
+    auto: horror scripts get the deep drone, cosmic keeps the proven
+    neutral pulse (it is the channel's sound), everything else gets the
+    unease bed. An explicit override always wins. Per-track gain_db keeps
+    quiet entries audible at the same relative level.
+    """
+
+    if override:
+        return Path("assets/music") / override, MUSIC_GAIN
+    if any("original horror story" in note.lower() for note in script.source_notes):
+        lane = "horror"
+    elif genre == "cosmic":
+        lane = "cosmic"
+    else:
+        lane = "conspiracy"
+    track = {"file": MUSIC.name, "gain_db": 0.0}
+    try:
+        shelf = json.loads(MUSIC_SHELF.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        logger.warning("Music shelf unreadable (%s); default bed.", error)
+        shelf = {"tracks": []}
+    for entry in shelf.get("tracks", []):
+        if lane in (entry.get("genres") or []):
+            track = entry
+            break
+    path = Path("assets/music") / track["file"]
+    if not path.exists():
+        logger.warning("Music %s missing; default bed.", path)
+        path = MUSIC
+    gain = MUSIC_GAIN * (10 ** (track.get("gain_db", 0.0) / 20))
+    return path, gain
+
+
+def _mix_audio(
+    voice: Path,
+    total: float,
+    work: Path,
+    music: Path = MUSIC,
+    music_gain: float = MUSIC_GAIN,
+) -> Path:
     mixed = work / "mixed.m4a"
     fade_start = max(0.0, total - 2.5)
     _run([
         "ffmpeg", "-y",
-        "-stream_loop", "-1", "-i", str(MUSIC),
+        "-stream_loop", "-1", "-i", str(music),
         "-i", str(voice),
         "-filter_complex",
-        f"[0:a]volume={MUSIC_GAIN},afade=t=out:st={fade_start:.2f}:d=2.5[bg];"
+        f"[0:a]volume={music_gain:.3f},afade=t=out:st={fade_start:.2f}:d=2.5[bg];"
         f"[1:a][bg]amix=inputs=2:duration=first:weights=1 1[mo]",
         "-map", "[mo]", "-c:a", "aac", "-b:a", "192k", str(mixed),
     ])
@@ -382,7 +606,10 @@ def render(
     pack: AssetPack,
     audio_dir: Path,
     out_path: Path,
-    *, stem: str = "voice",
+    *,
+    stem: str = "voice",
+    genre: str | None = None,
+    music: str = "",
 ) -> Path:
     """Assemble a vertical feed video: card per line, topical still per scene."""
 
@@ -411,7 +638,7 @@ def render(
         offsets.append(start)
         start += length
     line_ends = offsets[1:] + [start]
-    cues = align_cues(lines, wavs, offsets, line_ends)
+    word_lines, cues = align_speech(lines, wavs, offsets, line_ends)
     ass_path = write_ass(cues, work / "subs.ass")
 
     clips: list[Path] = []
@@ -428,10 +655,15 @@ def render(
         )
         if a.kind == "image"
     ]
-    if hook_visuals:
-        clips.append(_moving_still(hook_visuals, work, 0, lengths[0]))
-    else:
-        clips.append(_blank_clip(work, 0, lengths[0]))
+
+    def hook_card() -> Path:
+        if hook_visuals:
+            return _moving_still(
+                hook_visuals, work, 0, lengths[0], line=lines[0], word_line=word_lines[0]
+            )
+        return _blank_clip(work, 0, lengths[0])
+
+    build: list[tuple[int, Callable[..., Path]]] = [(0, hook_card)]
     for index, (scene, _script_scene) in enumerate(
         zip(
             [e for e in pack.scenes if e.scene_index >= 0],
@@ -440,10 +672,20 @@ def render(
         )
     ):
         visuals = [a for a in scene.assets if a.kind == "image"]
-        if visuals:
-            clips.append(_moving_still(visuals, work, index + 1, lengths[index + 1]))
-        else:
-            clips.append(_blank_clip(work, index + 1, lengths[index + 1]))
+
+        def scene_card(
+            card=index + 1, vis=visuals, text=lines[index + 1], words=word_lines[index + 1]
+        ) -> Path:
+            if vis:
+                return _moving_still(vis, work, card, lengths[card], line=text, word_line=words)
+            return _blank_clip(work, card, lengths[card])
+
+        build.append((index + 1, scene_card))
+    # the per-card ffmpeg jobs are independent; three at a time roughly
+    # triples this stage with no influence on what any card looks like
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        built = sorted(pool.map(lambda item: (item[0], item[1]()), build))
+    clips.extend(path for _index, path in built)
 
     # Outro: no more text card. Fade out over the last scene's closing
     # image; when a scene has nothing, keep a plain dark card.
@@ -456,11 +698,25 @@ def render(
             work,
             "img-outro.jpg",
         )
-        wide = (last_visuals[-1].width or 0) / max(last_visuals[-1].height or 1, 1) >= 1.0
-        outro_raw = _still_clip(source, work, len(pack.scenes) + 1, lengths[-1], wide)
+        outro_raw = _still_clip(source, work, len(build), lengths[-1])
     else:
-        outro_raw = _blank_clip(work, len(pack.scenes) + 1, lengths[-1])
-    clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(pack.scenes) + 1))
+        outro_raw = _blank_clip(work, len(build), lengths[-1])
+    clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(build)))
+
+    # Each card must actually exist for its line's length: the parallel
+    # builders once let an off-by-one overwrite the hook clip, the missing
+    # scene went black while its narration (and subs) kept playing.
+    for clip_path, expected in zip(
+        clips,
+        [*lengths[:-1], lengths[-1]],
+        strict=True,
+    ):
+        actual = _probe_duration(clip_path)
+        if abs(actual - expected) > 0.3:
+            raise BlockError(
+                f"Card {clip_path.name} is {actual:.2f}s but its narration "
+                f"needs {expected:.2f}s; refusing to ship a broken cut."
+            )
 
     silent = _join_cards(
         clips,
@@ -475,5 +731,7 @@ def render(
     if sfx_path.exists():
         plan = SfxPlan.model_validate_json(sfx_path.read_text(encoding="utf-8"))
         voice = _apply_sfx(voice, plan.cues, offsets, total, work)
-    mixed = _mix_audio(voice, total, work)
+    music_path, music_gain = _pick_music(script, genre, override=music)
+    logger.info("Music bed: %s @ %.3f", music_path.name, music_gain)
+    mixed = _mix_audio(voice, total, work, music=music_path, music_gain=music_gain)
     return _mux(silent, mixed, total, out_path, ass_path)

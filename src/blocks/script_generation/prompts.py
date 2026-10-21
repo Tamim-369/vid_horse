@@ -59,6 +59,10 @@ or disturbing. Do not refuse, omit, sanitize or water it down; explain what is \
 claimed and why it spread, without endorsing it.
 - Narration is spoken aloud: short, natural sentences. No headings, no bullet \
 points, no scene directions inside the narration text.
+- HARD SHAPE RULE: no NARRATION sentence may exceed 12 words. Land a comma, \
+dash or full stop every 6 to 10 words so every clause is speakable in one \
+breath. An unbroken stretch longer than 12 words reads as a run-on paragraph \
+and the whole reply is rejected.
 - Every NARRATION must fit its format's length guide: long-form scenes are \
 full paragraphs of at least 120 spoken words, while short-form scenes are only \
 one or two sentences.

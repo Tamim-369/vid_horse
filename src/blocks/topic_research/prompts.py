@@ -23,9 +23,54 @@ explain what is claimed and why people believe or discuss it. Describe slurs or 
 extremist rhetoric factually where relevant, but never use them in your own voice."""
 
 
-def build_messages(theory_name: str, article: ArticleText) -> list[LLMMessage]:
-    """Build the research conversation for ``theory_name``."""
 
+def corrective_instruction(error: Exception) -> str:
+    """A follow-up message asking the model to fix unparseable output."""
+
+    return (
+        "That brief could not be read: "
+        f"{error}. Reply again using only the labelled lines shown earlier "
+        "(TITLE, ONE-LINE, ORIGIN, BACKGROUND, CLAIM, COMPELLING, PERSON, TERM, "
+        "TIMELINE, QUESTION). Do not use JSON, braces or bullet points, and "
+        "include at least three CLAIM and two COMPELLING lines."
+    )
+
+FACT_SYSTEM = """You are a careful, curious researcher preparing background for a \
+video about a real scientific topic.
+
+Rules:
+- Report the established facts from the article in a neutral, non-judgmental tone.
+- Prefer concrete names, dates, numbers and details drawn from the supplied article.
+- If the article does not support something, leave it out. Do not invent facts.
+- Write plainly for a general audience. Avoid sensationalism.
+
+The requested label fields still apply: CLAIM lines state what the topic IS or \
+what the evidence shows; COMPELLING lines say why it grips people; QUESTION \
+lines carry the open scientific debates ("astronomers still debate", \
+"instruments suggest"). Do not attribute established facts.
+"""
+
+
+def build_messages(
+    theory_name: str, article: ArticleText, *, factual: bool = False
+) -> list[LLMMessage]:
+    """Build the research conversation for ``theory_name``.
+
+    ``factual`` switches the conspiracy-theory framing off: cosmic-facts
+    topics are not conspiracy theories, and asking the model for a
+    "theory claimed" shape around plain facts makes it refuse and return
+    "there is no conspiracy in this source".
+    """
+
+    wanted = (
+        """Write a research brief describing this topic for a scriptwriter. Capture \
+what the topic is, where and when it was discovered or settled, the main beats of \
+its story, and why it grips people."""
+        if factual
+        else """Write a research brief describing this theory for a scriptwriter. Capture what \
+the theory claims, where it came from, the main beats of its story, and why it \
+resonates with people."""
+    )
     user = f"""Theory: {theory_name}
 Source: {article.url}
 
@@ -34,9 +79,7 @@ Article text:
 {article.text}
 \"\"\"
 
-Write a research brief describing this theory for a scriptwriter. Capture what
-the theory claims, where it came from, the main beats of its story, and why it
-resonates with people.
+{wanted}
 
 Use EXACTLY this labelled format, one field per line, and nothing else:
 
@@ -55,16 +98,8 @@ QUESTION: <an open question the story leaves>
 Repeat CLAIM, COMPELLING, PERSON, TERM, TIMELINE and QUESTION as needed. Include
 at least three CLAIM lines and two COMPELLING lines. Write only labelled lines —
 no headings, no bullet points, no JSON, no commentary."""
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
-
-
-def corrective_instruction(error: Exception) -> str:
-    """A follow-up message asking the model to fix unparseable output."""
-
-    return (
-        "That brief could not be read: "
-        f"{error}. Reply again using only the labelled lines shown earlier "
-        "(TITLE, ONE-LINE, ORIGIN, BACKGROUND, CLAIM, COMPELLING, PERSON, TERM, "
-        "TIMELINE, QUESTION). Do not use JSON, braces or bullet points, and "
-        "include at least three CLAIM and two COMPELLING lines."
-    )
+    system = FACT_SYSTEM if factual else SYSTEM
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
