@@ -62,7 +62,12 @@ class TopicResearchBlock(Block):
             corrective=corrective_instruction,
             label="research brief",
         )
-        return brief.model_copy(update={"title": theory.name})
+        return brief.model_copy(
+            update={
+                "title": theory.name,
+                "genre": "cosmic" if "space" in theory.categories else "",
+            }
+        )
 
     @staticmethod
     def _select_source(theory: Theory) -> TheorySource | None:

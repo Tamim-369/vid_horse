@@ -1,0 +1,83 @@
+[
+  {
+    "term": "creak",
+    "file": "assets/sfx/creak-1.wav",
+    "title": "File:LL-Q1860 (eng)-Knites-Sound recording. Door creaks.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/70/LL-Q1860_%28eng%29-Knites-Sound_recording._Door_creaks.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC0",
+    "artist": "Speaker: Knites Recorder: Knites",
+    "seconds": 0.96
+  },
+  {
+    "term": "static",
+    "file": "assets/sfx/static-1.wav",
+    "title": "File:Static B.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/7/77/Static_B.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC0",
+    "artist": "Oreocooke",
+    "seconds": 2.47
+  },
+  {
+    "term": "heart",
+    "file": "assets/sfx/heart-1.wav",
+    "title": "File:Heartbeat speedsup.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/9/9b/Heartbeat_speedsup.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC BY 4.0",
+    "artist": "Bob Smaude",
+    "seconds": 12.99
+  },
+  {
+    "term": "heart",
+    "file": "assets/sfx/heart-2.wav",
+    "title": "File:Laura's heartbeat after exercise.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/3/34/Laura%27s_heartbeat_after_exercise.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC BY-SA 4.0",
+    "artist": "EmilyHopeS",
+    "seconds": 10.03
+  },
+  {
+    "term": "drone",
+    "file": "assets/sfx/drone-1.wav",
+    "title": "File:LL-Q150 (fra)-WikiLucas00-menacer ruine.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/5/52/LL-Q150_%28fra%29-WikiLucas00-menacer_ruine.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC BY-SA 4.0",
+    "artist": "Speaker: WikiLucas00 Recorder: WikiLucas00",
+    "seconds": 1.39
+  },
+  {
+    "term": "drone",
+    "file": "assets/sfx/drone-2.wav",
+    "title": "File:LL-Q150 (fra)-Jérémy-Günther-Heinz Jähnick-menacer ruine.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/4/41/LL-Q150_%28fra%29-J%C3%A9r%C3%A9my-G%C3%BCnther-Heinz_J%C3%A4hnick-menacer_ruine.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC BY-SA 4.0",
+    "artist": "Speaker: Jérémy-Günther-Heinz Jähnick Recorder: Jérémy-Günther-Heinz Jähnick",
+    "seconds": 1.32
+  },
+  {
+    "term": "whisper",
+    "file": "assets/sfx/whisper-1.wav",
+    "title": "File:Thorsten-tts-emotional-whisper.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/f/f0/Thorsten-tts-emotional-whisper.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC0",
+    "artist": "Thorsten Müller",
+    "seconds": 2.49
+  },
+  {
+    "term": "whisper",
+    "file": "assets/sfx/whisper-2.flac",
+    "title": "File:Toni Sant voice en.flac",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/6/63/Toni_Sant_voice_en.flac?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC BY-SA 4.0",
+    "artist": "ToniSant",
+    "seconds": 6.99
+  },
+  {
+    "term": "knock",
+    "file": "assets/sfx/knock-1.wav",
+    "title": "File:Knock on door.wav",
+    "url": "https://upload.wikimedia.org/wikipedia/commons/2/28/Knock_on_door.wav?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+    "license": "CC0",
+    "artist": "Asud12",
+    "seconds": 3.71
+  }
+]

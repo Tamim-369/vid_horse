@@ -145,6 +145,10 @@ class ResearchBrief(StrictModel):
 
     title: str
     one_line: str = Field(description="One neutral sentence stating the claim.")
+    genre: str = Field(
+        default="",
+        description='Presentation style: "" (conspiracy) or "cosmic" (space facts).',
+    )
     origin: str = Field(description="Where and roughly when the theory began.")
     background: str = Field(description="Two to four sentences of context.")
     claims: list[str] = Field(description="The main things the theory asserts.")
@@ -163,6 +167,45 @@ class ResearchBrief(StrictModel):
     )
     @classmethod
     def _validate_items(cls, items: list[str]) -> list[str]:
+        return [_plain_prose(item) for item in items]
+
+
+class SfxCue(StrictModel):
+    """One sound effect placed on the video timeline."""
+
+    scene_index: int = Field(ge=0, description="Scene the effect belongs to.")
+    effect: str = Field(description="Effect keyword, e.g. 'creak' or 'impact'.")
+    at: float = Field(ge=0, le=60, description="Offset in seconds within the scene.")
+    gain: float = Field(default=0.5, ge=0.1, le=1.2, description="Volume 0-1-ish.")
+
+
+class SfxPlan(StrictModel):
+    """Sound design for a short video: at most a handful of effects."""
+
+    cues: list[SfxCue] = Field(max_length=8)
+
+
+class HorrorStylePack(StrictModel):
+    """Patterns mined from a corpus of horror stories — writer's ammunition."""
+
+    premises: list[str] = Field(
+        description="Story premises that recur in the corpus, one line each."
+    )
+    hook_patterns: list[str] = Field(
+        description="Opening-line shapes that pull the reader in immediately."
+    )
+    twists: list[str] = Field(
+        description="Ending twists that the corpus uses again and again."
+    )
+    techniques: list[str] = Field(
+        description="Pacing and voice techniques worth imitating."
+    )
+
+    @field_validator(
+        "premises", "hook_patterns", "twists", "techniques"
+    )
+    @classmethod
+    def _validate_lists(cls, items: list[str]) -> list[str]:
         return [_plain_prose(item) for item in items]
 
 
@@ -226,6 +269,15 @@ class VisualAsset(BaseModel):
     artist: str | None = Field(default=None)
     width: int | None = Field(default=None)
     height: int | None = Field(default=None)
+    trigger: str = Field(default="", description="Narration phrase that aires it.")
+    position: float = Field(
+        default=0.0,
+        description="0-1 scene fraction when this visual starts showing.",
+    )
+    clip_score: float | None = Field(
+        default=None,
+        description="CLIP similarity to the scene subject; what the shot depicts.",
+    )
 
 
 class SceneAssets(BaseModel):
@@ -245,4 +297,64 @@ class AssetPack(BaseModel):
     article_title: str = Field(description="Wiki article the pack was built from.")
     article_url: str = Field(default="", description="Source article URL.")
     scenes: list[SceneAssets] = Field(default_factory=list)
+
+
+AssetSource = Literal["commons", "nasa", "openverse"]
+
+
+class Subject(BaseModel):
+    """One visual subject the director wants to see in a scene."""
+
+    subject: str = Field(description="2-4 word name of the thing to show.")
+    intent: str = Field(description="Concrete image description, max 9 words.")
+    trigger: str = Field(
+        default="",
+        description="Short phrase copied from the narration that fires it.",
+    )
+
+
+class SceneIntents(BaseModel):
+    """The director's image intents for one scene."""
+
+    scene_index: int = Field(description="0-based script scene index.")
+    subjects: list[Subject] = Field(
+        default_factory=list, description="One per distinct subject, in speech order."
+    )
+
+
+class IntentPack(BaseModel):
+    """Visual direction for a whole script, scene by scene."""
+
+    slug: str = Field(description="Theory slug.")
+    topic: str = Field(description="Theory name.")
+    scenes: list[SceneIntents] = Field(default_factory=list)
+    fiction: bool = Field(
+        default=False,
+        description="True when the script is an original horror story, not a documentary.",
+    )
+
+
+class SceneQuery(BaseModel):
+    """One directed image search: intent, chosen source, and the keywords."""
+
+    intent: str = Field(description="The image intent being searchd for.")
+    source: AssetSource = Field(description="Where to search: commons|nasa|openverse.")
+    query: str = Field(description="Search keywords, no punctuation.")
+    trigger: str = Field(default="", description="Narration phrase that fires this image.")
+
+
+class SceneQueries(BaseModel):
+    """Directed searches for one scene."""
+
+    scene_index: int = Field(description="0-based script scene index.")
+    queries: list[SceneQuery] = Field(default_factory=list)
+
+
+class QueryPack(BaseModel):
+    """Source-routed search queries for a whole script, scene by scene."""
+
+    slug: str = Field(description="Theory slug.")
+    topic: str = Field(description="Theory name.")
+    scenes: list[SceneQueries] = Field(default_factory=list)
+    fiction: bool = Field(default=False)
 

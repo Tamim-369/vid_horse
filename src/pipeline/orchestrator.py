@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 
 from blocks import ScriptGenerationBlock, TopicResearchBlock
 from blocks.asset_research import AssetResearchBlock
+from blocks.asset_research.director import QueryBuilderBlock, VisualDirectorBlock
 from core.models import (
     AssetPack,
     ResearchBrief,
@@ -33,10 +34,14 @@ class ContentPipeline:
         topic_research: TopicResearchBlock,
         script_generation: ScriptGenerationBlock,
         asset_research: AssetResearchBlock | None = None,
+        asset_direction: VisualDirectorBlock | None = None,
+        query_routing: QueryBuilderBlock | None = None,
     ) -> None:
         self._topic_research = topic_research
         self._script_generation = script_generation
         self._asset_research = asset_research
+        self._asset_direction = asset_direction
+        self._query_routing = query_routing
 
     def research(self, theory: Theory, *, max_chars: int | None = None) -> ResearchBrief:
         """Run only the research block for ``theory``."""
@@ -56,12 +61,30 @@ class ContentPipeline:
             brief, format=format, target_seconds=target_seconds
         )
 
-    def assets(self, theory: Theory, brief: ResearchBrief, script: VideoScript) -> AssetPack:
-        """Match topical media for every scene of ``script``."""
+    def assets(
+        self,
+        theory: Theory,
+        brief: ResearchBrief,
+        script: VideoScript,
+        *,
+        trace: dict[str, str] | None = None,
+    ) -> AssetPack:
+        """Direct, route and fetch topical media for every scene of ``script``.
+
+        ``trace`` collects the intermediary agent outputs (their model dumps,
+        keyed by filename) so the caller can persist them for inspection.
+        """
 
         if self._asset_research is None:
             raise NotImplementedError("No asset block configured for this pipeline.")
-        return self._asset_research.run(theory, brief, script)
+        queries = None
+        if self._asset_direction is not None and self._query_routing is not None:
+            intents = self._asset_direction.run(theory, script)
+            queries = self._query_routing.run(brief, intents)
+            if trace is not None:
+                trace["direction.json"] = intents.model_dump_json(indent=2)
+                trace["queries.json"] = queries.model_dump_json(indent=2)
+        return self._asset_research.run(theory, brief, script, queries)
 
     def run(
         self,

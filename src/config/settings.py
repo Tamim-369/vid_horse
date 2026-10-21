@@ -98,8 +98,10 @@ class Settings(BaseSettings):
     script_hook_candidates: int = Field(default=6, ge=1, le=6)
 
     # -- Asset fetch --------------------------------------------------------
-    assets_per_scene: int = Field(default=4, ge=1, le=10)
+    asset_max_per_scene: int = Field(default=3, ge=1, le=6)
+    asset_words_per_asset: int = Field(default=18, ge=8, le=60)
     asset_search_limit: int = Field(default=8, ge=1, le=20)
+    asset_nasa_limit: int = Field(default=6, ge=1, le=20)
     asset_entity_limit: int = Field(default=5, ge=0, le=20)
     asset_thumb_width: int = Field(default=1280, gt=0)
     asset_min_score: int = Field(default=3, ge=1, le=9)

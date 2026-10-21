@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import typer
@@ -30,6 +32,11 @@ def register(app: typer.Typer) -> None:
     app.command(name="research")(research_cmd)
     app.command(name="script")(script_cmd)
     app.command(name="assets")(assets_cmd)
+    app.command(name="voice")(voice_cmd)
+    app.command(name="render")(render_cmd)
+    app.command(name="horror-pull")(horror_pull_cmd)
+    app.command(name="sfx-pull")(sfx_pull_cmd)
+    app.command(name="story")(story_cmd)
 
 
 # -- discovery --------------------------------------------------------------
@@ -184,7 +191,10 @@ def assets_cmd(
             _fail(f"No {fmt} script for '{slug}'. Run 'videoai script {slug}' first.")
         script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
         with console.status(f"Matching media for the {fmt} script..."):
-            pack = pipeline.assets(theory, brief, script)
+            trace: dict[str, str] = {}
+            pack = pipeline.assets(theory, brief, script, trace=trace)
+        for name, content in trace.items():
+            _save(settings.output_dir, slug, name, content)
         path = _save(
             settings.output_dir,
             slug,
@@ -199,6 +209,173 @@ def assets_cmd(
         )
 
 
+def voice_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+) -> None:
+    """Narrate the saved script with the cloned voice; cached line by line."""
+
+    from voice.tts import VoiceOver
+
+    settings = get_settings()
+    if format not in _FORMATS:
+        _fail(f"Unknown format '{format}'. Choose short or long.")
+    script_path = Path(settings.output_dir) / slug / f"{format}.json"
+    if not script_path.exists():
+        _fail(f"No {format} script for '{slug}'. Run 'videoai script {slug}' first.")
+    script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+
+    stem = "voice" if format == "short" else f"voice-{format}"
+    vo = VoiceOver()
+    with console.status(f"Narrating with the cloned voice ({format})..."):
+        path = vo.render_script(script, Path(settings.output_dir) / slug / "audio", stem=stem)
+    sfx_path = _design_sfx(settings, slug, script)
+    console.print("[green]Voiceover ready[/green] -> " + str(path))
+    if sfx_path:
+        console.print(f"[green]Sound design[/green] -> {sfx_path}")
+
+
+def _design_sfx(settings, slug: str, script: VideoScript) -> Path | None:
+    """Horror scripts get a tiny sound design; cached once per save."""
+
+    if not any("original horror story" in note.lower() for note in script.source_notes):
+        return None
+    sfx_path = Path(settings.output_dir) / slug / "sfx.json"
+    if sfx_path.exists():
+        return sfx_path
+    from blocks.sfx_design import SfxDesignerBlock
+    from providers.llm import create_llm_provider
+
+    designer = SfxDesignerBlock(create_llm_provider(settings), Path("assets/sfx/sfx.json"))
+    plan = designer.run(script, scene_count=len(script.scenes))
+    sfx_path.write_text(plan.model_dump_json(indent=2), encoding="utf-8")
+    return sfx_path
+
+
+def render_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+) -> None:
+    """Assemble the final vertical mp4 from script, assets and voice tracks."""
+
+    from render.assemble import render
+
+    settings = get_settings()
+    if format not in _FORMATS:
+        _fail(f"Unknown format '{format}'. Choose short or long.")
+    directory = Path(settings.output_dir) / slug
+    assets_path = directory / f"assets-{format}.json"
+    script_path = directory / f"{format}.json"
+    if not script_path.exists():
+        _fail(f"No {format} script for '{slug}'. Run 'videoai script {slug}' first.")
+    if not assets_path.exists():
+        _fail(f"No {format} assets for '{slug}'. Run 'videoai assets {slug}' first.")
+    script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+    pack = AssetPack.model_validate_json(assets_path.read_text(encoding="utf-8"))
+
+    stem = "voice" if format == "short" else f"voice-{format}"
+    out_path = directory / f"{slug}-{format}.mp4"
+    with console.status(f"Assembling the {format} video..."):
+        try:
+            render(script, pack, directory / "audio", out_path, stem=stem)
+        except FileNotFoundError as error:
+            _fail(str(error).split(";")[0])
+    console.print("[green]Video ready[/green] -> " + str(out_path))
+
+
+# -- horror corpus ------------------------------------------------------------
+def horror_pull_cmd(
+    count: int = typer.Option(100, "--count", "-n", help="Stories to have in total."),
+) -> None:
+    """Grow the creepypasta study corpus (CC BY-SA, kept with attribution)."""
+
+    from pipeline.horror_corpus import pull_stories
+
+    settings = get_settings()
+    out_path = Path(settings.output_dir) / "corpus" / "horror" / "creepypasta.jsonl"
+    with console.status("Pulling creepypastas..."):
+        path = pull_stories(settings, count, out_path)
+    lines = [ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+    console.print(f"[green]Corpus[/green] {len(lines)} stories -> {path}")
+
+
+# -- sound effects shelf ------------------------------------------------------
+def sfx_pull_cmd() -> None:
+    """Grow the horror SFX shelf (PD/CC audio from Wikimedia Commons)."""
+
+    from pipeline.sfx import pull_sfx
+    from providers.sources import build_http_client
+    from providers.sources.mediawiki import MediaWikiClient
+
+    settings = get_settings()
+    client = build_http_client(settings)
+    commons = MediaWikiClient(
+        "https://commons.wikimedia.org/w/api.php",
+        client=client,
+        delay=settings.request_delay,
+    )
+    out_dir = Path("assets") / "sfx"
+    with console.status("Pulling sound effects..."):
+        manifest = pull_sfx(settings, commons, out_dir)
+    files = json.loads(manifest.read_text(encoding="utf-8"))
+    console.print(f"[green]SFX shelf[/green] {len(files)} files -> {out_dir}")
+
+
+# -- horror story -------------------------------------------------------------
+def story_cmd(
+    theme: str | None = typer.Argument(None, help="Optional flavour, e.g. 'ghost'."),
+    scenes: int = typer.Option(6, "--scenes", "-s", help="Story beats."),
+    fresh_style: bool = typer.Option(False, "--fresh-style", help="Re-mine the style pack."),
+) -> None:
+    """Write an original horror story as a script the rest of the pipeline eats."""
+
+    from blocks.horror_story import HorrorStoryBlock
+    from blocks.horror_style import HorrorStyleBlock
+    from core.models import HorrorStylePack, ResearchBrief
+    from providers.llm import create_llm_provider
+    from utils.text import slugify
+
+    settings = get_settings()
+    corpus = Path(settings.output_dir) / "corpus" / "horror" / "creepypasta.jsonl"
+    if not corpus.exists():
+        _fail("No horror corpus. Run 'videoai horror-pull' first.")
+    style_path = corpus.parent / "style.json"
+
+    if style_path.exists() and not fresh_style:
+        style_pack = HorrorStylePack.model_validate_json(style_path.read_text("utf-8"))
+    else:
+        llm = create_llm_provider(settings)
+        with console.status("Mining horror style patterns from the corpus..."):
+            style_pack = HorrorStyleBlock(llm).run(corpus)
+        style_path.write_text(style_pack.model_dump_json(indent=2), encoding="utf-8")
+
+    llm = create_llm_provider(settings)
+    with console.status("Writing an original horror story..."):
+        script = HorrorStoryBlock(llm, scenes=scenes).run(style_pack, theme=theme)
+
+    slug = slugify(script.title)
+    directory = Path(settings.output_dir) / slug
+    directory.mkdir(parents=True, exist_ok=True)
+    script_path = _save(
+        settings.output_dir, slug, "short.json", script.model_dump_json(indent=2)
+    )
+    _save(settings.output_dir, slug, "short.md", render_markdown(script))
+    brief = ResearchBrief(
+        title=script.title,
+        one_line=script.hook,
+        origin="An original horror story written for this channel.",
+        background=script.outro,
+        claims=[],
+        why_compelling=[],
+    )
+    _save(settings.output_dir, slug, "brief.json", brief.model_dump_json(indent=2))
+    console.print(
+        f"[green]{script.title}[/green] -> {script_path}\n"
+        f"Next: videoai assets {slug} -f short && videoai voice {slug} && "
+        f"videoai render {slug}"
+    )
+
+
 def _render_assets(pack: AssetPack) -> str:
     """Human-readable scene-by-scene gallery with attribution."""
 
@@ -207,8 +384,8 @@ def _render_assets(pack: AssetPack) -> str:
         header = f"Source article: [{pack.article_title}]({pack.article_url})"
     lines = [f"# Media — {pack.topic}", "", header, ""]
     for scene in pack.scenes:
-        actor_index = scene.scene_index
-        lines.append(f"## Scene {actor_index + 1}")
+        heading = "## Hook line" if scene.scene_index == -1 else f"## Scene {scene.scene_index + 1}"
+        lines.append(heading)
         lines.append(f"*Visual:* {scene.visual}")
         lines.append(f"*Query:* {scene.query or '-'}")
         if not scene.assets:
@@ -225,10 +402,21 @@ def _render_assets(pack: AssetPack) -> str:
 
 
 def _load_theory(settings, slug: str) -> Theory:
+    """Fetch from the catalog; story slugs get a lightweight stand-in."""
+
     with TheoryCatalog(settings.catalog_path) as catalog:
         theory = catalog.get(slug)
     if theory is None:
-        _fail(f"No theory '{slug}' in the catalog. Try 'videoai theories'.")
+        story_script = Path(settings.output_dir) / slug / "short.json"
+        if not story_script.exists():
+            _fail(f"No theory '{slug}' in the catalog and no story either.")
+        now = datetime.now(UTC)
+        return Theory(
+            slug=slug,
+            name=slug.replace("-", " "),
+            first_seen=now,
+            last_updated=now,
+        )
     return theory  # type: ignore[return-value]
 
 

@@ -34,6 +34,18 @@ class MediaWikiClient:
             time.sleep(self._delay)
         return response.json()
 
+    def fetch_bytes(self, url: str) -> bytes:
+        """Download raw bytes from a media URL (thumbs, audio files)."""
+
+        try:
+            response = self._client.get(url)
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise ProviderError(f"Media download failed: {exc}") from exc
+        if self._delay:
+            time.sleep(self._delay)
+        return response.content
+
     def category_members(
         self,
         category: str,

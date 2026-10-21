@@ -7,6 +7,7 @@ import httpx
 from config.settings import Settings, get_settings
 from providers.sources.base import SourceConnector, build_http_client
 from providers.sources.fandom import FandomConnector
+from providers.sources.space import SpaceConnector
 from providers.sources.wikidata import WikidataConnector
 from providers.sources.wikipedia import WikipediaConnector
 
@@ -36,4 +37,5 @@ def build_connectors(
         FandomConnector(client=http, wiki=wiki, delay=settings.request_delay)
         for wiki in settings.fandom_wikis
     )
+    connectors.append(SpaceConnector())
     return connectors

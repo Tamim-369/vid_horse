@@ -10,6 +10,41 @@ from __future__ import annotations
 from core.interfaces import LLMMessage
 from core.models import ResearchBrief, ScriptFormat, ScriptPlan
 
+COSMIC_ADDENDUM = """
+GENRE OVERRIDE — COSMIC FACTS: this is a factual video about a REAL cosmic \
+object or event, not a conspiracy explanation.
+- State facts brazenly and in the narrator's own voice. No distancing \
+language anywhere: never "the theory claims" or "believers say" — the \
+universe is objectively like this.
+- Every scene lands ONE striking, true fact with a concrete number, \
+distance, weight or temperature. Real numbers from the brief only.
+- Escalate scale or strangeness scene by scene; end scenes where the next \
+is bigger than the last.
+- The OUTRO is the perspective punch: one line that makes the viewer feel \
+small or suspended (no question mark).
+"""
+
+
+def _system(brief: ResearchBrief | None) -> str:
+    if brief is not None and brief.genre == "cosmic":
+        return (
+            "GENRE OVERRIDE — COSMIC FACTS: You write factual narration about "
+            "a REAL cosmic object or event for YouTube shorts. This video "
+            "contains NO conspiracy theory and NO folklore; everything in the "
+            "brief is established science. IGNORE every instruction below that "
+            "talks about theories, believers, debunking or distancing language.\n\n"
+            "Facts are stated brazenly in the narrator's own voice: never "
+            "\"the theory claims\", never \"believers say\", never \"according "
+            "to the story\". Every scene lands ONE striking, true fact with a "
+            "concrete number, distance, weight or temperature taken from the "
+            "brief. Escalate scale or strangeness scene by scene. The OUTRO is "
+            "the perspective punch: one line that makes the viewer feel small "
+            "or suspended, no question mark. Hook rules below still apply.\n\n"
+            + SYSTEM
+        )
+    return SYSTEM
+
+
 SYSTEM = """You write tight, engaging narration for short-form and long-form \
 YouTube videos that EXPLAIN conspiracy theories.
 
@@ -122,7 +157,7 @@ Use EXACTLY this labelled format, repeated for every scene, and nothing else:
 Here is a short example of the format (do not copy its content):
 
 {_EXAMPLE}"""
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": _system(brief)}, {"role": "user", "content": user}]
 
 
 def build_hook_score_messages(hooks: list[str]) -> list[LLMMessage]:
@@ -173,7 +208,7 @@ specific detail of the event. No explanations, no summaries.
 
 Output ONLY {count} numbered lines, one hook per line. No commentary, no \
 explanations, no other text."""
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": _system(brief)}, {"role": "user", "content": user}]
 
 
 def build_plan_messages(
@@ -185,8 +220,7 @@ def build_plan_messages(
 
     upper = scene_count + 2
     fixed = _fixed_hook_line(hook)
-    user = f"""Plan a long-form video script of about {scene_count} scenes that \
-EXPLAINS this conspiracy theory.
+    user = f"""Plan a long-form video script of about {scene_count} scenes for this topic.
 {fixed}
 {_brief_block(brief)}
 
@@ -200,7 +234,7 @@ OUTRO: <one reflective closing sentence>
 
 Write between {scene_count} and {upper} BEAT lines, in story order, each \
 describing what one scene covers. Output only these labelled lines."""
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": _system(brief)}, {"role": "user", "content": user}]
 
 
 def _fixed_hook_line(hook: str | None) -> str:

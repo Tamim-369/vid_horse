@@ -5,9 +5,15 @@ description = "AI video making automation."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "av<19",
+    "chatterbox-tts>=0.1.7",
     "ddgs>=9.0",
+    "faster-whisper>=1.2.1",
     "httpx>=0.27",
+    "num2words>=0.5.14",
     "ollama>=0.4",
+    "open-clip-torch>=3.3.0",
+    "pillow>=12.3.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
     "rich>=13.9",
@@ -59,3 +65,13 @@ addopts = "-q"
 markers = [
     "live: hits an external service; enable with VIDEOAI_LIVE_TESTS=1",
 ]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
+chatterbox-tts = { git = "https://github.com/resemble-ai/chatterbox" }
