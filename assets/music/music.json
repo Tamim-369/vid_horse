@@ -1,6 +1,36 @@
 {
   "reference_loudness_rms": 0.171,
-  "notes": "gain_db equalizes each track's perceived bed loudness to the reference (normal.mp3). Licenses verified 2026-10-21: Pixabay entries free for commercial video, no attribution; Tunetank personal license covers monetized YouTube (tunetank.com/legal/license).",
+  "notes": "gain_db equalizes each track's perceived bed loudness to the reference (normal.mp3). Licenses verified 2026-10-21: Pixabay entries free for commercial video, no attribution; Tunetank personal license covers monetized YouTube (tunetank.com/legal/license). Roles (user-defined): the video's BASE bed plus rare per-scene overrides.",
+  "roles": {
+    "threat": {
+      "track": "ancient-airy-mist.mp3",
+      "desc": "scary stuff: something attacking Earth, a monster lurking, an eerie presence hunting"
+    },
+    "big-event": {
+      "track": "decrease_volume.mp3",
+      "desc": "cosmic-scale processes, giant events, huge things forming or being built"
+    },
+    "mystery": {
+      "track": "forest-deep-drone.mp3",
+      "desc": "deep unexplained: why light is wave and particle; explained yet nobody knows why"
+    },
+    "discovery": {
+      "track": "investigation-calm.mp3",
+      "desc": "reveal-paced explaining: half the answer, then 'but why?', then the other half; the viewer is finding out"
+    },
+    "vast-reveal": {
+      "track": "swell-tension.mp3",
+      "desc": "discovery pacing aimed at something huge, vast, beyond; also standalone awe at something enormous"
+    },
+    "dread-mission": {
+      "track": "unease-suspense.mp3",
+      "desc": "deep-sea monsters, new dangerous missions, deep dangerous places that need long explanation"
+    },
+    "default": {
+      "track": "normal.mp3",
+      "desc": "the channel's neutral dark pulse"
+    }
+  },
   "tracks": [
     {
       "file": "normal.mp3",

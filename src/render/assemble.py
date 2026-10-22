@@ -518,10 +518,35 @@ def _apply_sfx(
     return stamped
 
 
+def _shelf() -> dict:
+    try:
+        return json.loads(MUSIC_SHELF.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        logger.warning("Music shelf unreadable (%s); default bed.", error)
+        return {"tracks": [], "roles": {}}
+
+
+def _track_gain(shelf: dict, track_name: str) -> tuple[Path, float]:
+    entry = next(
+        (
+            item
+            for item in shelf.get("tracks", [])
+            if item.get("file") == track_name
+        ),
+        {"file": track_name, "gain_db": 0.0},
+    )
+    path = Path("assets/music") / track_name
+    if not path.exists():
+        logger.warning("Music %s missing; default bed.", path)
+        path = MUSIC
+    gain = MUSIC_GAIN * (10 ** (entry.get("gain_db", 0.0) / 20))
+    return path, gain
+
+
 def _pick_music(
     script: VideoScript, genre: str | None, override: str = ""
 ) -> tuple[Path, float]:
-    """The bed that matches the video's lane.
+    """The base bed (legacy path when the script carries no MusicPlan).
 
     auto: horror scripts get the deep drone, cosmic keeps the proven
     neutral pulse (it is the channel's sound), everything else gets the
@@ -531,6 +556,9 @@ def _pick_music(
 
     if override:
         return Path("assets/music") / override, MUSIC_GAIN
+    plan = script.music
+    if plan is not None:
+        return _track_gain(_shelf(), _role_track(plan.base_role))
     if any("original horror story" in note.lower() for note in script.source_notes):
         lane = "horror"
     elif genre == "cosmic":
@@ -538,40 +566,135 @@ def _pick_music(
     else:
         lane = "conspiracy"
     track = {"file": MUSIC.name, "gain_db": 0.0}
-    try:
-        shelf = json.loads(MUSIC_SHELF.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as error:
-        logger.warning("Music shelf unreadable (%s); default bed.", error)
-        shelf = {"tracks": []}
+    shelf = _shelf()
     for entry in shelf.get("tracks", []):
         if lane in (entry.get("genres") or []):
             track = entry
             break
-    path = Path("assets/music") / track["file"]
-    if not path.exists():
-        logger.warning("Music %s missing; default bed.", path)
-        path = MUSIC
-    gain = MUSIC_GAIN * (10 ** (track.get("gain_db", 0.0) / 20))
-    return path, gain
+    return _track_gain(shelf, track["file"])
+
+
+def _role_track(
+    role: str, shelf: dict | None = None
+) -> str:
+    """Resolve one role to a track file name (unknown role -> default)."""
+
+    shelf = shelf or _shelf()
+    return (shelf.get("roles").get(role) or shelf["roles"]["default"])["track"]
+
+
+def _bed_tracks(
+    script: VideoScript, genre: str | None, override: str
+) -> list[tuple[Path, float]]:
+    """Music per card: card 0 = hook, 1..N = scenes, N+1 = outro.
+
+    A MusicPlan gives one base track with occasional per-scene overrides —
+    "one music through the video, some scenes get their own". The script's
+    scene ``i`` is the card at index ``i + 1``. An explicit override
+    flattens everything to one track.
+    """
+
+    if override:
+        return [Path("assets/music") / override, MUSIC_GAIN] * 1
+    plan = script.music
+    if plan is None:
+        path, gain = _pick_music(script, genre)
+        return [(path, gain)]
+    shelf = _shelf()
+    base_path, base_gain = _track_gain(shelf, _role_track(plan.base_role, shelf))
+    cards: list[tuple[Path, float]] = []
+    for card in range(len(script.scenes) + 2):
+        role = plan.scene_roles.get(str(card - 1)) if card >= 1 else None
+        if role:
+            cards.append(_track_gain(shelf, _role_track(role, shelf)))
+        else:
+            cards.append((base_path, base_gain))
+    return cards
+
+
+_CROSSFADE_MUSIC = 2.0
+_SPAN_PAD = 1.0
+
+
+def _music_spans(
+    cards: list[tuple[Path, float]], offsets: list[float], total: float
+) -> list[tuple[Path, float, float, float]]:
+    """Collapse the per-card choices into continuous ``(track, gain, from, to)``.
+
+    Adjacent cards sharing a track join silently: the base bed flows
+    through them, and only a real override earns a junction.
+    """
+
+    spans: list[tuple[Path, float, float, float]] = []
+    for card, (path, gain) in enumerate(cards):
+        start = offsets[card]
+        end = offsets[card + 1] if card + 1 < len(offsets) else total
+        if spans and spans[-1][0] == path and spans[-1][1] == gain:
+            spans[-1] = (*spans[-1][:3], end)
+        else:
+            spans.append((path, gain, start, end))
+    return spans
+
+
+def _build_bed(
+    spans: list[tuple[Path, float, float, float]], work: Path, total: float
+) -> Path:
+    """One audio file: every span plays its track, junctions crossfade 2s.
+
+    Each interior span is padded 1s into both neighbours so the 2s
+    crossfade sits exactly on the scene boundary; the last span keeps the
+    video's end so the sum of windows minus the junctions equals ``total``.
+    """
+
+    bed = work / "bed.wav"
+    windows: list[tuple[Path, float, float, float]] = []
+    for index, (path, gain, start, end) in enumerate(spans):
+        first = index == 0
+        last = index == len(spans) - 1
+        w_start = start if first else max(0.0, start - _SPAN_PAD)
+        w_end = end if last else end + _SPAN_PAD
+        windows.append((path, gain, w_start, w_end))
+    args: list[str] = ["ffmpeg", "-y"]
+    chains: list[str] = []
+    for index, (path, gain, w_start, w_end) in enumerate(windows):
+        args += ["-stream_loop", "-1", "-i", str(path)]
+        chains.append(
+            f"[{index}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
+            f"atrim=start={w_start:.3f}:end={w_end:.3f},volume={gain:.3f}[s{index}]"
+        )
+    label = "s0"
+    for index in range(1, len(windows)):
+        out = f"x{index}"
+        chains.append(f"[{label}][s{index}]acrossfade=d={_CROSSFADE_MUSIC:.1f}[{out}]")
+        label = out
+    fade_start = max(0.0, total - 2.5)
+    chains.append(f"[{label}]afade=t=out:st={fade_start:.3f}:d=2.5[bed]")
+    args += ["-filter_complex", ";".join(chains), "-map", "[bed]", str(bed)]
+    _run(args)
+    return bed
 
 
 def _mix_audio(
     voice: Path,
-    total: float,
+    bed: Path,
     work: Path,
-    music: Path = MUSIC,
-    music_gain: float = MUSIC_GAIN,
 ) -> Path:
     mixed = work / "mixed.m4a"
-    fade_start = max(0.0, total - 2.5)
+    # Voice leads: weights push the narration above the bed, and the bed
+    # sidechain-compresses under the voice so dynamic tracks (swells,
+    # impacts) can never burst over a spoken line — while still rising
+    # back to full level during narration gaps.
     _run([
         "ffmpeg", "-y",
-        "-stream_loop", "-1", "-i", str(music),
         "-i", str(voice),
+        "-i", str(bed),
         "-filter_complex",
-        f"[0:a]volume={music_gain:.3f},afade=t=out:st={fade_start:.2f}:d=2.5[bg];"
-        f"[1:a][bg]amix=inputs=2:duration=first:weights=1 1[mo]",
-        "-map", "[mo]", "-c:a", "aac", "-b:a", "192k", str(mixed),
+        "[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=2[nv][sc];"
+        "[1:a]aformat=sample_rates=44100:channel_layouts=stereo[bg];"
+        "[bg][sc]sidechaincompress=threshold=0.02:ratio=7:attack=0.12:release=0.9[duck];"
+        "[nv]volume=1.6[vpad];[vpad][duck]amix=inputs=2:duration=first:normalize=0[mo];"
+        "[mo]alimiter=limit=0.95:level=false[mo2]",
+        "-map", "[mo2]", "-c:a", "aac", "-b:a", "192k", str(mixed),
     ])
     return mixed
 
@@ -586,8 +709,31 @@ def _mux(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     args = ["ffmpeg", "-y", "-i", str(silent), "-i", str(mixed)]
     if ass_path is not None:
-        args += ["-vf", f"ass='{ass_path}'"]
-        video = ["-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]
+        # Caption backdrop: the bottom 30% gets blurred and darkened so crisp
+        # subtitles always read against busy imagery. The band's top edge
+        # feathers over 96px via a blend ramp — no hard seam. The blend
+        # expression needs its argument commas escaped (\,).
+        top, low = 1344, 1440
+        ramp = f"(Y-{top})/{low - top}"
+        weight = (
+            f"if(lt(Y\\,{top})\\,0\\,if(lt(Y\\,{low})\\,{ramp}\\,1))"
+        )
+        graph = (
+            "[0:v]split=2[base][orig];"
+            "[orig]crop=iw:ih*0.30:0:ih-ih*0.30[zone];"
+            "[zone]boxblur=luma_radius=24:luma_power=2[soft];"
+            "[soft]drawbox=w=iw:h=ih:color=black@0.40:t=fill[band];"
+            "[base][band]overlay=0:main_h-overlay_h[shadowed];"
+            "[shadowed][orig]"
+            f"blend=all_expr='{weight}'[blended];"
+            f"[blended]ass='{ass_path}'[tout]"
+        )
+        args += ["-filter_complex", graph]
+        video = [
+            "-map", "[tout]",
+            "-c:v", "libx264", "-preset", "fast",
+            "-crf", "20", "-pix_fmt", "yuv420p",
+        ]
     else:
         video = ["-c:v", "copy"]
     args += [
@@ -731,7 +877,12 @@ def render(
     if sfx_path.exists():
         plan = SfxPlan.model_validate_json(sfx_path.read_text(encoding="utf-8"))
         voice = _apply_sfx(voice, plan.cues, offsets, total, work)
-    music_path, music_gain = _pick_music(script, genre, override=music)
-    logger.info("Music bed: %s @ %.3f", music_path.name, music_gain)
-    mixed = _mix_audio(voice, total, work, music=music_path, music_gain=music_gain)
+    cards = _bed_tracks(script, genre, override=music)
+    spans = _music_spans(cards, offsets, total)
+    describe = ", ".join(
+        f"{path.name} {start:.1f}-{end:.1f}s" for path, _gain, start, end in spans
+    )
+    logger.info("Music bed: %s", describe)
+    bed = _build_bed(spans, work, total)
+    mixed = _mix_audio(voice, bed, work)
     return _mux(silent, mixed, total, out_path, ass_path)

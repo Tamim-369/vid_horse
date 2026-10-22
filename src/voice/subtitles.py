@@ -27,7 +27,7 @@ _FORMAT_LINE = (
 )
 _STYLE_LINE = (
     "Style: Cue,DejaVu Sans,54,&H00FFFFFF,&H00FFFFFF,&H00141414,"
-    "&H90000000,1,0,0,0,100,100,0,0,1,3,2,2,60,60,240,1"
+    "&H60281414,1,0,0,0,100,100,0,0,3,5,0,2,60,60,240,1"
 )
 # fmt: on
 
@@ -69,6 +69,12 @@ def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]
 
     for index, word in enumerate(words):
         trimmed = word.strip(",")
+        # whisper sometimes splits decimals into two tokens ("1", ".4");
+        # keep the rendered cue looking like the number narration spoke.
+        if chunk and trimmed.startswith((".", ",")) and chunk[-1][-1].isdigit():
+            chunk[-1] += trimmed
+            chunk_end = ends[index]
+            continue
         chunk.append(trimmed)
         if chunk_start is None:
             chunk_start = starts[index]
@@ -80,6 +86,27 @@ def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]
             chunk_start = None
     flush(chunk_end)
     return groups
+
+
+def _drop_repeat_cues(cues: list[Cue]) -> list[Cue]:
+    """Remove hallucination echoes: the same phrase shown twice in a rush.
+
+    Echo re-transcriptions replay the line's recently heard cues within a
+    couple of seconds of the originals. Narration that deliberately repeats
+    a phrase (rhetoric) never does so that fast, so any identical-text cue
+    reappearing this close to an earlier one is an echo.
+    """
+
+    kept: list[Cue] = []
+    for cue in cues:
+        echoed = any(
+            other.text == cue.text
+            and -0.05 < cue.start - other.end < 2.0
+            for other in kept[-5:]
+        )
+        if not echoed:
+            kept.append(cue)
+    return kept
 
 
 def _transcribe_words(
@@ -103,6 +130,7 @@ def _transcribe_words(
     metadata = torchaudio.info(str(wav))
     audio_end = metadata.num_frames / metadata.sample_rate
     seen: list[str] = []
+    accepted_end = 0.0
     for segment in segments:
         words_in_segment = [w for w in (segment.words or []) if w.word.strip()]
         if not words_in_segment:
@@ -119,6 +147,14 @@ def _transcribe_words(
             if scan:
                 matched += 1
                 cursor = seen.index(token, cursor) + 1
+        # Echoes re-transcribe audio we already accepted, so their span
+        # reaches back inside previously covered time — the decisive
+        # signature (word repeats alone can be legitimate).
+        seg_start = min(w.start for w in words_in_segment)
+        retranscribed = seg_start < accepted_end - 0.12
+        if retranscribed and matched / len(tokens) >= 0.5:
+            logger.debug("Dropping echo segment on %s", wav.name)
+            continue
         if tokens and matched / len(tokens) >= 0.8:
             logger.debug("Dropping echo segment on %s", wav.name)
             continue
@@ -126,6 +162,7 @@ def _transcribe_words(
         # timestamps past the wav's own samples are padding artefacts
         if max(w.end for w in words_in_segment) > audio_end + 0.1:
             continue
+        accepted_end = max(accepted_end, max(w.end for w in words_in_segment))
         for word in words_in_segment:
             words.append(word.word.strip())
             starts.append(max(0.0, word.start) + offset)
@@ -171,7 +208,7 @@ def align_speech(
     ):
         words, starts, ends = _transcribe_words(line, wav, offset, model)
         word_lines.append(list(zip(words, starts, ends, strict=False)))
-        line_cues = _cues(words, starts, ends)
+        line_cues = _drop_repeat_cues(_cues(words, starts, ends))
         if line_ends is not None:
             line_end = line_ends[index]
             line_cues = [

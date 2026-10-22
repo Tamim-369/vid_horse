@@ -185,6 +185,20 @@ class SfxPlan(StrictModel):
     cues: list[SfxCue] = Field(max_length=8)
 
 
+class MusicPlan(StrictModel):
+    """Role-labelled music choice: one base bed, rare per-scene overrides.
+
+    Roles resolve through the rack table in ``assets/music/music.json`` —
+    threat, big-event, mystery, discovery, vast-reveal, dread-mission and
+    the neutral default. ``scene_roles`` keys are scene indexes (as stored
+    in JSON, string-y) whose content demands a different track than the
+    base for that scene's duration.
+    """
+
+    base_role: str = "default"
+    scene_roles: dict[str, str] = Field(default_factory=dict)
+
+
 class HorrorStylePack(StrictModel):
     """Patterns mined from a corpus of horror stories — writer's ammunition."""
 
@@ -229,6 +243,10 @@ class VideoScript(StrictModel):
     scenes: list[ScriptScene] = Field(min_length=1)
     outro: str = Field(description="Closing line.")
     source_notes: list[str] = Field(default_factory=list)
+    music: MusicPlan | None = Field(
+        default=None,
+        description="Role-based music plan; absent means legacy genre routing.",
+    )
 
     _validate_hook = field_validator("hook", "outro")(_plain_prose)
 

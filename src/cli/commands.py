@@ -31,6 +31,7 @@ def register(app: typer.Typer) -> None:
     app.command(name="theories")(theories_cmd)
     app.command(name="research")(research_cmd)
     app.command(name="script")(script_cmd)
+    app.command(name="music")(music_cmd)
     app.command(name="assets")(assets_cmd)
     app.command(name="voice")(voice_cmd)
     app.command(name="render")(render_cmd)
@@ -154,11 +155,60 @@ def script_cmd(
         )
         with console.status(f"Writing {fmt} script..."):
             script = pipeline.script(brief, fmt, target_seconds=seconds)
+        from blocks.music import annotate_music
+        from providers.llm import create_llm_provider
+
+        script = annotate_music(create_llm_provider(settings), script)
         path = _save(settings.output_dir, slug, f"{fmt}.json", script.model_dump_json(indent=2))
         _save(settings.output_dir, slug, f"{fmt}.md", render_markdown(script))
+        music_note = (
+            f", music={script.music.base_role}"
+            + (f" +{len(script.music.scene_roles)} override" if script.music.scene_roles else "")
+            if script.music
+            else ", music=default (annotate failed)"
+        )
         console.print(
             f"[green]{script.title}[/green] "
-            f"({fmt}, {len(script.scenes)} scenes) -> {path}"
+            f"({fmt}, {len(script.scenes)} scenes{music_note}) -> {path}"
+        )
+
+
+# -- helpers ----------------------------------------------------------------
+def music_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug."),
+    format: str = typer.Option("both", "--format", "-f", help="short|long|both"),
+) -> None:
+    """Re-label the saved script's music roles without regenerating it."""
+
+    from blocks.music import annotate_music
+    from config.settings import get_settings
+    from core.models import VideoScript
+    from providers.llm import create_llm_provider
+
+    settings = get_settings()
+    if format == "both":
+        formats = _FORMATS
+    elif format in _FORMATS:
+        formats = (format,)  # type: ignore[assignment]
+    else:
+        _fail(f"Unknown format '{format}'. Choose short, long or both.")
+    for fmt in formats:
+        script_path = Path(settings.output_dir) / slug / f"{fmt}.json"
+        if not script_path.exists():
+            _fail(f"No {fmt} script for '{slug}'. Run 'videoai script {slug}' first.")
+        script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+        with console.status(f"Labelling {fmt} music..."):
+            script = annotate_music(create_llm_provider(settings), script)
+        script_path.write_text(script.model_dump_json(indent=2), encoding="utf-8")
+        if script.music is None:
+            console.print(f"{script.title} ({fmt}): music=default (annotate failed)")
+            continue
+        overrides = ", ".join(
+            f"scene {key} -> {role}" for key, role in sorted(script.music.scene_roles.items())
+        )
+        note = f"; overrides: {overrides}" if overrides else "; single bed"
+        console.print(
+            f"{script.title} ({fmt}): base={script.music.base_role}{note} -> {script_path}"
         )
 
 
