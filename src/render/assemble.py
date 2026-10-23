@@ -709,33 +709,10 @@ def _mux(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     args = ["ffmpeg", "-y", "-i", str(silent), "-i", str(mixed)]
     if ass_path is not None:
-        # Caption backdrop: the bottom 30% gets blurred and darkened so crisp
-        # subtitles always read against busy imagery. The band's top edge
-        # feathers over 96px via a blend ramp — no hard seam. The blend
-        # expression needs its argument commas escaped (\,).
-        top, low = 1344, 1440
-        ramp = f"(Y-{top})/{low - top}"
-        weight = (
-            f"if(lt(Y\\,{top})\\,0\\,if(lt(Y\\,{low})\\,{ramp}\\,1))"
-        )
-        graph = (
-            "[0:v]split=2[base][orig];"
-            "[orig]crop=iw:ih*0.30:0:ih-ih*0.30[zone];"
-            "[zone]boxblur=luma_radius=24:luma_power=2[soft];"
-            "[soft]drawbox=w=iw:h=ih:color=black@0.40:t=fill[band];"
-            "[base][band]overlay=0:main_h-overlay_h[shadowed];"
-            "[shadowed][orig]"
-            f"blend=all_expr='{weight}'[blended];"
-            f"[blended]ass='{ass_path}'[tout]"
-        )
-        args += ["-filter_complex", graph]
-        video = [
-            "-map", "[tout]",
-            "-c:v", "libx264", "-preset", "fast",
-            "-crf", "20", "-pix_fmt", "yuv420p",
-        ]
+        args += ["-vf", f"ass='{ass_path}'"]
+        video = ["-map", "0:v", "-map", "1:a", "-c:v", "libx264", "-preset", "fast", "-crf", "20", "-pix_fmt", "yuv420p"]
     else:
-        video = ["-c:v", "copy"]
+        video = ["-map", "0:v", "-map", "1:a", "-c:v", "copy"]
     args += [
         "-t", f"{timeline:.3f}",
         *video,
