@@ -152,6 +152,13 @@ _JUNK_WORDS = frozenset(
         "intertitle",
         "caption",
         "codex",
+        # studio hardware: a keyboard in a desktop photo is never the
+        # subject, no matter how the CLIP prompt mentions "simulation"
+        "keyboard",
+        "keyboards",
+        "laptop",
+        "laptops",
+        "webcam",
         "codices",
         "manuscript",
         "manuscripts",
@@ -205,11 +212,14 @@ _JUNK_WORDS = frozenset(
 
 _ALLOWED_MIME = frozenset(
     {
-        # stills only: the render treats anything else as a blank slot
         "image/jpeg",
         "image/png",
         "image/tiff",
         "image/webp",
+        # motion footage: used when a topical clip exists on Commons
+        "video/webm",
+        "video/ogg",
+        "video/mp4",
     }
 )
 
@@ -288,6 +298,32 @@ def is_media_junk(file_title: str, mime: str, width: int | None) -> bool:
     return any(marker in lowered for marker in _JUNK_PHRASES)
 
 
+def is_video_junk(info: dict) -> bool:
+    """Whether a motion candidate is too heavy, too long, or too tiny.
+
+    Videos ride the same topical filters as stills; this adds only the
+    physical caps: below 4s (or beyond 90) and above 60MB they are more
+    download than card.
+    """
+
+    size = info.get("size") or 0
+    duration = info.get("duration") or 0.0
+    width = info.get("width") or 0
+    if size <= 0 or size > _VIDEO_MAX_BYTES:
+        return True
+    if not (4.0 <= float(duration) <= 90.0):
+        return True
+    return width < 400
+
+
+_VIDEO_MAX_BYTES = 60_000_000
+# motion clips are shelved for now: the gate below rejects every video
+# candidate while this is zero, but the whole selection + render path
+# stays wired so it can be switched back on by flipping this to 2
+_VIDEO_SLOTS_PER_VIDEO = 0
+_VIDEO_BONUS = 0.035
+
+
 def _stem_of(file_title: str) -> str:
     """Normalised title without extension, so png/tiff twins collapse."""
 
@@ -349,6 +385,7 @@ def to_asset(info: dict) -> VisualAsset:
         artist=strip_html(artist) if artist else None,
         width=info.get("width"),
         height=info.get("height"),
+        duration=info.get("duration"),
         clip_score=info.get("_clip_score"),
     )
 
@@ -382,6 +419,7 @@ class AssetResearchBlock:
         llm=None,
         http=None,
         clip=None,
+        web=None,
     ) -> None:
         self._wiki = wiki
         self._commons = commons
@@ -391,8 +429,10 @@ class AssetResearchBlock:
         self._llm = llm
         self._http = http
         self._clip = clip
+        self._web = web
         self._fiction = False
         self._chooser_pool = 6
+        self._video_slots = _VIDEO_SLOTS_PER_VIDEO
 
     def run(
         self,
@@ -565,6 +605,11 @@ class AssetResearchBlock:
             if not self._usable(info):
                 continue
             score = float(score_media(info, query, scene))
+            if info_kind(info) == "video":
+                # a real motion clip beats a pan over a still when either
+                # passes, but never so much that a weaker clip outranks a
+                # clearly better photo
+                score += _VIDEO_BONUS
             if self._fiction:
                 light = self._luminance(info)
                 if light is not None:
@@ -614,6 +659,7 @@ class AssetResearchBlock:
                 used.add(asset.file)
                 used.add(_stem_of(asset.file))
 
+        searches: list[str] = []
         if len(chosen) < target:  # fallback: mine the scene's own phrases
             phrases = [phrase.lower() for phrase in proper_phrases(scene.visual)]
             searches = [query] if query else []
@@ -643,6 +689,9 @@ class AssetResearchBlock:
                     continue
                 self._take(info, chosen, used)
                 break
+
+        if not chosen and self._web is not None:  # global web: scraped engines
+            self._route_web(searches[-1] or query or brief.title, text_scene, chosen, target, used)
 
         if not chosen:  # last resort: the topic title itself, looseness ok
             for score, info in self._search_ranked(brief.title, text_scene):
@@ -916,7 +965,12 @@ class AssetResearchBlock:
                     info = eligible[index][1]
                     info["_clip_score"] = similarity
                 clip_scored.append((similarity, index, eligible[index][1]))
-            clip_scored.sort(key=lambda pair: (-pair[0], pair[1]))
+            clip_scored.sort(
+                key=lambda pair: (
+                    -pair[0] - (_VIDEO_BONUS if info_kind(pair[2]) == "video" else 0.0),
+                    pair[1],
+                )
+            )
             eligible = [(score, info) for _sim, _idx, info in clip_scored]
         # A top shot that clearly depicts the subject needs no editor: when
         # CLIP both likes the pick and separates it from the runner-up the
@@ -937,6 +991,70 @@ class AssetResearchBlock:
                 continue
             self._take(pick, chosen, used)
             break
+
+    def _route_web(
+        self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: set[str]
+    ) -> None:
+        """Scraped-engine fallback: fires when the RSS sources starve a scene.
+
+        Engine results carry no machine-readable license and cost one
+        HTTP trip per candidate, so they run only here — after commons,
+        direct sources (nasa/openverse) and the scene-phrase mining all
+        came up empty. The same CLIP floor applies: the pixels must
+        depict the named subject; a score below the floor is a news-
+        channel opener with nothing to say.
+        """
+
+        if self._clip is None or self._http is None or not query.strip():
+            return
+
+        candidates: list[dict] = []
+        for info in self._web.search(query, limit=self._options.search_limit):
+            if not self._usable(info) or self._blocked(info, used):
+                continue
+            candidates.append(info)
+            if len(candidates) >= self._chooser_pool:
+                break
+        if not candidates:
+            return
+
+        subject_text = query
+        clip_scored: list[tuple[float, int, dict]] = []
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results = list(
+                pool.map(
+                    lambda info: self._clip.analyze(
+                        subject_text,
+                        info.get("thumburl") or info.get("url"),
+                        self._http,
+                    ),
+                    candidates,
+                )
+            )
+        for index, (similarity, collage_like, texty) in enumerate(results):
+            if collage_like or texty:
+                continue
+            if similarity is not None and similarity < _CLIP_FLOOR:
+                continue
+            if similarity is None:
+                similarity = -1.0 + 0.001 * index
+            else:
+                info = candidates[index]
+                info["_clip_score"] = similarity
+            clip_scored.append((similarity, index, candidates[index]))
+        clip_scored.sort(key=lambda pair: (-pair[0], pair[1]))
+        if not clip_scored:
+            return
+
+        pick = self._choose(
+            scene,
+            query,
+            [(0.0, info) for _sim, _idx, info in clip_scored],
+            confirm_only=True,
+        )
+        if pick is None:
+            return
+        self._take(pick, chosen, used)
 
     def _route_direct(
         self, source, relevance, search_words, chosen, target, used
@@ -1020,7 +1138,11 @@ class AssetResearchBlock:
         return theory.sources[0] if theory.sources else None
 
     def _usable(self, info: dict) -> bool:
-        return not is_media_junk(info["file"], info.get("mime", ""), info.get("width"))
+        if is_media_junk(info["file"], info.get("mime", ""), info.get("width")):
+            return False
+        if info_kind(info) == "video":
+            return self._video_slots > 0 and not is_video_junk(info)
+        return True
 
     def _blocked(self, info: dict, used: set[str]) -> bool:
         """File used, or its extensionless twin already in play."""
@@ -1031,6 +1153,8 @@ class AssetResearchBlock:
         self, info: dict, chosen: list[VisualAsset], used: set[str], trigger: str = ""
     ) -> None:
         asset = to_asset(info)
+        if asset.kind == "video":
+            self._video_slots = max(0, self._video_slots - 1)
         asset.trigger = trigger
         chosen.append(asset)
         used.add(info["file"])

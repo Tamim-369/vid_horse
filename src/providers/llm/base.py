@@ -184,17 +184,18 @@ class BaseLLMProvider(ABC):
             options["seed"] = seed
         return options
 
-    def _invoke(
+    def _cache_key(
         self,
         messages: Sequence[LLMMessage],
         options: dict,
         schema: dict | None,
     ) -> str:
+        return DiskCache.make_key("llm", self.fingerprint(), options, schema, list(messages))
+
+    def _invoke(self, messages, options, schema) -> str:
         cache_key: str | None = None
         if self._cache is not None:
-            cache_key = DiskCache.make_key(
-                "llm", self.fingerprint(), options, schema, list(messages)
-            )
+            cache_key = self._cache_key(messages, options, schema)
             cached = self._cache.get(cache_key)
             if cached is not None:
                 return cached
@@ -204,3 +205,28 @@ class BaseLLMProvider(ABC):
         if self._cache is not None and cache_key is not None:
             self._cache.set(cache_key, text)
         return text
+
+    def invalidate(
+        self,
+        messages: Sequence[LLMMessage],
+        temperature: float | None = None,
+    ) -> None:
+        """Drop any cached completion for this exact request.
+
+        Validation rejects a raw response after it was already written to
+        the cache (see :meth:`blocks.base.generate_parsed`); leaving it
+        there poisons every future retry of the same prompt with the same
+        rejected text. This forgets the entry so the next attempt samples
+        fresh.
+        """
+
+        if self._cache is None:
+            return
+        _model, temp, _tokens = self._resolve(None, temperature, None)
+        options = self._options(None, temp, None, None)
+        key = self._cache_key(messages, options, None)
+        self._cache.forget(key)
+
+    @property
+    def cache_active(self) -> bool:
+        return self._cache is not None and self._cache.enabled

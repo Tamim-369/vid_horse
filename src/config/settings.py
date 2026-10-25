@@ -64,7 +64,12 @@ class Settings(BaseSettings):
     )
 
     # -- Reliability --------------------------------------------------------
-    max_retries: int = Field(default=2, ge=0, le=5)
+    max_retries: int = Field(default=4, ge=0, le=6)
+    # DuckDuckGo image-search license chip; vocabulary:
+    # any | Public | Share | ShareCommercially | Modify | ModifyCommercially
+    web_license: str = Field(
+        default="ShareCommercially", validation_alias=AliasChoices("WEB_LICENSE")
+    )
 
     # -- HTTP / discovery sources ------------------------------------------
     http_user_agent: str = Field(

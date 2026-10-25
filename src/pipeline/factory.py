@@ -16,7 +16,26 @@ from providers.sources import (
     build_http_client,
 )
 from providers.sources.mediawiki import MediaWikiClient
+from providers.sources.webimages import WebImagesClient
 from utils.clip import ClipScorer
+
+
+def _web_http(settings: Settings):
+    """A browser-flavoured client just for scraped image engines."""
+
+    import httpx
+
+    return httpx.Client(
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/128.0 Safari/537.36"
+            ),
+            "Accept-Language": "en",
+        },
+        timeout=settings.http_timeout,
+        follow_redirects=True,
+    )
 
 
 def build_content_pipeline(
@@ -75,6 +94,11 @@ def build_content_pipeline(
             ),
             nasa=NasaImagesClient(client=http, delay=settings.request_delay),
             openverse=OpenverseClient(client=http, delay=settings.request_delay),
+            web=WebImagesClient(
+                client=_web_http(settings),
+                delay=max(1.5, settings.request_delay),
+                license_image=settings.web_license,
+            ),
         ),
         asset_direction=VisualDirectorBlock(llm),
         query_routing=QueryBuilderBlock(llm),

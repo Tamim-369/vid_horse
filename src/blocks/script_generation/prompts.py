@@ -18,14 +18,38 @@ language anywhere: never "the theory claims" or "believers say" — the \
 universe is objectively like this.
 - Every scene lands ONE striking, true fact with a concrete number, \
 distance, weight or temperature. Real numbers from the brief only.
-- Escalate scale or strangeness scene by scene; end scenes where the next \
-is bigger than the last.
-- The OUTRO is the perspective punch: one line that makes the viewer feel \
-small or suspended (no question mark).
+- Narration rules below still bind: no sentence over 12 words, a comma, \
+dash or full stop every 6 to 10 words.
+"""
+
+
+_CURIOUSITY_LADDER = """
+CURIOSITY FIRST, ANSWERS LATER — the viewer must feel they are discovering \
+this, not receive a lecture:
+- Do not explain everything up front. Each scene answers only part of what \
+the last scene left open, and opens something sharper. An answer is always \
+also the setup of the next question.
+- Scene 2 should make the viewer think they now understand the thing. \
+Scene 3 should quietly prove them wrong.
+- Before a big fact, let the viewer form a simple guess — "you'd expect...", \
+"surely that just..." — then break that guess with the real number.
+- Withhold your strongest, largest or strangest number until the moment it \
+hits hardest. Naming it early is the difference a taper makes: light held \
+back lands; light spent early is wallpaper.
+- When scale finally lands, translate it to something a human can feel — \
+a road trip, a heartbeat, a full water glass — and never earlier than that.
+- End scenes mid-tension where it is honest: the unfinished thing is what \
+drags the viewer to the next line. Tie everything up in the OUTRO only.
+- The OUTRO recontextualises the hook: the viewer should look back at the \
+first sentence and see it differently now.
+- Banned: list-of-facts narration ("and it is also...", "next, ..."), \
+textbook register ("this is defined as..."), and scene transitions that \
+say "moving on" or "another".
 """
 
 
 def _system(brief: ResearchBrief | None) -> str:
+    cosmic_ladder = _CURIOUSITY_LADDER
     if brief is not None and brief.genre == "cosmic":
         return (
             "GENRE OVERRIDE — COSMIC FACTS: You write factual narration about "
@@ -37,9 +61,12 @@ def _system(brief: ResearchBrief | None) -> str:
             "\"the theory claims\", never \"believers say\", never \"according "
             "to the story\". Every scene lands ONE striking, true fact with a "
             "concrete number, distance, weight or temperature taken from the "
-            "brief. Escalate scale or strangeness scene by scene. The OUTRO is "
-            "the perspective punch: one line that makes the viewer feel small "
-            "or suspended, no question mark. Hook rules below still apply.\n\n"
+            "brief. Narration rules below still bind: no sentence over 12 "
+            "words, a comma, dash or full stop every 6 to 10 words. The OUTRO "
+            "is the perspective punch: one line that makes the viewer feel "
+            "small or suspended, no question mark.\n\n"
+            + cosmic_ladder
+            + "\n\n"
             + SYSTEM
         )
     return SYSTEM
@@ -106,8 +133,9 @@ _FORMAT_GUIDE: dict[ScriptFormat, str] = {
     "short": (
         "about 45 seconds in total across 4 to 6 scenes. Each scene is only one "
         "or two short spoken sentences (roughly 20-30 words). Deliver the hook "
-        "in the first sentence and end on a memorable line. Do not resolve the "
-        "hook early: let the last scene pay it off."
+        "in the first sentence and end on a memorable line. Every scene must "
+        "leave one thing open that the next scene picks up; the last scene "
+        "pays the hook off, and not one scene earlier."
     ),
     "long": (
         "about 10 minutes in total (roughly 1300-1500 spoken words). Write 9 to "
@@ -324,8 +352,19 @@ def _brief_block(brief: ResearchBrief) -> str:
 def corrective_instruction(error: Exception) -> str:
     """Message asking the model to re-emit a misformatted script."""
 
+    detail = ""
+    if "no comma, dash or full stop" in str(error):
+        # the breath-run is the one violation retries keep repeating; the
+        # model needs the surgical instruction, not a generic sniff
+        detail = (
+            " The flagged sentence is the killer: split it into clauses of "
+            "at most 10 spoken words, separated by a comma, a dash or a full "
+            "stop. Then re-check EVERY narration and hook line you are about "
+            "to send for the same fault — one breath-run rejects the whole "
+            "reply again."
+        )
     return (
-        f"Your previous reply did not follow the required format: {error}\n"
+        f"Your previous reply did not follow the required format: {error}{detail}\n"
         "Rewrite the WHOLE reply using EXACTLY the SCENE / VISUAL / NARRATION "
         "plain-text format. No JSON, no braces, no extra commentary. If the HOOK "
         "was rejected, replace it with a fresh line that follows every hook rule."

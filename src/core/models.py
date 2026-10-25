@@ -287,6 +287,9 @@ class VisualAsset(BaseModel):
     artist: str | None = Field(default=None)
     width: int | None = Field(default=None)
     height: int | None = Field(default=None)
+    duration: float | None = Field(
+        default=None, description="Seconds of footage (video assets only)."
+    )
     trigger: str = Field(default="", description="Narration phrase that aires it.")
     position: float = Field(
         default=0.0,

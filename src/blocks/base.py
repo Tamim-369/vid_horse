@@ -55,6 +55,15 @@ def generate_parsed[T](
             return parse(raw)
         except BlockError as exc:
             last_error = exc
+            # the rejected text was cached the moment it came back; drop
+            # it so the next attempt (and every future run) samples fresh
+            # instead of re-reading the same poisoned response forever
+            invalidate = getattr(llm, "invalidate", None)
+            if invalidate is not None:
+                try:
+                    invalidate(conversation, temperature)
+                except Exception as cache_exc:
+                    logger.debug("Could not evict cached sample: %s", cache_exc)
             logger.debug(
                 "Repairing %s (attempt %d/%d): %s",
                 label,

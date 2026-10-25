@@ -64,13 +64,14 @@ def _duration(wav_path: Path) -> float:
     return info.num_frames / info.sample_rate
 
 
-def _fetch_image(url: str, work: Path, name: str) -> Path:
+def _fetch_media(url: str, work: Path, name: str) -> Path:
     """Download ``url`` into ``work`` under a content-addressed name.
 
     Slot-named caching (img-00-0.jpg) made every re-render reuse the
     previous run's download, so an updated asset pack still showed stale
     pictures — the return of the grandpa. The digest name keeps repeat
-    runs free of re-downloads without ever confusing two images.
+    runs free of re-downloads without ever confusing two images. Videos
+    ride the same path; ``name`` carries the real extension.
     """
 
     digest = hashlib.sha1(url.encode()).hexdigest()[:10]
@@ -81,6 +82,20 @@ def _fetch_image(url: str, work: Path, name: str) -> Path:
         with urllib.request.urlopen(request, timeout=60) as response:
             path.write_bytes(response.read())
     return path
+
+
+def _asset_source(asset, work: Path, name: str) -> Path:
+    """Fetch one asset's pixels: full file for video, thumbnail for stills."""
+
+    suffix = Path(asset.file).suffix.lower()
+    if not suffix:
+        suffix = ".webm" if asset.kind == "video" else ".jpg"
+    url = asset.url if asset.kind == "video" else asset.thumb_url or asset.url
+    return _fetch_media(url, work, f"{name}{suffix}")
+
+
+def _is_video_file(source: Path) -> bool:
+    return source.suffix.lower() in {".webm", ".ogg", ".ogv", ".mp4", ".mov"}
 
 
 def _title_card(text: str, work: Path, index: int) -> Path:
@@ -123,28 +138,47 @@ def _title_card(text: str, work: Path, index: int) -> Path:
 # whole pixels, so on a 4x source one rounding step is a quarter pixel at
 # output — smooth instead of the shiver a 1x or 2x source shows.
 def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0.5) -> str:
-    """Zoompan window: 0 slow zoom-in, 1 pan L->R, 2 pan R->L.
+    """One of six window motions over the still.
 
-    ``zoom`` is the total travel over the scene (keep it gentle), ``drift``
-    the fraction of the pan slack a pan actually uses (1.0 = full sweep,
-    far too quick; 0.5 reads as a slow cinematic drift).
+    0 slow zoom-in, 1 pan L->R, 2 pan R->L, 3 slow zoom-out, 4 pan with a
+    falling drift, 5 vertical drift down. ``zoom`` is the total travel
+    over the scene (keep it gentle), ``drift`` the fraction of the pan
+    slack a pan actually uses (1.0 = full sweep, far too quick; 0.5 reads
+    as a slow cinematic drift).
     """
 
     end = 1.0 + zoom
     on_rate = frames
-    if style == 0:
+    center_x = "iw/2-(iw/zoom/2)"
+    center_y = "ih/2-(ih/zoom/2)"
+    travel = f"(iw-iw/zoom)*{drift:.2f}"
+    v_travel = f"(ih-ih/zoom)*{drift:.2f}"
+    if style == 3:
+        # zoom-out: start close on the subject and settle back; the
+        # opposite of the zoom-in everyone's seen a thousand times
+        z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
+        x, y = center_x, center_y
+    elif style == 4:
+        # horizontal drift that slowly sinks through the shot
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*(1-on/{on_rate})"
+        y = f"{center_y}+{v_travel}*on/{on_rate}"
+    elif style == 5:
+        # vertical drift down: reads like a crane shot on a photo
+        z_expr = f"{end:.3f}"
+        x = center_x
+        y = f"{center_y}+{v_travel}*(1-on/{on_rate})"
+    elif style == 0:
         z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
-        x, y = "iw/2-(iw/zoom/2)", "ih/2-(ih/zoom/2)"
+        x, y = center_x, center_y
+    elif style == 1:
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*on/{on_rate}"
+        y = center_y
     else:
         z_expr = f"{end:.3f}"
-        y = "ih/2-(ih/zoom/2)"
-        travel = f"(iw-iw/zoom)*{drift:.2f}"
-        center = "iw/2-(iw/zoom/2)"
-        x = (
-            f"{center}+{travel}*on/{on_rate}"
-            if style == 1
-            else f"{center}+{travel}*(1-on/{on_rate})"
-        )
+        x = f"{center_x}+{travel}*(1-on/{on_rate})"
+        y = center_y
     return (
         f"zoompan=z='{z_expr}':x='{x}':y='{y}':"
         f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
@@ -160,6 +194,114 @@ def _cover_prep() -> str:
     )
 
 
+def _video_clip(source: Path, work: Path, tag: str | int, length: float) -> Path:
+    """One card built from real footage: cover-crop, native motion.
+
+    The clip plays its own frames (no zoompan) at whatever trim starts
+    deterministically; undersized sources loop via ``-stream_loop``.
+    Source audio never leaks: the voice and the music bed are the only
+    sound this pipeline speaks.
+    """
+
+    clip = work / f"clip-{tag}.mp4"
+    _run([
+        "ffmpeg", "-y", "-stream_loop", "-1", "-i", str(source),
+        "-vf", f"{_cover_prep()},scale={WIDTH}:{HEIGHT}",
+        "-t", f"{length:.3f}", "-r", str(FPS), "-an",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(clip),
+    ])
+    return clip
+
+
+_MOTION_POOL = [0, 3, 1, 5, 2, 4]
+
+
+def _style_for(tag: str | int) -> int:
+    """Deterministic but non-repeating motion pick for a card.
+
+    The tag carries the card index (and the subject slot after it); we
+    walk the motion pool one step per card and offset again per subject,
+    so no two adjacent cards and no two subject switches inside a card
+    ever use the same window motion. The old digit-sum hash let
+    consecutive cards repeat the same zoom for whole videos, which is
+    exactly the AI-slides look.
+    """
+
+    parts = [part for part in re.split(r"[-_]", str(tag)) if part.isdigit()]
+    card = int(parts[0]) if parts else 0
+    slot = int(parts[1]) if len(parts) > 1 else 0
+    return _MOTION_POOL[(card + slot) % len(_MOTION_POOL)]
+
+
+def _attribution(asset) -> tuple[str, int] | None:
+    """Full credit text + corner fontsize, or None for self-free media.
+
+    Public-domain and Pexels-free frames carry no obligation, so they get
+    no text at all; CC-BY-style licenses legally expect a name, and the
+    whole name goes in — clipped attribution ("…") is worse than none.
+    Long credits buy completion with size instead: the font shrinks from
+    22px toward a 12px whisper and word-wraps beside the frame edge, so
+    the corner line stays skippable unless the viewer hunts for it.
+    """
+
+    license_text = (asset.license or "").lower()
+    if "cc by" not in license_text:
+        return None
+    name = (asset.artist or "").strip()
+    if not name:
+        name = asset.file.rsplit(".", 1)[0].split("File:")[-1].strip()
+    short = (asset.license or "").split(",")[0].split(";")[0].strip()
+    text = f"{name} ({short})".replace(" , ", ", ")
+
+    # ~0.55 em average advance at this face; 840px keeps the strip inside
+    # a corner budget on the 1080-wide canvas
+    size = max(12, min(22, int(840 / (0.55 * len(text)))))
+    lines = [text]
+    if 0.55 * size * len(text) > 870:
+        lines = []
+        line = ""
+        for word in text.split():
+            probe = f"{line} {word}".strip()
+            if line and 0.55 * size * len(probe) > 900:
+                lines.append(line)
+                line = word
+            else:
+                line = probe
+        if line:
+            lines.append(line)
+    return "\n".join(lines), size
+
+
+def _credited_clip(clip: Path, asset, work: Path, tag: str | int) -> Path:
+    """Stamp the tiny corner credit while ``clip`` is the visible shot."""
+
+    credited = _attribution(asset)
+    if not credited:
+        return clip
+    credit, fontsize = credited
+    out = work / f"credit-{tag}.mp4"
+    text_file = work / f"credit-{tag}.txt"
+    text_file.write_text(credit, encoding="utf-8")
+    font = _font()
+    draw = [
+        f"textfile={text_file}",
+        "fontcolor=white@0.35",
+        f"fontsize={fontsize}",
+        "x=w-text_w-28",
+        "y=h-text_h-56",
+    ]
+    if font:
+        draw.insert(1, f"fontfile={font}")
+    _run([
+        "ffmpeg", "-y", "-i", str(clip),
+        "-vf", f"drawtext={':'.join(draw)}",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-an", str(out),
+    ])
+    return out
+
+
 def _still_clip(source: Path, work: Path, tag: str | int, length: float) -> Path:
     """One animated clip from a still: cover-crop prep + moving window.
 
@@ -170,8 +312,10 @@ def _still_clip(source: Path, work: Path, tag: str | int, length: float) -> Path
     one card's subjects never collide.
     """
 
-    style = sum(int(ch) for ch in str(tag) if ch.isdigit()) % 3
+    style = _style_for(tag)
     clip = work / f"clip-{tag}.mp4"
+    if _is_video_file(source):
+        return _video_clip(source, work, tag, length)
     frames = max(1, round(length * FPS))
     tail = f"{_motion_filter(frames, style)}"
     args = ["-vf", f"{_cover_prep()},{tail}"]
@@ -360,10 +504,8 @@ def _moving_still(
             if scored
             else min(visuals, key=lambda asset: asset.position)
         )
-        source = _fetch_image(
-            primary.thumb_url or primary.url, work, f"img-{index:02d}-0.jpg"
-        )
-        return _still_clip(source, work, index, length)
+        source = _asset_source(primary, work, f"img-{index:02d}-0")
+        return _credited_clip(_still_clip(source, work, index, length), primary, work, index)
 
     arrivals = [moment for moment, _asset in pairs]
     subject_assets = [asset for _moment, asset in pairs]
@@ -379,8 +521,13 @@ def _moving_still(
     subpaths: list[Path] = []
     for slot, asset in enumerate(subject_assets):
         tag = f"{index:02d}-{slot}"
-        source = _fetch_image(asset.thumb_url or asset.url, work, f"img-{tag}.jpg")
-        subpaths.append(_still_clip(source, work, tag, subject_lengths[slot]))
+        source = _asset_source(asset, work, f"img-{tag}")
+        subpaths.append(
+            _credited_clip(
+                _still_clip(source, work, tag, subject_lengths[slot]),
+                asset, work, tag,
+            )
+        )
 
     args: list[str] = ["ffmpeg", "-y"]
     for path in subpaths:
@@ -776,7 +923,7 @@ def render(
             if hook_asset_entry is not None
             else (pack.scenes[0].assets if pack.scenes else [])
         )
-        if a.kind == "image"
+        if a.kind in ("image", "video")
     ]
 
     def hook_card() -> Path:
@@ -794,7 +941,7 @@ def render(
             strict=True,
         )
     ):
-        visuals = [a for a in scene.assets if a.kind == "image"]
+        visuals = [a for a in scene.assets if a.kind in ("image", "video")]
 
         def scene_card(
             card=index + 1, vis=visuals, text=lines[index + 1], words=word_lines[index + 1]
@@ -813,15 +960,14 @@ def render(
     # Outro: no more text card. Fade out over the last scene's closing
     # image; when a scene has nothing, keep a plain dark card.
     last_visuals = [
-        a for a in (pack.scenes[-1].assets if pack.scenes else []) if a.kind == "image"
+        a for a in (pack.scenes[-1].assets if pack.scenes else []) if a.kind in ("image", "video")
     ]
     if last_visuals:
-        source = _fetch_image(
-            last_visuals[-1].thumb_url or last_visuals[-1].url,
-            work,
-            "img-outro.jpg",
+        source = _asset_source(last_visuals[-1], work, "img-outro")
+        outro_raw = _credited_clip(
+            _still_clip(source, work, len(build), lengths[-1]),
+            last_visuals[-1], work, len(build),
         )
-        outro_raw = _still_clip(source, work, len(build), lengths[-1])
     else:
         outro_raw = _blank_clip(work, len(build), lengths[-1])
     clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(build)))

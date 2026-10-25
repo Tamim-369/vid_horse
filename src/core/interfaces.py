@@ -54,6 +54,18 @@ class LLMProvider(Protocol):
         """Return a validated ``schema`` instance parsed from the response."""
         ...
 
+    def invalidate(
+        self,
+        messages: Sequence[LLMMessage],
+        temperature: float | None = None,
+    ) -> None:
+        """Forget the cached completion for this request, if any.
+
+        Mandatory only for backends that cache; letting a rejected sample
+        persist poisons every future retry with the same bad text.
+        """
+        ...
+
 
 class SearchResult(BaseModel):
     """A single web search hit."""

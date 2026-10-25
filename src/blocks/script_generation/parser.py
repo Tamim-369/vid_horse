@@ -343,7 +343,7 @@ def _build_scenes(
 ) -> list[ScriptScene]:
     scenes: list[ScriptScene] = []
     for block in blocks:
-        narration = clean(" ".join(part for part in block["narration"] if part))
+        narration = _soften_breath(clean(" ".join(part for part in block["narration"] if part)))
         if not narration:
             continue
         problems = runon_problems(narration)
@@ -359,7 +359,84 @@ def _build_scenes(
 
 
 _MAX_UNBROKEN_WORDS = 12
-_BREAKS = re.compile(r"[,.!?;:\u2014\u2026-]+|\s\-\-")
+_BREAKS = re.compile(r"[,.!?;:\u2013\u2014\u2026-]+|\s\-\-")
+
+# a comma before any of these cannot change the clause's meaning: it is the
+# pause the voice wants anyway. Inserted mechanically instead of burning a
+# whole LLM retry on a fault the model repeats every round.
+_BREATH_CONJUNCTION = re.compile(
+    r"(?<=\s)(?:and|but|yet|so|or|because|while|when|if|although|though|until|"
+    r"whereas|before|after|than|which|that)(?=\s)",
+    re.IGNORECASE,
+)
+# a trailing -ing modifier reads exactly as well with a pause in front of
+# it ("...beacons, emitting intense spans of light...") — but only when the
+# word before it cannot be a verb the -ing word belongs to
+_BREATH_PARTICIPLE = re.compile(r"(?<=\s)([A-Za-z]{4,}ing)(?=\s)")
+_PARTICIPLE_NO_COMMA_BEFORE = frozenset(
+    {
+        "is", "are", "was", "were", "been", "be", "has", "have", "had",
+        "a", "an", "the", "of", "in", "on", "at", "for", "to", "and", "or",
+        "but", "with", "by", "from", "into", "its", "his", "her", "their",
+    }
+)
+_MIN_SIDE_WORDS = 3
+
+
+def _soften_breath(narration: str) -> str:
+    """Insert conjunction commas into breath-less clause runs.
+
+    Runs the longest-unbroken-clause check mechanically: wherever a clause
+    exceeds the limit and a conjunction sits with at least three words on
+    either side, a comma goes in before it and the check repeats. Every
+    other fault still raises for the corrective retry.
+    """
+
+    for _attempt in range(8):
+        problems = runon_problems(narration)
+        if not problems:
+            return narration
+        # quote mirrors what runon_problems lifted from the worst clause;
+        # full clause text is not returned, so re-derive the worst clause
+        # here and repair it inside the narration string
+        clauses = [
+            (match.start(), match.end())
+            for match in _BREAKS.finditer(narration)
+        ]
+        spans = []
+        start = 0
+        for b_start, b_end in clauses + [(len(narration), len(narration))]:
+            spans.append((start, b_start))
+            start = b_end
+        pieces = [
+            (s, e, narration[s:e]) for s, e in spans
+        ]
+        worst = max(pieces, key=lambda piece: len(piece[2].split()))
+        s, _e, text = worst
+        best = None
+        for match in _BREATH_CONJUNCTION.finditer(text):
+            before = len(text[: match.start()].split())
+            after = len(text[match.end() :].split())
+            if before >= _MIN_SIDE_WORDS and after >= _MIN_SIDE_WORDS and (
+                best is None or before > best[0]
+            ):
+                best = (before, match.start())
+        for match in _BREATH_PARTICIPLE.finditer(text):
+            match.group(1).lower()
+            tokens_before = text[: match.start()].split()
+            if not tokens_before or tokens_before[-1].lower() in _PARTICIPLE_NO_COMMA_BEFORE:
+                continue
+            before = len(tokens_before)
+            after = len(text[match.end() :].split())
+            if before >= _MIN_SIDE_WORDS and after >= _MIN_SIDE_WORDS and (
+                best is None or before > best[0]
+            ):
+                best = (before, match.start())
+        if best is None:
+            return narration
+        cut = s + best[1]  # index of the conjunction's first letter
+        narration = narration[: cut - 1] + ", " + narration[cut:]
+    return narration
 
 
 def runon_problems(narration: str) -> list[str]:

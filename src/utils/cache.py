@@ -51,6 +51,16 @@ class DiskCache:
         except OSError:
             return
 
+    def forget(self, key: str) -> None:
+        """Remove one cached entry (a rejected sample must not persist)."""
+
+        if not self._enabled:
+            return
+        try:
+            self._path(key).unlink(missing_ok=True)
+        except OSError:
+            return
+
     def _path(self, key: str) -> Path:
         digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return self._root / f"{digest}.json"

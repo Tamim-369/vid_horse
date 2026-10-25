@@ -275,6 +275,8 @@ class MediaWikiClient:
             "mime": info.get("mime", ""),
             "width": info.get("width"),
             "height": info.get("height"),
+            "size": info.get("size"),
+            "duration": info.get("duration"),
             "description": _meta_text(meta, "ImageDescription"),
             "license": _meta_text(meta, "LicenseShortName"),
             "artist": _meta_text(meta, "Artist") or None,
