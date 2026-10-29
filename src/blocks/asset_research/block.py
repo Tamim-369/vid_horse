@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import numpy as np
 from pydantic import BaseModel
 
 from core.errors import BlockError, ProviderError
@@ -28,9 +30,38 @@ from core.models import (
     VisualAsset,
 )
 from providers.sources.mediawiki import MediaWikiClient
+from utils import computing
 from utils.text import strip_html
 
 logger = logging.getLogger(__name__)
+
+
+class _Claims:
+    """Which files are already claimed by any scene in this research pass.
+
+    Parallel scene workers share one registry: a file may serve one scene
+    only, and the claim is atomic — check and take happen inside the same
+    lock, so two scenes racing for the same MediaWiki file can never both
+    win. ``stem`` twins (same file, different extension) land together.
+    """
+
+    def __init__(self) -> None:
+        self.lock = threading.RLock()
+        self._files: set[str] = set()
+        self._stems: set[str] = set()
+
+    def blocked(self, file: str) -> bool:
+        with self.lock:
+            return file in self._files or _stem_of(file) in self._stems
+
+    def claim(self, file: str) -> bool:
+        with self.lock:
+            stem = _stem_of(file)
+            if file in self._files or stem in self._stems:
+                return False
+            self._files.add(file)
+            self._stems.add(stem)
+            return True
 
 _MAGICAL_WORDS = (
     "a an and are as at be but by during for from graphic his her into is it "
@@ -420,6 +451,7 @@ class AssetResearchBlock:
         http=None,
         clip=None,
         web=None,
+        shelf=None,
     ) -> None:
         self._wiki = wiki
         self._commons = commons
@@ -430,6 +462,7 @@ class AssetResearchBlock:
         self._http = http
         self._clip = clip
         self._web = web
+        self._shelf = shelf
         self._fiction = False
         self._chooser_pool = 6
         self._video_slots = _VIDEO_SLOTS_PER_VIDEO
@@ -463,7 +496,7 @@ class AssetResearchBlock:
         query_map = {
             scene.scene_index: scene.queries for scene in (queries.scenes if queries else [])
         }
-        used: set[str] = set()
+        used = _Claims()
         scenes: list[SceneAssets] = []
 
         # the hook is a sentence too: its own query, its own asset
@@ -489,28 +522,36 @@ class AssetResearchBlock:
             )
         )
 
+        tasks: list[tuple[int, ScriptScene, str, object, int]] = []
         for index, scene in enumerate(script.scenes):
             query = self._query_for(scene, brief)
             actions = query_map.get(index)
             target = len(actions) if actions else self._target_for(scene)
-            assets = self._assets_for_scene(
-                scene,
-                query,
-                actions,
-                target,
-                brief,
-                entity_pool,
-                article_pool,
-                used,
+            tasks.append((index, scene, query, actions, target))
+
+        def _run_scene(task) -> SceneAssets:
+            _index, scene, query, actions, target = task
+            return SceneAssets(
+                scene_index=_index,
+                visual=scene.visual,
+                query=query,
+                assets=self._assets_for_scene(
+                    scene, query, actions, target, brief, entity_pool,
+                    article_pool, used,
+                ),
             )
-            scenes.append(
-                SceneAssets(
-                    scene_index=index,
-                    visual=scene.visual,
-                    query=query,
-                    assets=assets,
-                )
-            )
+
+        workers = computing.scene_workers()
+        if workers > 1 and len(tasks) > 1:
+            # independent scenes: fetched and CLIP-scored in parallel, so the
+            # stage paces at its slowest scene, not the sum of scenes; every
+            # quality gate (floor, junk veto, chooser, claims) runs per scene
+            # exactly like the serial version did
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                built = list(pool.map(_run_scene, tasks))
+        else:
+            built = [_run_scene(task) for task in tasks]
+        scenes.extend(built)
 
         # a blank screen must be impossible: hand an underfed entry the
         # primary visual of a well-fed neighbour
@@ -551,14 +592,30 @@ class AssetResearchBlock:
         pool: dict[str, VisualAsset] = {}
         try:
             per_person = self._wiki.page_files(names)
-            for person, files in per_person.items():
-                infos = self._wiki.image_info(
-                    files[:15], thumb_width=self._options.thumb_width
-                )
-                for info in infos:
-                    if self._usable(info):
-                        pool[person.lower()] = to_asset(info)
-                        break
+            active = {person: files[:15] for person, files in per_person.items() if files}
+            if len(active) > 1:
+                workers = min(computing.variant_workers(), len(active))
+                with ThreadPoolExecutor(max_workers=workers) as workers_pool:
+                    futures = {
+                        person: workers_pool.submit(
+                            self._wiki.image_info, files, thumb_width=self._options.thumb_width
+                        )
+                        for person, files in active.items()
+                    }
+                for person, future in futures.items():
+                    for info in future.result():
+                        if self._usable(info):
+                            pool[person.lower()] = to_asset(info)
+                            break
+            else:
+                for person, files in active.items():
+                    infos = self._wiki.image_info(
+                        files, thumb_width=self._options.thumb_width
+                    )
+                    for info in infos:
+                        if self._usable(info):
+                            pool[person.lower()] = to_asset(info)
+                            break
         except ProviderError as exc:
             logger.debug("Entity portraits skipped: %s", exc)
         return pool
@@ -626,7 +683,7 @@ class AssetResearchBlock:
         brief: ResearchBrief,
         entity_pool: dict[str, VisualAsset],
         article_pool: list[dict],
-        used: set[str],
+        used: _Claims,
     ) -> list[VisualAsset]:
         chosen: list[VisualAsset] = []
         text_scene = f"{scene.visual} {scene.narration}"
@@ -653,13 +710,17 @@ class AssetResearchBlock:
             if (
                 verifiable
                 and all(word in text_scene.lower() for word in words)
-                and asset.file not in used
+                and used.claim(asset.file)
             ):
                 chosen.append(asset)
-                used.add(asset.file)
-                used.add(_stem_of(asset.file))
 
         searches: list[str] = []
+        if len(chosen) < target and self._shelf is not None:
+            # local shelf first: approved-by-us candidates from earlier
+            # research passes, matched by embedding and re-verified with
+            # the same CLIP gates — zero network when the shelf is warm
+            self._route_shelf(query or brief.title, text_scene, chosen, target, used)
+
         if len(chosen) < target:  # fallback: mine the scene's own phrases
             phrases = [phrase.lower() for phrase in proper_phrases(scene.visual)]
             searches = [query] if query else []
@@ -704,7 +765,7 @@ class AssetResearchBlock:
         # matters across paths (routed, entity, filler), not just inside
         # whichever candidate pool it came from.
         if self._clip is not None and self._http is not None and chosen:
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
                 results = list(
                     pool.map(
                         lambda asset: self._clip.analyze(
@@ -717,12 +778,25 @@ class AssetResearchBlock:
                 chosen, results, strict=True
             ):
                 asset.clip_score = similarity
-            healthy = [
-                asset
-                for asset, (sim, collage_like, texty) in zip(chosen, results, strict=True)
-                if not (collage_like or texty)
-                and (sim is None or sim >= _CLIP_FLOOR)
-            ]
+            ranked = sorted(
+                zip(chosen, results, strict=True),
+                key=lambda pair: pair[1][0] if pair[1][0] is not None else -1.0,
+                reverse=True,
+            )
+            healthy: list[VisualAsset] = []
+            for slot, (asset, (sim, collage_like, texty)) in enumerate(ranked):
+                if collage_like or texty:
+                    continue
+                if sim is not None:
+                    # the strongest subject may clear the normal floor;
+                    # every EXTRA subject must prove itself clearly (a
+                    # 0.19 marginal "tennis court telescope" barely
+                    # sliding over the floor used to pair with real
+                    # content and read on screen as visual noise)
+                    floor = _CLIP_FLOOR if slot == 0 else _CLIP_FLOOR + 0.05
+                    if sim < floor:
+                        continue
+                healthy.append(asset)
             if healthy:
                 chosen = healthy
             else:
@@ -736,7 +810,7 @@ class AssetResearchBlock:
         return chosen
 
     def _rescue_visuals(
-        self, text_scene: str, topic: str, used: set[str]
+        self, text_scene: str, topic: str, used: _Claims
     ) -> list[VisualAsset]:
         """Last-hope search under the scene's topic name, CLIP-checked."""
 
@@ -908,7 +982,9 @@ class AssetResearchBlock:
         ranked: list[tuple[int, dict]] = []
         seen: set[str] = set()
         if len(variants) > 1:
-            with ThreadPoolExecutor(max_workers=min(3, len(variants))) as pool:
+            with ThreadPoolExecutor(
+                max_workers=min(computing.variant_workers(), len(variants))
+            ) as pool:
                 variant_lists = list(
                     pool.map(lambda v: self._search_ranked(v, scene), variants)
                 )
@@ -940,7 +1016,7 @@ class AssetResearchBlock:
         if self._clip is not None and self._http is not None and eligible:
             subject_text = f"{action.intent} {action.query}".strip()
             clip_scored: list[tuple[float, int, dict]] = []
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
                 results = list(
                     pool.map(
                         lambda pair: self._clip.analyze(
@@ -989,11 +1065,47 @@ class AssetResearchBlock:
             )
             if pick is None:
                 continue
-            self._take(pick, chosen, used)
-            break
+            if self._take(pick, chosen, used):
+                break
+            # a parallel scene claimed it between the outline check and the
+            # chooser verdict; the next rank is still up for grabs
+
+    def _route_shelf(
+        self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: _Claims
+    ) -> None:
+        """Local shelf match — the fast path for subjects research has seen."""
+
+        if len(chosen) >= target or self._clip is None or self._http is None:
+            return
+        text_embed = self._clip.text_embed(query)
+        if text_embed is None:
+            return
+        hits = self._shelf.match(
+            text_embed, limit=max(target - len(chosen), 6)
+        )
+        if not hits:
+            return
+        logger.info("Shelf matched %d candidate(s) for %r", len(hits), query[:50])
+        for info in hits:
+            if len(chosen) >= target:
+                break
+            if self._blocked(info, used) or not self._usable(info):
+                continue
+            # same contract the network path faces: pixels must depict
+            # the scene, nothing collages/postery/texty survives
+            sim, collage_like, texty = self._clip.analyze(
+                scene, info.get("thumburl") or info.get("url"), self._http
+            )
+            if collage_like or texty:
+                continue
+            info["_clip_score"] = sim
+            if sim is not None and sim < _CLIP_FLOOR:
+                continue
+            if self._take(info, chosen, used):
+                self._shelf.touch(info["file"])
 
     def _route_web(
-        self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: set[str]
+        self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: _Claims
     ) -> None:
         """Scraped-engine fallback: fires when the RSS sources starve a scene.
 
@@ -1020,7 +1132,7 @@ class AssetResearchBlock:
 
         subject_text = query
         clip_scored: list[tuple[float, int, dict]] = []
-        with ThreadPoolExecutor(max_workers=4) as pool:
+        with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
             results = list(
                 pool.map(
                     lambda info: self._clip.analyze(
@@ -1093,7 +1205,7 @@ class AssetResearchBlock:
         if passing and self._clip is not None and self._http is not None:
             subject_text = f"{relevance} {search_words}".strip()
             clip_scored: list[tuple[float, int, dict]] = []
-            with ThreadPoolExecutor(max_workers=4) as pool:
+            with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
                 results = list(
                     pool.map(
                         lambda info: self._clip.analyze(
@@ -1144,21 +1256,49 @@ class AssetResearchBlock:
             return self._video_slots > 0 and not is_video_junk(info)
         return True
 
-    def _blocked(self, info: dict, used: set[str]) -> bool:
+    def _blocked(self, info: dict, used: _Claims) -> bool:
         """File used, or its extensionless twin already in play."""
 
-        return info["file"] in used or _stem_of(info["file"]) in used
+        return used.blocked(info["file"])
 
     def _take(
-        self, info: dict, chosen: list[VisualAsset], used: set[str], trigger: str = ""
-    ) -> None:
+        self,
+        info: dict,
+        chosen: list[VisualAsset],
+        used: _Claims,
+        trigger: str = "",
+    ) -> bool:
+        """Atomically claim the file, then append; False when already in play."""
+
+        if not used.claim(info["file"]):
+            return False
         asset = to_asset(info)
         if asset.kind == "video":
-            self._video_slots = max(0, self._video_slots - 1)
+            with used.lock:
+                self._video_slots = max(0, self._video_slots - 1)
         asset.trigger = trigger
         chosen.append(asset)
-        used.add(info["file"])
-        used.add(_stem_of(info["file"]))
+        if self._shelf is not None and self._clip is not None and self._http is not None:
+            # everything the gauntlet approved goes on the shelf: later
+            # research passes match subjects locally instead of re-walking
+            # Commons. Takes without a stamped CLIP score land at 0.0 —
+            # they still count (their search path passed its own gates),
+            # and the route re-verifies every hit with analyze() anyway.
+            try:
+                embed = self._clip.image_embed(
+                    info.get("thumburl") or info.get("url"), self._http
+                )
+                if embed is not None:
+                    score = info.get("_clip_score") or asset.clip_score or 0.0
+                    self._shelf.store(
+                        info,
+                        embed if isinstance(embed, np.ndarray)
+                        else np.asarray(embed, dtype=np.float32),
+                        float(score),
+                    )
+            except Exception as exc:  # noqa: BLE001 — shelfing is best-effort
+                logger.debug("shelfing %s failed: %s", info.get("file"), exc)
+        return True
 
     def _query_for(self, scene: ScriptScene, brief: ResearchBrief) -> str:
         phrases = proper_phrases(scene.visual)

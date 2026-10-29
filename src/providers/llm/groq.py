@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
 from collections.abc import Iterator, Sequence
 from typing import Any
 
@@ -60,6 +62,12 @@ class GroqProvider(BaseLLMProvider):
         self._reasoning_effort = reasoning_effort
         self._dead: set[int] = set()
         self._index = 0
+        # parallel corrective waves share one provider across threads:
+        # rotation state mutates under a lock and a rate-limited key gets
+        # a short cooldown window instead of being hammered again by the
+        # next thread
+        self._lock = threading.Lock()
+        self._cooldown: dict[int, float] = {}
         self._client = client or httpx.Client(timeout=timeout)
 
     def fingerprint(self) -> dict:
@@ -106,10 +114,18 @@ class GroqProvider(BaseLLMProvider):
                     )
                     break
                 except _KeyFailure as exc:
+                    if "HTTP 429" in str(exc):
+                        # parallel waves share these keys; let a judged
+                        # key rest briefly instead of walkers hammering it
+                        with self._lock:
+                            self._cooldown[index] = time.monotonic() + 6.0
+                        logger.warning("Groq key #%d rate-limited; cooling 6s", index + 1)
                     errors.append(f"key #{index + 1}: {exc}")
                     logger.warning("Groq key #%d failed (%s); rotating", index + 1, exc)
                     break
-                self._index = index
+                with self._lock:
+                    self._index = index
+                    self._cooldown.pop(index, None)
                 return content
 
         if not errors:
@@ -140,13 +156,21 @@ class GroqProvider(BaseLLMProvider):
         return payload
 
     def _key_order(self) -> Iterator[int]:
-        """Yield key indices in rotation order, skipping retired keys."""
+        """Fresh keys first, rate-limited keys at the tail as last resort."""
 
         total = len(self._api_keys)
+        with self._lock:
+            now = time.monotonic()
+            self._cooldown = {i: t for i, t in self._cooldown.items() if t > now}
+            hot = set(self._cooldown)
+        fresh, cooling = [], []
         for offset in range(total):
             index = (self._index + offset) % total
-            if index not in self._dead:
-                yield index
+            if index in self._dead:
+                continue
+            (cooling if index in hot else fresh).append(index)
+        yield from fresh
+        yield from cooling
 
     def _post(self, key: str, payload: dict[str, Any]) -> str:
         try:

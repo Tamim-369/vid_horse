@@ -12,16 +12,141 @@ else to topical free sources (Commons first, Openverse explicit only).
 from __future__ import annotations
 
 import json
+import logging
+import re
 
+from blocks.base import generate_json_parsed
 from core.interfaces import LLMProvider
 from core.models import (
     IntentPack,
     QueryPack,
     ResearchBrief,
+    SceneIntents,
+    SceneQueries,
+    SceneQuery,
+    Subject,
     VideoScript,
 )
 
+logger = logging.getLogger(__name__)
+
 _TEMPERATURE = 0.4
+_JSON_JUNK = re.compile("[\\{\\}\\[\\]\"“”`]")
+
+
+def _wordish(value: str | None) -> bool:
+    return bool(value) and not _JSON_JUNK.search(value)
+
+
+def _clean_text(value: str) -> str:
+    return re.sub("\\s+", " ", _JSON_JUNK.sub(" ", value)).strip()
+
+
+def _repair_triggers(
+    scenes: list[SceneIntents], script: VideoScript
+) -> list[SceneIntents]:
+    """Deterministic last resort after the race exhausts.
+
+    Subjects lacking a usable trigger get the first narration words
+    verbatim, so a pushed-through answer never re-creates the empty
+    ``trigger=""`` fields that make assets air off-time; intents with
+    leftover debris are scrubbed of the offending characters only.
+    """
+
+    narration = [script.hook or ""] + [scene.narration for scene in script.scenes]
+    repaired: list[SceneIntents] = []
+    for scene in scenes:
+        fallback = " ".join(narration[min(scene.scene_index, len(narration) - 1)].split()[:3])
+        subjects: list[Subject] = []
+        for subject in scene.subjects:
+            trigger = subject.trigger
+            if not _wordish(trigger):
+                trigger = fallback
+            subjects.append(
+                subject.model_copy(
+                    update={
+                        "trigger": trigger,
+                        "intent": _clean_text(subject.intent),
+                    }
+                )
+            )
+        repaired.append(scene.model_copy(update={"subjects": subjects}))
+    return repaired
+
+
+def _repair_queries(scenes: list[SceneQueries]) -> list[SceneQueries]:
+    """Deterministic last resort: scrub punctuation/JSON debris from queries."""
+
+    repaired: list[SceneQueries] = []
+    for scene in scenes:
+        queries: list[SceneQuery] = []
+        for item in scene.queries:
+            queries.append(
+                item.model_copy(
+                    update={
+                        "query": re.sub("\\s+", " ", _JSON_JUNK.sub(" ", item.query)).strip(),
+                    }
+                )
+            )
+        repaired.append(scene.model_copy(update={"queries": queries}))
+    return repaired
+
+
+def _intent_problems(scenes: list[SceneIntents]) -> list[str]:
+    """Content-quality rules the director must hold; [] means clean."""
+
+    problems: list[str] = []
+    for scene in scenes:
+        tag = f"scene {scene.scene_index}"
+        if not scene.subjects:
+            problems.append(f"{tag}: no subjects were given")
+            continue
+        for subject in scene.subjects:
+            name = f"{tag} subject {subject.subject[:30]!r}"
+            if len(subject.subject.split()) > 6:
+                problems.append(f"{name}: subject name is over 6 words")
+            if not _wordish(subject.intent):
+                problems.append(
+                    f"{name}: intent has JSON debris/forbidden words; rewrite it as"
+                    " a clean 3-9-word image description"
+                )
+            elif len(subject.intent.split()) > 12:
+                problems.append(f"{name}: intent is over 12 words")
+            if subject.trigger and (
+                _JSON_JUNK.search(subject.trigger)
+                or len(subject.trigger.split()) > 6
+            ):
+                problems.append(
+                    f"{name}: trigger must be <= 6 words copied from the"
+                    " narration, plain text"
+                )
+    return problems
+
+
+def _scene_count_problems(got: int, expected: int) -> list[str]:
+    """Whole-document shape check; [] means the right number of scenes."""
+
+    if got == expected:
+        return []
+    return [f"expected {expected} scenes in the answer, got {got}"]
+
+
+def _query_problems(scenes: list[SceneQueries]) -> list[str]:
+    """Content-quality rules the router must hold; [] means clean."""
+
+    problems: list[str] = []
+    for scene in scenes:
+        tag = f"scene {scene.scene_index}"
+        for item in scene.queries:
+            words = item.query.split()
+            tag2 = f"{tag} query {item.query[:30]!r}"
+            if item.source not in ("commons", "nasa", "openverse"):
+                problems.append(f"{tag2}: unknown source {item.source}")
+            if len(words) > 6:
+                problems.append(f"{tag2}: over 6 keywords")
+            if _JSON_JUNK.search(item.query):
+                problems.append(f"{tag2}: query has punctuation or JSON debris")
+    return problems
 
 DIRECTOR_SYSTEM = """You are the visual director of a conspiracy-theory video channel.
 
@@ -136,8 +261,9 @@ class VisualDirectorBlock:
 
     name = "visual_direction"
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, race: int = 0) -> None:
         self._llm = llm
+        self._race = race
 
     def run(self, theory, script: VideoScript) -> IntentPack:
         payload = [
@@ -156,24 +282,33 @@ class VisualDirectorBlock:
             ],
         ]
         system = DIRECTOR_SYSTEM + (HORROR_DIRECTOR_NOTES if _is_fiction(script) else "")
-        answer = self._llm.complete_json(
-            [
-                {"role": "system", "content": system},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Theory: {theory.name}\nHook of the video: {script.hook}\n"
-                        f"Scenes: {json.dumps(payload, ensure_ascii=False)}"
-                    ),
-                },
-            ],
+        messages = [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": (
+                    f"Theory: {theory.name}\nHook of the video: {script.hook}\n"
+                    f"Scenes: {json.dumps(payload, ensure_ascii=False)}"
+                ),
+            },
+        ]
+        answer = generate_json_parsed(
+            self._llm,
+            messages,
             IntentSchema,
+            quality=lambda parsed: (
+                _scene_count_problems(len(parsed.scenes), len(script.scenes) + 1)
+                + _intent_problems(parsed.scenes)
+            ),
+            attempts=self._race or 1,
+            race=self._race,
             temperature=_TEMPERATURE,
+            label="visual direction",
         )
         return IntentPack(
             slug=theory.slug,
             topic=theory.name,
-            scenes=answer.scenes,
+            scenes=_repair_triggers(answer.scenes, script),
             fiction=_is_fiction(script),
         )
 
@@ -183,13 +318,15 @@ class QueryBuilderBlock:
 
     name = "query_routing"
 
-    def __init__(self, llm: LLMProvider) -> None:
+    def __init__(self, llm: LLMProvider, race: int = 0) -> None:
         self._llm = llm
+        self._race = race
 
     def run(self, brief: ResearchBrief, intents: IntentPack) -> QueryPack:
         payload = [item.model_dump() for item in intents.scenes]
         system = QUERY_SYSTEM + (HORROR_QUERY_NOTES if intents.fiction else "")
-        answer = self._llm.complete_json(
+        answer = generate_json_parsed(
+            self._llm,
             [
                 {"role": "system", "content": system},
                 {
@@ -201,11 +338,18 @@ class QueryBuilderBlock:
                 },
             ],
             RouterSchema,
+            quality=lambda parsed: (
+                _scene_count_problems(len(parsed.scenes), len(intents.scenes))
+                + _query_problems(parsed.scenes)
+            ),
+            attempts=self._race or 1,
+            race=self._race,
             temperature=_TEMPERATURE,
+            label="query routing",
         )
         return QueryPack(
             slug=intents.slug,
             topic=intents.topic,
-            scenes=answer.scenes,
+            scenes=_repair_queries(answer.scenes),
             fiction=intents.fiction,
         )

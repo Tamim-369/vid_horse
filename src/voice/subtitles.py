@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -176,6 +177,24 @@ def _transcribe_words(
     return words, starts, ends
 
 
+_WHISPER_CACHE: dict[tuple[str, str], object] = {}
+_WHISPER_LOCK = threading.Lock()
+
+
+def _whisper_model(model_size: str, device: str):
+    """One model per (size, device) per process; renders repeat cheaply."""
+
+    from faster_whisper import WhisperModel
+
+    key = (model_size, device)
+    with _WHISPER_LOCK:
+        if key not in _WHISPER_CACHE:
+            _WHISPER_CACHE[key] = WhisperModel(
+                model_size, device=device, compute_type="int8"
+            )
+    return _WHISPER_CACHE[key]
+
+
 def align_speech(
     lines: list[str],
     wavs: list[Path],
@@ -198,9 +217,7 @@ def align_speech(
     word; the cues are the 3-4 word karaoke groups.
     """
 
-    from faster_whisper import WhisperModel
-
-    model = WhisperModel(model_size, device=device, compute_type="int8")
+    model = _whisper_model(model_size, device)
     word_lines: list[list[tuple[str, float, float]]] = []
     cues: list[Cue] = []
     for index, (line, wav, offset) in enumerate(

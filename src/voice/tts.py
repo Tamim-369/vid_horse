@@ -11,27 +11,35 @@ import torch
 import torchaudio as ta
 
 from core.models import VideoScript
+from utils import computing
 from utils.tts_text import speakable
 
 logger = logging.getLogger(__name__)
 
 VOICE_PROMPT = Path("assets/voice/dark_gaming_voice_prompt.wav")
 SEGMENT_GAP_SECONDS = 0.35
-VOICE_WORKERS = 2
 
 
 class VoiceOver:
     """Chatterbox-Nano narration with the project's cloned voice.
 
-    Lines synthesize on a small worker pool: each thread keeps its own
-    model instance so no shared weights race, and the voice recipe stays
-    identical — same prompt file, same settings, per line.
+    Lines synthesize on a worker pool sized by the machine profile: each
+    thread keeps its own model instance so no shared weights race, its
+    torch threads stay pinned to the profile's slice, and the voice
+    recipe stays identical — same prompt file, same settings, per line.
     """
 
     def __init__(self, prompt_path: Path = VOICE_PROMPT, device: str = "cpu") -> None:
         self._device = device
         self._prompt_path = prompt_path
         self._local = threading.local()
+        # Don't reset torch threads if parallel work has already started
+        try:
+            torch.set_num_threads(computing.voice_torch_threads())
+            torch.set_num_interop_threads(1)
+        except RuntimeError:
+            # Threading already initialized by CLIP or other components
+            pass
         self._model = self._model_for_thread()
 
     def _model_for_thread(self):
@@ -78,7 +86,7 @@ class VoiceOver:
             logger.info("Line %d rendered (%.1fs)", index, duration)
             return index, wav, sr
 
-        with ThreadPoolExecutor(max_workers=VOICE_WORKERS) as pool:
+        with ThreadPoolExecutor(max_workers=computing.voice_workers()) as pool:
             results = sorted(pool.map(synthesize, range(len(segments))))
 
         sr = results[0][2]

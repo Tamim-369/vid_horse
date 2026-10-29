@@ -17,7 +17,9 @@ from providers.sources import (
 )
 from providers.sources.mediawiki import MediaWikiClient
 from providers.sources.webimages import WebImagesClient
+from utils import computing
 from utils.clip import ClipScorer
+from utils.shelf import AssetShelf
 
 
 def _web_http(settings: Settings):
@@ -68,11 +70,16 @@ def build_content_pipeline(
     )
     return ContentPipeline(
         topic_research=TopicResearchBlock(
-            llm, fetcher, max_chars=settings.research_max_chars
+            llm,
+            fetcher,
+            max_chars=settings.research_max_chars,
+            max_attempts=settings.max_retries + 1,
+            race=computing.race_attempts(),
         ),
         script_generation=ScriptGenerationBlock(
             llm,
             max_attempts=settings.max_retries + 1,
+            race=computing.race_attempts(),
             chunk_size=settings.script_long_chunk_size,
             scene_count=settings.script_long_scenes,
             hook_candidates=settings.script_hook_candidates,
@@ -82,7 +89,7 @@ def build_content_pipeline(
             commons,
             llm=llm,
             http=http,
-            clip=ClipScorer(settings.http_user_agent),
+            clip=ClipScorer(settings.http_user_agent, threads=computing.torch_threads()),
             options=AssetOptions(
                 assets_max=settings.asset_max_per_scene,
                 words_per_asset=settings.asset_words_per_asset,
@@ -99,7 +106,8 @@ def build_content_pipeline(
                 delay=max(1.5, settings.request_delay),
                 license_image=settings.web_license,
             ),
+            shelf=AssetShelf(settings.cache_dir / "shelf.sqlite3"),
         ),
-        asset_direction=VisualDirectorBlock(llm),
-        query_routing=QueryBuilderBlock(llm),
+        asset_direction=VisualDirectorBlock(llm, race=computing.race_attempts()),
+        query_routing=QueryBuilderBlock(llm, race=computing.race_attempts()),
     )

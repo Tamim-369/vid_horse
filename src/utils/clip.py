@@ -13,16 +13,24 @@ import logging
 from io import BytesIO
 
 import httpx
+import numpy as np
 import torch
 
 logger = logging.getLogger(__name__)
 
 
 class ClipScorer:
-    """Lazy CLIP scorer over candidate thumbnails."""
+    """Lazy CLIP scorer over candidate thumbnails.
 
-    def __init__(self, user_agent: str) -> None:
+    ``threads`` pins torch intra-op threads to the burst size the
+    scheduler agreed on: several scorer pools run side by side while
+    other stages' encodes ebb and flow — every pool owning exactly its
+    slice of the cores instead of each grabbing the whole machine.
+    """
+
+    def __init__(self, user_agent: str, threads: int | None = None) -> None:
         self._user_agent = user_agent
+        self._threads = threads
         self._model = None
         self._preprocess = None
         self._tokenize = None
@@ -36,11 +44,16 @@ class ClipScorer:
         try:
             import open_clip
 
+            if self._threads:
+                torch.set_num_threads(self._threads)
+                torch.set_num_interop_threads(1)
             self._model, _, self._preprocess = open_clip.create_model_and_transforms(
                 "ViT-B-32", pretrained="laion2b_s34b_b79k"
             )
             self._model.eval()
             self._tokenize = open_clip.get_tokenizer("ViT-B-32")
+            if self._threads:
+                logger.info("CLIP scorer pinned to %d torch threads", self._threads)
             return True
         except Exception as exc:  # noqa: BLE001 — scoring is best-effort
             logger.warning("CLIP unavailable, falling back to caption ranking: %s", exc)
@@ -56,6 +69,39 @@ class ClipScorer:
         """Cosine similarity between the subject text and the thumbnail."""
 
         return self.analyze(subject_text, thumb_url, client)[0]
+
+    def text_embed(self, subject_text: str) -> torch.Tensor | None:
+        """Unit-normalized CLIP text embedding (shelf matching)."""
+
+        if not self._load():
+            return None
+        with torch.no_grad():
+            features = self._model.encode_text(self._tokenize([subject_text[:180]]))
+            return features / features.norm(dim=-1, keepdim=True)
+
+    def image_embed(
+        self, thumb_url: str | None, client: httpx.Client
+    ) -> np.ndarray | None:
+        """Unit-normalized CLIP image embedding from one thumb download."""
+
+        if not self._load() or not thumb_url:
+            return None
+        try:
+            response = client.get(thumb_url)
+            response.raise_for_status()
+            import PIL.Image
+
+            image = PIL.Image.open(BytesIO(response.content)).convert("RGB")
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Embed fetch failed for %s: %s", thumb_url, exc)
+            return None
+        return self._image_features(image)
+
+    def _image_features(self, image) -> torch.Tensor | None:
+        prepared = self._preprocess(image)
+        with torch.no_grad():
+            features = self._model.encode_image(prepared.unsqueeze(0))
+            return features / features.norm(dim=-1, keepdim=True)
 
     def analyze(
         self,

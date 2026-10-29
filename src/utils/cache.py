@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -47,7 +48,12 @@ class DiskCache:
         if not self._enabled:
             return
         try:
-            self._path(key).write_text(json.dumps(value), encoding="utf-8")
+            final = self._path(key)
+            # atomic write: concurrent slugs share this cache dir and a
+            # reader must never catch a half-written file
+            tmp = final.with_name(f"{final.name}.{os.getpid()}.tmp")
+            tmp.write_text(json.dumps(value), encoding="utf-8")
+            tmp.replace(final)
         except OSError:
             return
 

@@ -19,6 +19,7 @@ import torchaudio
 
 from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript
+from utils import computing
 from voice.subtitles import align_speech, write_ass
 
 logger = logging.getLogger(__name__)
@@ -273,14 +274,17 @@ def _attribution(asset) -> tuple[str, int] | None:
     return "\n".join(lines), size
 
 
-def _credited_clip(clip: Path, asset, work: Path, tag: str | int) -> Path:
-    """Stamp the tiny corner credit while ``clip`` is the visible shot."""
+def _credit_draw(asset, work: Path, tag: str | int) -> str | None:
+    """The corner-credit drawtext filter piece, or None for self-free media.
+
+    Writes the escaped text file so the card's own encode carries it —
+    one ffmpeg pass total instead of an extra re-encode per credit.
+    """
 
     credited = _attribution(asset)
     if not credited:
-        return clip
+        return None
     credit, fontsize = credited
-    out = work / f"credit-{tag}.mp4"
     text_file = work / f"credit-{tag}.txt"
     text_file.write_text(credit, encoding="utf-8")
     font = _font()
@@ -293,23 +297,44 @@ def _credited_clip(clip: Path, asset, work: Path, tag: str | int) -> Path:
     ]
     if font:
         draw.insert(1, f"fontfile={font}")
+    return f"drawtext={':'.join(draw)}"
+
+
+def _credited_clip(clip: Path, asset, work: Path, tag: str | int) -> Path:
+    """Old external stamping; superseded by ``_credit_draw`` in-card.
+
+    Kept for callers outside the main card pipeline. The main pipeline
+    applies the credit inside the card's own zoompan encode (free).
+    """
+
+    credit = _credit_draw(asset, work, tag)
+    if not credit:
+        return clip
+    out = work / f"credit-{tag}.mp4"
     _run([
         "ffmpeg", "-y", "-i", str(clip),
-        "-vf", f"drawtext={':'.join(draw)}",
+        "-vf", credit,
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", "-an", str(out),
     ])
     return out
 
 
-def _still_clip(source: Path, work: Path, tag: str | int, length: float) -> Path:
+def _still_clip(
+    source: Path,
+    work: Path,
+    tag: str | int,
+    length: float,
+    credit: str | None = None,
+) -> Path:
     """One animated clip from a still: cover-crop prep + moving window.
 
     The photo always fills the whole vertical frame (scaled to cover,
     sides cropped) so wallpaper-ratio shots show real detail instead of
     floating small on a blur bed. ``tag`` names the intermediate file
     (``clip-{tag}.mp4``); subject sub-clips pass ``{card}-{subject}`` so
-    one card's subjects never collide.
+    one card's subjects never collide. ``credit`` is the corner drawtext
+    baked into this same pass (saves a full re-encode per CC-BY card).
     """
 
     style = _style_for(tag)
@@ -318,9 +343,11 @@ def _still_clip(source: Path, work: Path, tag: str | int, length: float) -> Path
         return _video_clip(source, work, tag, length)
     frames = max(1, round(length * FPS))
     tail = f"{_motion_filter(frames, style)}"
-    args = ["-vf", f"{_cover_prep()},{tail}"]
+    vf = f"{_cover_prep()},{tail}"
+    if credit:
+        vf = f"{vf},{credit}"
     _run([
-        "ffmpeg", "-y", "-loop", "1", "-i", str(source), *args,
+        "ffmpeg", "-y", "-loop", "1", "-i", str(source), "-vf", vf,
         "-t", f"{length:.3f}", "-r", str(FPS), "-pix_fmt", "yuv420p",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         str(clip),
@@ -505,7 +532,8 @@ def _moving_still(
             else min(visuals, key=lambda asset: asset.position)
         )
         source = _asset_source(primary, work, f"img-{index:02d}-0")
-        return _credited_clip(_still_clip(source, work, index, length), primary, work, index)
+        credit = _credit_draw(primary, work, index)
+        return _still_clip(source, work, index, length, credit=credit)
 
     arrivals = [moment for moment, _asset in pairs]
     subject_assets = [asset for _moment, asset in pairs]
@@ -523,9 +551,9 @@ def _moving_still(
         tag = f"{index:02d}-{slot}"
         source = _asset_source(asset, work, f"img-{tag}")
         subpaths.append(
-            _credited_clip(
-                _still_clip(source, work, tag, subject_lengths[slot]),
-                asset, work, tag,
+            _still_clip(
+                source, work, tag, subject_lengths[slot],
+                credit=_credit_draw(asset, work, tag),
             )
         )
 
@@ -953,20 +981,27 @@ def render(
         build.append((index + 1, scene_card))
     # the per-card ffmpeg jobs are independent; three at a time roughly
     # triples this stage with no influence on what any card looks like
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=computing.render_workers()) as pool:
         built = sorted(pool.map(lambda item: (item[0], item[1]()), build))
     clips.extend(path for _index, path in built)
 
-    # Outro: no more text card. Fade out over the last scene's closing
-    # image; when a scene has nothing, keep a plain dark card.
+    # Outro: no more text card. Fade out over the last scene's strongest
+    # ending image (highest CLIP match — the outro's narration is the
+    # emotional close, not a slot for the leftovers; borrowing whatever
+    # sat last once put a ground telescope under "millions of years
+    # later"); when a scene has nothing, keep a plain dark card.
     last_visuals = [
-        a for a in (pack.scenes[-1].assets if pack.scenes else []) if a.kind in ("image", "video")
+        a
+        for a in (pack.scenes[-1].assets if pack.scenes else [])
+        if a.kind in ("image", "video")
     ]
     if last_visuals:
-        source = _asset_source(last_visuals[-1], work, "img-outro")
-        outro_raw = _credited_clip(
-            _still_clip(source, work, len(build), lengths[-1]),
-            last_visuals[-1], work, len(build),
+        last_visuals.sort(key=lambda a: -(a.clip_score or 0.0))
+        best = last_visuals[0]
+        source = _asset_source(best, work, "img-outro")
+        outro_raw = _still_clip(
+            source, work, len(build), lengths[-1],
+            credit=_credit_draw(best, work, len(build)),
         )
     else:
         outro_raw = _blank_clip(work, len(build), lengths[-1])

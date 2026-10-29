@@ -12,6 +12,7 @@ and then narrate a few beats per call, which reliably reaches the target length.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterator
 
 from blocks.base import Block, generate_parsed
@@ -51,6 +52,7 @@ class ScriptGenerationBlock(Block):
         *,
         temperature: float = 0.6,
         max_attempts: int = 2,
+        race: int = 0,
         words_per_second: float = 2.5,
         chunk_size: int = 3,
         scene_count: int = 10,
@@ -59,6 +61,7 @@ class ScriptGenerationBlock(Block):
         self._llm = llm
         self._temperature = temperature
         self._max_attempts = max(1, max_attempts)
+        self._race = max(0, race)
         self._words_per_second = words_per_second
         self._chunk_size = max(1, chunk_size)
         self._scene_count = max(3, scene_count)
@@ -148,12 +151,18 @@ class ScriptGenerationBlock(Block):
         if self._hook_candidates <= 1:
             return None
 
+        started = time.monotonic()
         try:
             raw = self._llm.complete(
                 build_hook_messages(brief, self._hook_candidates),
                 temperature=self._temperature,
             )
             candidates = parse_hooks(raw)
+            logger.info(
+                "hook candidates: %.1fs (%d)",
+                time.monotonic() - started,
+                len(candidates),
+            )
         except (LLMError, BlockError) as exc:
             logger.warning("Hook candidates failed (%s); writing hook inline", exc)
             return None
@@ -164,11 +173,13 @@ class ScriptGenerationBlock(Block):
         if len(cleaned) == 1:
             return cleaned[0]
 
+        started = time.monotonic()
         try:
             raw = self._llm.complete(
                 build_hook_score_messages(cleaned), temperature=0.0
             )
             scored = parse_hook_scores(raw)
+            logger.info("hook scoring: %.1fs", time.monotonic() - started)
         except (LLMError, BlockError) as exc:
             logger.warning("Hook scoring failed (%s); using first candidate", exc)
             return cleaned[0]
@@ -185,6 +196,7 @@ class ScriptGenerationBlock(Block):
             temperature=self._temperature,
             corrective=corrective_instruction,
             label="script",
+            race=self._race,
         )
 
 

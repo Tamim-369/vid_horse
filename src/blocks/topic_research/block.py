@@ -27,12 +27,14 @@ class TopicResearchBlock(Block):
         max_chars: int = 6000,
         temperature: float = 0.4,
         max_attempts: int = 2,
+        race: int = 0,
     ) -> None:
         self._llm = llm
         self._fetcher = fetcher
         self._max_chars = max_chars
         self._temperature = temperature
         self._max_attempts = max(1, max_attempts)
+        self._race = max(0, race)
 
     def run(self, theory: Theory, *, max_chars: int | None = None) -> ResearchBrief:
         """Research ``theory`` and return a descriptive brief."""
@@ -61,6 +63,7 @@ class TopicResearchBlock(Block):
             temperature=self._temperature,
             corrective=corrective_instruction,
             label="research brief",
+            race=self._race,
         )
         return brief.model_copy(
             update={

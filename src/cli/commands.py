@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from config import get_settings
 from core.models import AssetPack, ResearchBrief, ScriptFormat, Theory, VideoScript
 from pipeline import build_content_pipeline
 from providers.sources.factory import build_connectors
+from utils import computing
 
 console = Console()
 
@@ -35,8 +37,10 @@ def register(app: typer.Typer) -> None:
     app.command(name="assets")(assets_cmd)
     app.command(name="voice")(voice_cmd)
     app.command(name="render")(render_cmd)
+    app.command(name="run-all")(run_all_cmd)
     app.command(name="horror-pull")(horror_pull_cmd)
     app.command(name="sfx-pull")(sfx_pull_cmd)
+    app.command(name="shelf-seed")(shelf_seed_cmd)
     app.command(name="story")(story_cmd)
 
 
@@ -143,8 +147,10 @@ def script_cmd(
         _fail(f"Unknown format '{format}'. Choose short, long or both.")
 
     pipeline = build_content_pipeline(settings)
+    started = time.monotonic()
     with console.status(f"Researching '{theory.name}'..."):
         brief = pipeline.research(theory, max_chars=chars)
+    console.print(f"[dim]research: {time.monotonic() - started:.1f}s[/dim]")
     _save(settings.output_dir, slug, "brief.json", brief.model_dump_json(indent=2))
 
     for fmt in formats:
@@ -153,12 +159,16 @@ def script_cmd(
             if fmt == "short"
             else settings.script_long_seconds
         )
+        started = time.monotonic()
         with console.status(f"Writing {fmt} script..."):
             script = pipeline.script(brief, fmt, target_seconds=seconds)
+        console.print(f"[dim]script({fmt}): {time.monotonic() - started:.1f}s[/dim]")
         from blocks.music import annotate_music
         from providers.llm import create_llm_provider
 
+        started = time.monotonic()
         script = annotate_music(create_llm_provider(settings), script)
+        console.print(f"[dim]music: {time.monotonic() - started:.1f}s[/dim]")
         path = _save(settings.output_dir, slug, f"{fmt}.json", script.model_dump_json(indent=2))
         _save(settings.output_dir, slug, f"{fmt}.md", render_markdown(script))
         music_note = (
@@ -260,29 +270,102 @@ def assets_cmd(
 
 
 def voice_cmd(
-    slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
+    slugs: list[str] = typer.Argument(
+        ..., help="One or more catalog slugs; the voice model loads once."
+    ),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
 ) -> None:
-    """Narrate the saved script with the cloned voice; cached line by line."""
+    """Narrate saved script(s) with the cloned voice; cached line by line.
+
+    Multiple slugs in one invocation share a single process, so the
+    Chatterbox model loads exactly once for the whole batch — that load
+    used to dominate per-slug voice time in back-to-back sessions.
+    """
 
     from voice.tts import VoiceOver
 
     settings = get_settings()
     if format not in _FORMATS:
         _fail(f"Unknown format '{format}'. Choose short or long.")
-    script_path = Path(settings.output_dir) / slug / f"{format}.json"
-    if not script_path.exists():
-        _fail(f"No {format} script for '{slug}'. Run 'videoai script {slug}' first.")
-    script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
-
     stem = "voice" if format == "short" else f"voice-{format}"
     vo = VoiceOver()
-    with console.status(f"Narrating with the cloned voice ({format})..."):
-        path = vo.render_script(script, Path(settings.output_dir) / slug / "audio", stem=stem)
-    sfx_path = _design_sfx(settings, slug, script)
-    console.print("[green]Voiceover ready[/green] -> " + str(path))
-    if sfx_path:
-        console.print(f"[green]Sound design[/green] -> {sfx_path}")
+    for slug in slugs:
+        script_path = Path(settings.output_dir) / slug / f"{format}.json"
+        if not script_path.exists():
+            console.print(f"[red]{slug}: no {format} script; run 'videoai script {slug}'[/red]")
+            continue
+        script = VideoScript.model_validate_json(
+            script_path.read_text(encoding="utf-8")
+        )
+        with console.status(f"Narrating {slug} ({format})..."):
+            path = vo.render_script(
+                script, Path(settings.output_dir) / slug / "audio", stem=stem
+            )
+        sfx_path = _design_sfx(settings, slug, script)
+        console.print(f"[green]{slug}:[/green] voiceover ready -> {path}")
+        if sfx_path:
+            console.print(f"[green]{slug}:[/green] sound design -> {sfx_path}")
+
+
+def shelf_seed_cmd(
+    slugs: list[str] = typer.Argument(..., help="Catalog slugs whose saved packs seed the shelf."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+) -> None:
+    """Populate the asset shelf from already-approved asset packs.
+
+    Every pack asset re-embeds through the real CLIP scorer and lands
+    in the shelf with its recorded score — exactly what new research
+    passes would store. Cheap way to boot the shelf: no network search
+    beyond the image fetch, no LLM calls.
+    """
+
+    import httpx
+    import numpy as np
+
+    from utils.clip import ClipScorer
+    from utils.shelf import AssetShelf
+
+    settings = get_settings()
+    shelf = AssetShelf(settings.cache_dir / "shelf.sqlite3")
+    scorer = ClipScorer(settings.http_user_agent, threads=computing.torch_threads())
+    client = httpx.Client(
+        headers={"User-Agent": settings.http_user_agent},
+        timeout=settings.http_timeout,
+        follow_redirects=True,
+    )
+    total = stored = 0
+    for slug in slugs:
+        pack_path = Path(settings.output_dir) / slug / f"assets-{format}.json"
+        if not pack_path.exists():
+            console.print(f"[red]{slug}: no {format} pack[/red]")
+            continue
+        pack = AssetPack.model_validate_json(pack_path.read_text(encoding="utf-8"))
+        for scene in pack.scenes:
+            for item in scene.assets:
+                total += 1
+                embed = scorer.image_embed(item.thumb_url or item.url, client)
+                if embed is None:
+                    console.print(f"[yellow]{slug}: no embed for {item.file[:50]}[/yellow]")
+                    continue
+                ok = shelf.store(
+                    {
+                        "file": item.file,
+                        "url": item.url,
+                        "thumburl": item.thumb_url,
+                        "width": item.width,
+                        "height": item.height,
+                        "license": item.license,
+                        "artist": item.artist,
+                        "kind": item.kind,
+                    },
+                    np.asarray(embed, dtype=np.float32),
+                    float(item.clip_score or 0.0),
+                )
+                stored += 1 if ok else 0
+        n_scenes = sum(len(scene.assets) for scene in pack.scenes)
+        console.print(f"[green]{slug}: {n_scenes} asset(s) in pack[/green]")
+    shelf.close()
+    console.print(f"[bold green]done: {stored}/{total} stored[/bold green]")
 
 
 def _design_sfx(settings, slug: str, script: VideoScript) -> Path | None:
@@ -343,6 +426,30 @@ def render_cmd(
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])
     console.print("[green]Video ready[/green] -> " + str(out_path))
+
+
+# -- slug scheduler ----------------------------------------------------------
+def run_all_cmd(
+    slugs: list[str] = typer.Argument(..., help="Catalog slugs in queue order."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+    ram: float | None = typer.Option(
+        None, "--ram", help="RAM budget override in GiB (profiles default it)."
+    ),
+    force: bool = typer.Option(False, "--force", help="Re-run stages even if present."),
+) -> None:
+    """Run every slug through script→assets→voice→render, resource-budgeted."""
+
+    from cli.runall import run_queue
+
+    if format not in _FORMATS:
+        _fail(f"Unknown format '{format}'. Choose short or long.")
+    run_queue(
+        slugs=list(slugs),
+        fmt=format,
+        ram_budget=ram,
+        force=force,
+        output_dir=Path(get_settings().output_dir),
+    )
 
 
 # -- horror corpus ------------------------------------------------------------
