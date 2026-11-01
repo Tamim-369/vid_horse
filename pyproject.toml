@@ -27,7 +27,7 @@ dev = [
 ]
 
 [project.scripts]
-videoai = "cli.app:main"
+ash_speaks = "cli.app:main"
 
 [build-system]
 requires = ["hatchling"]

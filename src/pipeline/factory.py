@@ -17,6 +17,8 @@ from providers.sources import (
 )
 from providers.sources.mediawiki import MediaWikiClient
 from providers.sources.webimages import WebImagesClient
+from providers.sources.yandex import build_yandex_client
+from providers.vision import build_vision_provider
 from utils import computing
 from utils.clip import ClipScorer
 from utils.shelf import AssetShelf
@@ -38,6 +40,21 @@ def _web_http(settings: Settings):
         timeout=settings.http_timeout,
         follow_redirects=True,
     )
+
+
+def _vision(settings: Settings):
+    """Vision relevance checker for picks the CLIP scorer is unsure about.
+
+    Judge of last resort, on by default: results are cached on disk, so
+    each verdict is only ever paid for once.
+    """
+
+    provider = build_vision_provider()
+    provider.attach_cache(settings.cache_dir / "vision.sqlite3")
+    # stage 1: the raw fast caption judge (d3 decision model); the slow
+    # pixel look only gets the cases this stage is not confident about
+    provider.attach_decision()
+    return provider
 
 
 def build_content_pipeline(
@@ -101,6 +118,8 @@ def build_content_pipeline(
             ),
             nasa=NasaImagesClient(client=http, delay=settings.request_delay),
             openverse=OpenverseClient(client=http, delay=settings.request_delay),
+            yandex=build_yandex_client(delay=max(1.0, settings.request_delay)),
+            vision=_vision(settings),
             web=WebImagesClient(
                 client=_web_http(settings),
                 delay=max(1.5, settings.request_delay),

@@ -12,7 +12,46 @@ from core.models import PopularityTier, SourceTheory, Theory, TheorySource
 from providers.sources.base import SourceConnector
 from utils.text import slugify
 
-_META_PREFIXES = ("list of ", "outline of ", "index of ", "category:")
+# Curated niche packs: what the channel covers beyond the space/conspiracy
+# default. Each niche is (extra Wikipedia categories, seed pages) — every
+# category was verified to exist and to produce real horror-science /
+# unsolved-phenomena articles, not ghost stories or random junk.
+NICHES: dict[str, dict[str, tuple[str, ...]]] = {
+    "experiments": {
+        "categories": (
+            "Human subject research",
+            "Mind control",
+            "Nazi human subject research",
+            "Japanese human subject research",
+            "Eugenics",
+        ),
+        "seed_pages": (
+            "Project MKUltra",
+            "Unit 731",
+            "Tuskegee syphilis experiment",
+            "Guatemala syphilis experiments",
+            "Human radiation experiments",
+            "Edgewood Arsenal human experiments",
+            "Project 112",
+        ),
+    },
+    "mysteries": {
+        "categories": (
+            "Cryptids",
+            "Paranormal triangles",
+            "Unidentified flying objects",
+            "Hoaxes",
+        ),
+        "seed_pages": (
+            "Bermuda Triangle",
+            "Dyatlov Pass incident",
+            "Voynich manuscript",
+            "Devil's Sea",
+        ),
+    },
+}
+
+_META_PREFIXES = ("list of ", "outline of ", "index of ", "category: ", "bibliography of ")
 _META_NAMES = {"conspiracy theory", "conspiracy theories"}
 
 

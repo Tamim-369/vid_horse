@@ -299,6 +299,18 @@ class VisualAsset(BaseModel):
         default=None,
         description="CLIP similarity to the scene subject; what the shot depicts.",
     )
+    vision_relevant: bool | None = Field(
+        default=None,
+        description="Vision model relevance check result.",
+    )
+    vision_confidence: float | None = Field(
+        default=None,
+        description="Vision model confidence score (0-1).",
+    )
+    vision_reason: str | None = Field(
+        default=None,
+        description="Vision model reasoning for relevance decision.",
+    )
 
 
 class SceneAssets(BaseModel):

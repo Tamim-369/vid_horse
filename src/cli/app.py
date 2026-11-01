@@ -8,7 +8,7 @@ from cli.commands import register
 from config import get_settings, setup_logging
 
 app = typer.Typer(
-    name="videoai",
+    name="ash_speaks",
     help="AI video making automation.",
     no_args_is_help=True,
     add_completion=False,

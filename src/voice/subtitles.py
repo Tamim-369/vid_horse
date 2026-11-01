@@ -7,6 +7,7 @@ grouped into short cues (3-4 words that split at sentence punctuation).
 
 from __future__ import annotations
 
+import difflib
 import logging
 import re
 import threading
@@ -105,7 +106,16 @@ def _drop_repeat_cues(cues: list[Cue]) -> list[Cue]:
             and -0.05 < cue.start - other.end < 2.0
             for other in kept[-5:]
         )
-        if not echoed:
+        # same phrase shown TWICE at the same instant (whisper echo at
+        # the line boundary): overlapping spans never belong to narration
+        simultaneous = any(
+            other.text == cue.text
+            and cue.start <= other.end + 0.02
+            and other.start <= cue.end + 0.02
+            and abs(cue.start - other.start) < 2.0
+            for other in kept[-5:]
+        )
+        if not echoed and not simultaneous:
             kept.append(cue)
     return kept
 
@@ -148,6 +158,13 @@ def _transcribe_words(
             if scan:
                 matched += 1
                 cursor = seen.index(token, cursor) + 1
+        riff_header = (
+            len(tokens) >= 2
+            and any(
+                seen[i] == tokens[0] and seen[i + 1] == tokens[1]
+                for i in range(len(seen) - 1)
+            )
+        )
         # Echoes re-transcribe audio we already accepted, so their span
         # reaches back inside previously covered time — the decisive
         # signature (word repeats alone can be legitimate).
@@ -158,6 +175,20 @@ def _transcribe_words(
             continue
         if tokens and matched / len(tokens) >= 0.8:
             logger.debug("Dropping echo segment on %s", wav.name)
+            continue
+        # riff: the hallucination CONTINUES a phrase the line already said
+        # ("that still" -> "that still felouse wholeheartedly"), always
+        # anchored after the real speech. A leading bigram the line spoke
+        # verbatim is not narration
+        if riff_header:
+            logger.debug("Dropping riff segment on %s", wav.name)
+            continue
+        # hallucination anchored in the line's trailing silence: whisper
+        # rambles past the speech end; anything that starts after the
+        # accepted audio with repeated leading tokens is not narration
+        # (real words never come after the line has fully ended)
+        if accepted_end and seg_start > accepted_end + 0.55:
+            logger.debug("Dropping tail segment on %s", wav.name)
             continue
         seen.extend(tokens)
         # timestamps past the wav's own samples are padding artefacts
@@ -195,6 +226,36 @@ def _whisper_model(model_size: str, device: str):
     return _WHISPER_CACHE[key]
 
 
+def _line_vocabulary(line: str) -> set[str]:
+    """Word bag of one narration line, punctuation stripped."""
+
+    return {
+        w.strip(".,!?;:\"'").lower() for w in line.split() if w.strip(".,!?;:\"'")
+    }
+
+
+def _cue_belongs_to_line(text: str, vocab: set[str]) -> bool:
+    """True when every cue word is (near-)vocabulary of its own line.
+
+    Whisper hallucinations in the trailing silence mint cues the
+    narration never spoke ("Two stars" after "...among the stars").
+    The script text is known, so a cue carrying a word outside its
+    line's vocabulary — even fuzzily — is not narration.
+    """
+
+    words = [w for w in text.rstrip(".,!?;:").lower().split()]
+    for word in words:
+        if word in vocab:
+            continue
+        near = any(
+            difflib.SequenceMatcher(None, word, known).ratio() >= 0.8
+            for known in vocab
+        )
+        if not near:
+            return False
+    return True
+
+
 def align_speech(
     lines: list[str],
     wavs: list[Path],
@@ -226,6 +287,9 @@ def align_speech(
         words, starts, ends = _transcribe_words(line, wav, offset, model)
         word_lines.append(list(zip(words, starts, ends, strict=False)))
         line_cues = _drop_repeat_cues(_cues(words, starts, ends))
+        line_cues = [
+            cue for cue in line_cues if _cue_belongs_to_line(cue.text, _line_vocabulary(line))
+        ]
         if line_ends is not None:
             line_end = line_ends[index]
             line_cues = [

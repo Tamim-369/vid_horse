@@ -40,10 +40,41 @@ from utils.computing import machine
 logger = logging.getLogger(__name__)
 console = Console()
 
-# swap must never happen; stage caches make a respawn nearly free
-# Reserve 20% of total RAM for system stability
-_RAM_FLOOR_GB = 1.0
+# swap must never happen; stage caches make a respawn nearly free.
+# The hard rule: 20% of total RAM and 20% of the cores stay untouched by
+# the scheduler, always — admission, the starvation valve and the watchdog
+# all measure against that reserve, never past it.
 _RAM_RESERVE_FRACTION = 0.20
+_CPU_RESERVE_FRACTION = 0.20
+
+
+def _reserve_gb() -> float:
+    """RAM the scheduler must leave free (20% of total, min 1G)."""
+
+    return max(1.0, machine().total_gb * _RAM_RESERVE_FRACTION)
+
+
+def _cpu_busy_fraction(sample: float) -> float:
+    """Share of all cores busy between two /proc/stat samples."""
+
+    try:
+        fields = Path("/proc/stat").read_text().splitlines()[0].split()[1:]
+        idle_a = float(fields[3]) + float(fields[4] if len(fields) > 4 else 0)
+        total_a = sum(float(v) for v in fields)
+    except (OSError, ValueError, IndexError):
+        return 0.0
+    prev = _CPU_SAMPLE.get("data")
+    _CPU_SAMPLE["data"] = (idle_a, total_a)
+    if not prev:
+        return 0.0
+    idle_b, total_b = prev
+    dt = total_a - total_b
+    if dt <= 0:
+        return 0.0
+    return 1.0 - (idle_a - idle_b) / dt
+
+
+_CPU_SAMPLE: dict[str, tuple[float, float]] = {}
 _STAGE_TIMEOUT = {
     "script": 90 * 60,
     "assets": 4 * 60 * 60,
@@ -107,6 +138,34 @@ def _tree_rss_gb(pid: int) -> float:
                     break
         except (OSError, ValueError):
             continue
+    return total
+
+
+def _external_model_gb() -> float:
+    """RSS of ollama's llama-server, if resident.
+
+    The script stage's memory lives mostly in the ollama server, not in the
+    CLI subprocess the scheduler spawns — count it explicitly while scripts
+    are in flight so the 20% reserve stays honest.
+    """
+
+    total = 0.0
+    try:
+        for entry in Path("/proc").iterdir():
+            if not entry.name.isdigit():
+                continue
+            try:
+                cmdline = (entry / "cmdline").read_bytes().replace(b"\x00", b" ")
+                if b"llama-server" not in cmdline:
+                    continue
+                for line in (entry / "status").read_text().splitlines():
+                    if line.startswith("VmRSS:"):
+                        total += float(line.split()[1]) / 1024 / 1024
+                        break
+            except (OSError, ValueError):
+                continue
+    except OSError:
+        pass
     return total
 
 
@@ -206,7 +265,10 @@ def run_queue(
 
     # Reserve 20% of total RAM to keep system stable
     default_budget = max(2.0, mode.total_gb * (1.0 - _RAM_RESERVE_FRACTION))
-    budget = ram_budget if ram_budget is not None else default_budget
+    budget = min(
+        ram_budget if ram_budget is not None else default_budget,
+        max(2.0, mode.total_gb * (1.0 - _RAM_RESERVE_FRACTION)),
+    )
     lanes = computing.disk_lanes()
     tracks = build_tracks(slugs, fmt, base, force)
     pending = [track for track in tracks if track.stages]
@@ -314,7 +376,7 @@ def run_queue(
                 track.failed = f"{entry.stage.name}: timeout"
                 statuses[entry.slug] = "failed"
                 statuses[f"{entry.slug}:{entry.stage.name}"] = "failed"
-            elif available < _RAM_FLOOR_GB and live and entry.rss_peak >= max(
+            elif available < _reserve_gb() and live and entry.rss_peak >= max(
                 e.rss_peak for e in live
             ):
                 # the box is about to swap: release the biggest resident
@@ -338,6 +400,12 @@ def run_queue(
 
         # -- admission: per slug at most one job; per stage the weights
         ram_used = sum(entry.ram_weight for entry in live)
+        script_busy = any(entry.stage.name == "script" for entry in live) or any(
+            t.stages and t.pos < len(t.stages) and t.stages[t.pos].name == "script"
+            for t in pending
+        )
+        if script_busy:
+            ram_used += _external_model_gb()
         cpu_used = sum(entry.cpu_weight for entry in live)
         disk_used = sum(
             1
@@ -345,7 +413,18 @@ def run_queue(
             if computing.stage_weight(entry.stage.name).disk >= 0.5
         )
         covered = {slug for entry in live for slug in (entry.covers or [entry.slug])}
-        admit_now = min(budget, _meminfo_available_gb() * 0.9)
+        reserve = _reserve_gb()
+        admit_now = min(budget, _meminfo_available_gb() - reserve)
+        cpu_cap = min(
+            mode.cores_budget, max(1.0, mode.cores * (1.0 - _CPU_RESERVE_FRACTION))
+        )
+        busy = _cpu_busy_fraction(now)
+        if busy > 1.0 - _CPU_RESERVE_FRACTION:
+            # the box (or ollama's llama-server) is already chewing >80% of
+            # the cores: add nothing this tick, just breathe
+            if os.environ.get("VIDEOAI_SCHED_DEBUG"):
+                console.print(f"[dim]cpu busy {busy:.0%}: holding admission[/dim]")
+            admit_now = float("-inf")
 
         def _spawn(label: str, args: list[str], covers: list[str]):
             dry = os.environ.get("VIDEOAI_SCHEDULER_DRY") == "1"
@@ -391,22 +470,39 @@ def run_queue(
             # of gambling the machine into swap. The RAM-floor watchdog
             # still releases residents before things touch swap.
             available = _meminfo_available_gb()
-            if available >= 3.0:
-                admit_now = max(admit_now, min(budget, available * 0.95 + 1.5))
+            room = available - reserve
+            needed = (
+                4.2
+                if voice_ready
+                else min(
+                    (computing.stage_weight(t.stages[t.pos].name).ram_gb
+                     for t in others),
+                    default=0.0,
+                )
+            )
+            if room >= needed:
+                admit_now = max(admit_now, min(budget, room))
                 console.print(
                     "[yellow]starvation valve: boosting admission "
-                    f"({available:.1f}G free)[/yellow]"
+                    f"({available:.1f}G free, {reserve:.1f}G reserved)[/yellow]"
                 )
             idle_ticks = 0
+        batch = []
         if voice_ready:
-            # cap batch RAM at ~8G: 1 model + 1 lineup per slug; the rest
-            # wait for the next wave instead of one glutton job
-            batch = voice_ready[:4]
+            # size the batch to the measured room, not a fixed cap: one
+            # model load + 1.2G per extra slug, never past the reserve
+            room = admit_now - ram_used
+            n = min(len(voice_ready), 4)
+            while n > 1 and 4.2 + 1.2 * (n - 1) > room:
+                n -= 1
+            if n >= 1 and room >= 4.2:
+                batch = voice_ready[:n]
+        if batch:
             slugs = [t.slug for t in batch]
             args = ["voice", *slugs, "--format", fmt]
             ram = 4.2 + 1.2 * (len(slugs) - 1)
             cpu = 3.0 + 0.5 * (len(slugs) - 1)
-            marker = voice_ready[0].stages[voice_ready[0].pos]
+            marker = batch[0].stages[batch[0].pos]
             stage = Stage("voice", args, marker)
             if os.environ.get("VIDEOAI_SCHED_DEBUG"):
                 console.print(
@@ -416,7 +512,7 @@ def run_queue(
                 )
             if (
                 ram_used + ram <= admit_now
-                and cpu_used + cpu <= mode.cores_budget
+                and cpu_used + cpu <= cpu_cap
                 and disk_used < lanes
             ):
                 proc = _spawn("voice-batch-" + "-".join(slugs), args, slugs)
@@ -445,7 +541,7 @@ def run_queue(
             weight = computing.stage_weight(stage.name)
             if (
                 ram_used + weight.ram_gb > admit_now
-                or cpu_used + weight.cpu > mode.cores_budget
+                or cpu_used + weight.cpu > cpu_cap
                 or (weight.disk >= 0.5 and disk_used >= lanes)
             ):
                 continue
@@ -486,7 +582,7 @@ def run_queue(
     if total_cpu_n:
         console.print(
             f"[bold]{len(tracks)} slug(s): avg {(total_cpu_sum / total_cpu_n):.1f} "
-            f"cores of {mode.cores_budget:.0f} in budget; {done_slugs} done, "
+            f"cores of {cpu_cap:.0f} in budget; {done_slugs} done, "
             f"{failed} failed[/bold]"
         )
     return statuses

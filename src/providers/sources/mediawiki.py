@@ -25,11 +25,20 @@ class MediaWikiClient:
 
     def _get(self, params: dict) -> dict:
         query = {**params, "format": "json", "formatversion": 2}
-        try:
-            response = self._client.get(self._api_url, params=query)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"MediaWiki request failed: {exc}") from exc
+        # 429 bursts happen when many scene workers search at once; back
+        # off and replay instead of losing the whole block
+        for attempt in range(3):
+            try:
+                response = self._client.get(self._api_url, params=query)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 429 and attempt < 2:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                raise ProviderError(f"MediaWiki request failed: {exc}") from exc
+            except httpx.HTTPError as exc:
+                raise ProviderError(f"MediaWiki request failed: {exc}") from exc
+            break
         if self._delay:
             time.sleep(self._delay)
         return response.json()

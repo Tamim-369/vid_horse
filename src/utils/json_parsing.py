@@ -30,6 +30,29 @@ def extract_json(text: str) -> str:
     return candidate[start : end + 1]
 
 
+def extract_json_value(text: str) -> object:
+    """First complete JSON value in ``text`` (object or array), prose ignored.
+
+    Small local models happily wrap answers in commentary or return a bare
+    array where the schema wanted an object; :func:`extract_json` only
+    handles ``{...}`` so it shreds top-level arrays. This walks the text and
+    lets the JSON decoder tell us where a real value starts and ends.
+    """
+
+    match = _FENCE_RE.search(text)
+    candidate = match.group(1) if match else text
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(candidate):
+        if char not in "{[":
+            continue
+        try:
+            value, _ = decoder.raw_decode(candidate[index:])
+            return value
+        except json.JSONDecodeError:
+            continue
+    raise LLMError("no JSON value found in LLM response")
+
+
 def parse_json_as[TModel: BaseModel](text: str, schema: type[TModel]) -> TModel:
     """Parse ``text`` into a ``schema`` instance or raise :class:`LLMError`."""
 

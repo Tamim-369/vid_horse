@@ -16,7 +16,10 @@ from utils.tts_text import speakable
 
 logger = logging.getLogger(__name__)
 
-VOICE_PROMPT = Path("assets/voice/dark_gaming_voice_prompt.wav")
+# a clean 8.5s slice of the clone source: the 45s original carries
+# dramatic pauses the zero-shot model copies into every line (the
+# staccato "stops after five words" artefact)
+VOICE_PROMPT = Path("assets/voice/voice_prompt_short.wav")
 SEGMENT_GAP_SECONDS = 0.35
 
 

@@ -40,6 +40,26 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = Field(default="5m")
     ollama_timeout: float = Field(default=600.0, gt=0)
 
+    # -- Ollama Cloud --------------------------------------------------------
+    ollama_cloud_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VIDEOAI_OLLAMA_CLOUD_API_KEY", "OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"
+        ),
+    )
+    ollama_cloud_host: str = Field(
+        default="https://ollama.com/v1",
+        validation_alias=AliasChoices("VIDEOAI_OLLAMA_CLOUD_HOST", "OLLAMA_CLOUD_HOST"),
+    )
+    ollama_cloud_models: str = Field(
+        default="gemma4:31b,gpt-oss:120b,gpt-oss:20b,nemotron-3-nano:30b,nemotron-3-super,nemotron-3-ultra",
+        validation_alias=AliasChoices("VIDEOAI_OLLAMA_CLOUD_MODELS", "OLLAMA_CLOUD_MODELS"),
+    )
+    ollama_cloud_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    ollama_cloud_max_tokens: int | None = Field(default=None, gt=0)
+    ollama_cloud_timeout: float = Field(default=120.0, gt=0)
+    ollama_cloud_fallback_to_local: bool = Field(default=True)
+
     # -- Groq ---------------------------------------------------------------
     groq_model: str = Field(default="openai/gpt-oss-120b")
     groq_base_url: str = Field(default="https://api.groq.com/openai/v1")

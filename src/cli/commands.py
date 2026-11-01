@@ -53,10 +53,42 @@ def discover_cmd(
     sources: str | None = typer.Option(
         None, "--sources", help="Comma-separated connector names to use."
     ),
+    niche: str | None = typer.Option(
+        None,
+        "--niche",
+        "-n",
+        help=(
+            "Add a curated niche pack: experiments, mysteries "
+            "(comma-separable, repeatable topics broaden discovery)."
+        ),
+    ),
 ) -> None:
     """Discover conspiracy theories and merge them into the local catalog."""
 
     settings = get_settings()
+    if niche:
+        from catalog.discovery import NICHES
+
+        wanted = [n.strip().lower() for n in niche.split(",") if n.strip()]
+        unknown = [n for n in wanted if n not in NICHES]
+        if unknown:
+            console.print(
+                f"[red]Unknown niche(s): {', '.join(unknown)}. "
+                f"Available: {', '.join(sorted(NICHES))}[/red]"
+            )
+            raise typer.Exit(1)
+        categories = list(settings.discovery_categories)
+        seeds = list(settings.discovery_seed_pages)
+        for name in wanted:
+            categories.extend(NICHES[name]["categories"])
+            seeds.extend(NICHES[name]["seed_pages"])
+        settings = settings.model_copy(
+            update={
+                "discovery_categories": list(dict.fromkeys(categories)),
+                "discovery_seed_pages": list(dict.fromkeys(seeds)),
+            }
+        )
+        console.print(f"[dim]niche packs merged: {', '.join(wanted)}[/dim]")
     connectors = build_connectors(settings)
     if sources:
         wanted = {name.strip() for name in sources.split(",")}

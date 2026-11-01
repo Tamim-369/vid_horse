@@ -94,31 +94,58 @@ class WikipediaConnector:
         return sum(item["views"] for item in items) / len(items)
 
     def _collect_titles(self, limit: int | None) -> list[str]:
+        """BFS over categories, but round-robin across categories.
+
+        Big parent categories (``Conspiracy theories`` has thousands of
+        members) otherwise swallow a small ``limit`` before the niche
+        categories get any turn — round-robin guarantees every category
+        contributes members at every depth.
+        """
+
         seen: list[str] = []
         seen_set: set[str] = set()
 
-        def add(title: str) -> None:
-            if title not in seen_set:
-                seen_set.add(title)
-                seen.append(title)
+        def add(title: str) -> bool:
+            if title in seen_set:
+                return False
+            seen_set.add(title)
+            seen.append(title)
+            return True
 
-        queue = [f"Category:{category}" for category in self._categories]
+        frontier: list[str] = [f"Category:{category}" for category in self._categories]
         for _ in range(self._max_depth):
-            if not queue:
+            if not frontier:
                 break
-            next_queue: list[str] = []
-            for category in queue:
-                for title in self._mw.category_members(category, namespace=0):
-                    add(title)
-                next_queue.extend(self._mw.category_members(category, namespace=14))
-                if limit is not None and len(seen) >= limit:
-                    return seen[:limit]
-            queue = next_queue
+            members_by_cat: dict[str, list[str]] = {}
+            next_frontier: list[str] = []
+            for category in frontier:
+                members_by_cat[category] = self._mw.category_members(
+                    category, namespace=0
+                )
+                next_frontier.extend(self._mw.category_members(category, namespace=14))
+            index = {category: 0 for category in frontier}
+            while True:
+                made_progress = False
+                for category in frontier:
+                    titles = members_by_cat[category]
+                    cursor = index[category]
+                    while cursor < len(titles):
+                        index[category] = cursor + 1
+                        if add(titles[cursor]):
+                            cursor = index[category]
+                            made_progress = True
+                            if limit is not None and len(seen) >= limit:
+                                return seen[:limit]
+                            break
+                        cursor = index[category]
+                if not made_progress:
+                    break
+            frontier = [c for c in next_frontier]
 
         for page in self._seed_pages:
             for title in self._mw.links(page):
-                add(title)
-                if limit is not None and len(seen) >= limit:
+                if add(title) and limit is not None and len(seen) >= limit:
                     return seen[:limit]
 
         return seen[:limit] if limit is not None else seen
+

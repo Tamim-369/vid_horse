@@ -10,6 +10,7 @@ matter what its caption claims.
 from __future__ import annotations
 
 import logging
+import threading
 from io import BytesIO
 
 import httpx
@@ -35,8 +36,17 @@ class ClipScorer:
         self._preprocess = None
         self._tokenize = None
         self._failed = False
+        self._load_lock = threading.Lock()
 
     def _load(self) -> bool:
+        if self._failed:
+            return False
+        if self._model is not None:
+            return True
+        with self._load_lock:
+            return self._load_locked()
+
+    def _load_locked(self) -> bool:
         if self._failed:
             return False
         if self._model is not None:

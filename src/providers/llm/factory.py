@@ -13,6 +13,7 @@ from core.errors import ConfigurationError
 from providers.llm.base import BaseLLMProvider
 from providers.llm.groq import GroqProvider
 from providers.llm.ollama import OllamaProvider
+from providers.llm.ollama_cloud import OllamaCloudProvider
 from utils.cache import DiskCache
 
 ProviderBuilder = Callable[[Settings], BaseLLMProvider]
@@ -82,5 +83,49 @@ def _build_groq(settings: Settings) -> BaseLLMProvider:
     )
 
 
+def _build_ollama_cloud(settings: Settings) -> BaseLLMProvider:
+    api_key = settings.ollama_cloud_api_key
+    if not api_key:
+        raise ConfigurationError(
+            "Ollama Cloud API key not set. Set VIDEOAI_OLLAMA_CLOUD_API_KEY."
+        )
+    cloud_models = [m.strip() for m in settings.ollama_cloud_models.split(",") if m.strip()]
+    if not cloud_models:
+        raise ConfigurationError("No Ollama Cloud models configured.")
+
+    cache = DiskCache(settings.cache_dir, enabled=settings.cache_enabled)
+
+    # Build local fallback if enabled
+    local_fallback: BaseLLMProvider | None = None
+    if settings.ollama_cloud_fallback_to_local:
+        local_fallback = OllamaProvider(
+            model=settings.ollama_model,
+            host=settings.ollama_host,
+            num_ctx=settings.ollama_num_ctx,
+            temperature=settings.ollama_temperature,
+            max_tokens=settings.ollama_num_predict,
+            repeat_penalty=settings.ollama_repeat_penalty,
+            repeat_last_n=settings.ollama_repeat_last_n,
+            keep_alive=settings.ollama_keep_alive,
+            timeout=settings.ollama_timeout,
+            max_retries=settings.max_retries,
+            cache=cache,
+        )
+
+    return OllamaCloudProvider(
+        model=cloud_models[0],
+        api_key=api_key,
+        base_url=settings.ollama_cloud_host,
+        models=cloud_models,
+        temperature=settings.ollama_cloud_temperature,
+        max_tokens=settings.ollama_cloud_max_tokens,
+        timeout=settings.ollama_cloud_timeout,
+        max_retries=settings.max_retries,
+        cache=cache,
+        local_fallback=local_fallback,
+    )
+
+
 register_provider("ollama", _build_ollama)
 register_provider("groq", _build_groq)
+register_provider("ollama-cloud", _build_ollama_cloud)
