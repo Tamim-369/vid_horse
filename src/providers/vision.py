@@ -56,10 +56,14 @@ class DecisionJudgeCLI:
         verdict = "yes" if words[0].lower().startswith("yes") else (
             "no" if words[0].lower().startswith("no") else "unknown"
         )
-        conf = 0.9
         if len(words) > 1 and words[1].endswith("%"):
             with contextlib.suppress(ValueError):
                 conf = float(words[1].rstrip("%")) / 100
+        else:
+            # a bare yes/no states no confidence; pretending it is 0.9
+            # makes the cascade auto-accept on the threshold. A verdict
+            # without a stated confidence defers to the pixel judge
+            return "unknown", 0.0
         return verdict, conf
 
 
@@ -102,6 +106,35 @@ class VisionRelevanceProvider:
             "User-Agent": "videoai-image-qc/1.0 (contact: qc@videoai.local)",
             "Accept": "image/*,*/*;q=0.8",
         }
+
+    def d3_judge(self, caption: str, narration: str) -> tuple[bool, float]:
+        """Fast text decision via d3:2b (caption vs narration). Returns (relevant, prob)."""
+
+        try:
+            import ollama
+
+            resp = ollama.systemone(
+                model="d3:2b",
+                state=f"Narration moment: {narration[:300]}\nImage caption: {caption[:300]}",
+                questions={
+                    "relevant": {
+                        "type": "noul",
+                        "instructions": (
+                            "Does the captioned image plausibly illustrate this "
+                            "narration moment in a serious documentary?"
+                        ),
+                        "criteria": {
+                            "true": "Image depicts the same kind of subject the moment describes.",
+                            "false": "Unrelated, wrong era, wrong subject, or text-heavy.",
+                        },
+                    }
+                },
+            )
+            prob = float(resp.answers["relevant"].noul)
+            return prob >= 0.7, prob
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("d3 judge failed: %s", exc)
+            return False, 0.0
 
     def attach_cache(self, path) -> None:
         """Persist verdicts in a sqlite table so checks are paid once ever."""
@@ -210,6 +243,18 @@ class VisionRelevanceProvider:
         ).hexdigest()
         if key in self._cache:
             return self._cache[key]
+        if self._cache_db is not None:
+            with self._cache_lock:
+                row = self._cache_db.execute(
+                    "SELECT relevant, confidence, reason FROM vision_cache WHERE key=?",
+                    (key,),
+                ).fetchone()
+            if row is not None:
+                result = VisionCheckResult(
+                    relevant=bool(row[0]), confidence=row[1], reason=row[2]
+                )
+                self._cache[key] = result
+                return result
         if self._decision is not None:
             # cascased stage 1: the fast caption judge decides what it
             # confidently can (sparse captions and wavy verdicts fall
@@ -243,18 +288,6 @@ class VisionRelevanceProvider:
                     self._cache[key] = result
                     self._write_cache(key, result)
                     return result
-        if self._cache_db is not None:
-            with self._cache_lock:
-                row = self._cache_db.execute(
-                    "SELECT relevant, confidence, reason FROM vision_cache WHERE key=?",
-                    (key,),
-                ).fetchone()
-            if row is not None:
-                result = VisionCheckResult(
-                    relevant=bool(row[0]), confidence=row[1], reason=row[2]
-                )
-                self._cache[key] = result
-                return result
 
         try:
             img_data = self._shrink(self._fetch_image(image_url))

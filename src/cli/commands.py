@@ -18,7 +18,6 @@ from catalog.store import TheoryCatalog
 from config import get_settings
 from core.models import AssetPack, ResearchBrief, ScriptFormat, Theory, VideoScript
 from pipeline import build_content_pipeline
-from providers.sources.factory import build_connectors
 from utils import computing
 
 console = Console()
@@ -27,21 +26,29 @@ _FORMATS: tuple[ScriptFormat, ...] = ("short", "long")
 
 
 def register(app: typer.Typer) -> None:
-    """Attach all commands to ``app``."""
+    """Attach all commands to ``app``.
+
+    Everyday commands stay visible in ``--help``; the five specialist
+    commands (music re-label, horror corpus/shelf maintenance) stay
+    fully functional but hidden to keep the help screen scannable.
+    """
 
     app.command(name="discover")(discover_cmd)
     app.command(name="theories")(theories_cmd)
     app.command(name="research")(research_cmd)
     app.command(name="script")(script_cmd)
-    app.command(name="music")(music_cmd)
+    app.command(name="music", hidden=True)(music_cmd)
     app.command(name="assets")(assets_cmd)
+    app.command(name="title")(title_cmd)
+    app.command(name="publish")(publish_cmd)
     app.command(name="voice")(voice_cmd)
     app.command(name="render")(render_cmd)
     app.command(name="run-all")(run_all_cmd)
-    app.command(name="horror-pull")(horror_pull_cmd)
-    app.command(name="sfx-pull")(sfx_pull_cmd)
-    app.command(name="shelf-seed")(shelf_seed_cmd)
-    app.command(name="story")(story_cmd)
+    app.command(name="make")(make_cmd)
+    app.command(name="horror-pull", hidden=True)(horror_pull_cmd)
+    app.command(name="sfx-pull", hidden=True)(sfx_pull_cmd)
+    app.command(name="shelf-seed", hidden=True)(shelf_seed_cmd)
+    app.command(name="story", hidden=True)(story_cmd)
 
 
 # -- discovery --------------------------------------------------------------
@@ -50,54 +57,53 @@ def discover_cmd(
     metrics: bool = typer.Option(
         True, "--metrics/--no-metrics", help="Fetch pageviews (slower)."
     ),
-    sources: str | None = typer.Option(
-        None, "--sources", help="Comma-separated connector names to use."
-    ),
     niche: str | None = typer.Option(
         None,
         "--niche",
         "-n",
         help=(
-            "Add a curated niche pack: experiments, mysteries "
-            "(comma-separable, repeatable topics broaden discovery)."
+            "Niche(s) to discover (comma-separated). "
+            "Use 'all' for all active niches, or 'list' to see available."
         ),
     ),
 ) -> None:
-    """Discover conspiracy theories and merge them into the local catalog."""
+    """Discover theories across configured niches and merge into local catalog."""
+
+    from catalog.discovery import list_active_niches, list_niches
 
     settings = get_settings()
-    if niche:
-        from catalog.discovery import NICHES
+
+    if niche is not None:
+        if niche.strip().lower() == "list":
+            all_niches = list_niches()
+            console.print("[bold]Available niches:[/bold]")
+            for key, cfg in all_niches.items():
+                active = " ✓" if key in list_active_niches() else ""
+                console.print(
+                    f"  [cyan]{key}[/cyan]{active}: {cfg['label']} — {cfg['description']}"
+                )
+            raise typer.Exit(0)
 
         wanted = [n.strip().lower() for n in niche.split(",") if n.strip()]
-        unknown = [n for n in wanted if n not in NICHES]
+        if "all" in wanted:
+            wanted = list_active_niches()
+        unknown = [n for n in wanted if n not in list_niches()]
         if unknown:
             console.print(
                 f"[red]Unknown niche(s): {', '.join(unknown)}. "
-                f"Available: {', '.join(sorted(NICHES))}[/red]"
+                f"Available: {', '.join(sorted(list_niches()))}[/red]"
             )
             raise typer.Exit(1)
-        categories = list(settings.discovery_categories)
-        seeds = list(settings.discovery_seed_pages)
-        for name in wanted:
-            categories.extend(NICHES[name]["categories"])
-            seeds.extend(NICHES[name]["seed_pages"])
-        settings = settings.model_copy(
-            update={
-                "discovery_categories": list(dict.fromkeys(categories)),
-                "discovery_seed_pages": list(dict.fromkeys(seeds)),
-            }
-        )
-        console.print(f"[dim]niche packs merged: {', '.join(wanted)}[/dim]")
-    connectors = build_connectors(settings)
-    if sources:
-        wanted = {name.strip() for name in sources.split(",")}
-        connectors = [c for c in connectors if c.name in wanted]
+    else:
+        # Default: all active niches
+        wanted = list_active_niches()
+
+    console.print(f"[dim]Discovering niches: {', '.join(wanted)}[/dim]")
 
     with TheoryCatalog(settings.catalog_path) as catalog:
         with console.status("Discovering theories..."):
             report = discover(
-                catalog, connectors, limit=limit, with_metrics=metrics, settings=settings
+                catalog, None, limit=limit, with_metrics=metrics, settings=settings, niches=wanted
             )
         total = catalog.count()
 
@@ -109,18 +115,32 @@ def discover_cmd(
         console.print(f"[dim]Skipped {report.skipped} list/meta pages.[/dim]")
     for name, count in sorted(report.per_source.items()):
         console.print(f"  {name}: {count}")
+    if report.per_niche:
+        console.print("[dim]Per niche:[/dim]")
+        for n, c in sorted(report.per_niche.items()):
+            console.print(f"  {n}: {c}")
 
 
 def theories_cmd(
     limit: int = typer.Option(25, "--limit", "-l"),
     tier: str | None = typer.Option(None, "--tier", help="mainstream|popular|moderate|underground"),
     order: str = typer.Option("popularity", "--order", "-o", help="popularity|size|name"),
+    search: str | None = typer.Option(
+        None, "--search", "-s", help="Only show theories matching this text."
+    ),
 ) -> None:
     """List catalogued theories."""
 
     settings = get_settings()
     with TheoryCatalog(settings.catalog_path) as catalog:
-        rows = catalog.list(limit=limit, order=order, tier=tier)
+        rows = catalog.list(limit=limit * 10 if search else limit, order=order, tier=tier)
+    if search:
+        needle = search.lower()
+        rows = [
+            theory
+            for theory in rows
+            if needle in theory.name.lower() or needle in theory.slug.lower()
+        ][:limit]
 
     table = Table(show_header=True, header_style="bold")
     table.add_column("Tier")
@@ -163,7 +183,7 @@ def research_cmd(
 
 def script_cmd(
     slug: str = typer.Argument(..., help="Catalog slug."),
-    format: str = typer.Option("both", "--format", "-f", help="short|long|both"),
+    format: str = typer.Option("short", "--format", "-f", help="short|long|both"),
     chars: int | None = typer.Option(None, "--chars", help="Article budget in characters."),
 ) -> None:
     """Research a theory and write its video script(s)."""
@@ -237,7 +257,7 @@ def music_cmd(
     for fmt in formats:
         script_path = Path(settings.output_dir) / slug / f"{fmt}.json"
         if not script_path.exists():
-            _fail(f"No {fmt} script for '{slug}'. Run 'videoai script {slug}' first.")
+            _fail(f"No {fmt} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
         script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
         with console.status(f"Labelling {fmt} music..."):
             script = annotate_music(create_llm_provider(settings), script)
@@ -255,9 +275,40 @@ def music_cmd(
 
 
 # -- helpers ----------------------------------------------------------------
+def title_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+) -> None:
+    """Generate a viral title + description + tags for a finished script."""
+
+    settings = get_settings()
+    theory = _load_theory(settings, slug)
+    script_path = settings.output_dir / slug / f"{format}.json"
+    if not script_path.exists():
+        _fail(f"No {format} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
+    script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+
+    from blocks.title_description import TitleDescriptionBlock
+    from providers.llm import create_llm_provider
+
+    llm = create_llm_provider(settings)
+    block = TitleDescriptionBlock(llm)
+    started = time.monotonic()
+    with console.status(f"Crafting title for '{theory.name}'..."):
+        pack = block.run(script, topic=theory.name)
+    console.print(f"[dim]title: {time.monotonic() - started:.1f}s[/dim]")
+    path = _save(settings.output_dir, slug, f"{format}.title.json", pack.model_dump_json(indent=2))
+    console.print(Panel.fit(
+        f"[bold]{pack.title}[/bold]\n\n{pack.description}\n\ntags: {', '.join(pack.tags)}\n"
+        f"hashtags: {' '.join(pack.hashtags)}",
+        title="Title pack",
+    ))
+    console.print(f"[green]saved[/green] {path}")
+
+
 def assets_cmd(
     slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
-    format: str = typer.Option("both", "--format", "-f", help="short|long|both"),
+    format: str = typer.Option("short", "--format", "-f", help="short|long|both"),
 ) -> None:
     """Match topical wiki media to the saved script's scenes."""
 
@@ -266,7 +317,7 @@ def assets_cmd(
 
     brief_path = Path(settings.output_dir) / slug / "brief.json"
     if not brief_path.exists():
-        _fail(f"No brief for '{slug}'. Run 'videoai research {slug}' first.")
+        _fail(f"No brief for '{slug}'. Run 'ash_speaks research {slug}' first.")
     brief = ResearchBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
 
     if format == "both":
@@ -280,7 +331,7 @@ def assets_cmd(
     for fmt in formats:
         script_path = Path(settings.output_dir) / slug / f"{fmt}.json"
         if not script_path.exists():
-            _fail(f"No {fmt} script for '{slug}'. Run 'videoai script {slug}' first.")
+            _fail(f"No {fmt} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
         script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
         with console.status(f"Matching media for the {fmt} script..."):
             trace: dict[str, str] = {}
@@ -324,7 +375,7 @@ def voice_cmd(
     for slug in slugs:
         script_path = Path(settings.output_dir) / slug / f"{format}.json"
         if not script_path.exists():
-            console.print(f"[red]{slug}: no {format} script; run 'videoai script {slug}'[/red]")
+            console.print(f"[red]{slug}: no {format} script; run 'ash_speaks script {slug}'[/red]")
             continue
         script = VideoScript.model_validate_json(
             script_path.read_text(encoding="utf-8")
@@ -417,6 +468,51 @@ def _design_sfx(settings, slug: str, script: VideoScript) -> Path | None:
     return sfx_path
 
 
+def publish_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+    video: Path | None = typer.Option(None, "--video", help="Override video path."),
+    push: bool = typer.Option(
+        False, "--push", help="Upload for real even with AUTO_PUBLISH off."
+    ),
+) -> None:
+    """Upload the rendered video to YouTube (respects AUTO_PUBLISH)."""
+
+    settings = get_settings()
+    theory = _load_theory(settings, slug)
+    out_dir = settings.output_dir / slug
+    video_path = video or (out_dir / f"{format}.mp4")
+    if not video_path.exists():
+        _fail(f"No video at {video_path}. Run 'ash_speaks render {slug}' first.")
+    title_path = out_dir / f"{format}.title.json"
+    if title_path.exists():
+        from blocks.title_description import TitlePack
+
+        pack = TitlePack.model_validate_json(title_path.read_text(encoding="utf-8"))
+    else:
+        from blocks.title_description import TitleDescriptionBlock
+        from core.models import VideoScript
+        from providers.llm import create_llm_provider
+
+        script_path = out_dir / f"{format}.json"
+        if not script_path.exists():
+            _fail(f"No {format} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
+        script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+        pack = TitleDescriptionBlock(create_llm_provider(settings)).run(script, topic=theory.name)
+
+    from publish import YouTubePublisher
+
+    publisher = YouTubePublisher()
+    if not settings.auto_publish and not push:
+        console.print("[yellow]AUTO_PUBLISH is off; dry-running metadata only.[/yellow]")
+        console.print("[dim]Pass --push to upload anyway.[/dim]")
+        console.print(pack.model_dump_json(indent=2))
+        return
+    with console.status("Uploading to YouTube..."):
+        video_id = publisher.upload(video_path, pack)
+    console.print(f"[green]published[/green] https://youtu.be/{video_id}")
+
+
 def render_cmd(
     slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
@@ -435,9 +531,9 @@ def render_cmd(
     assets_path = directory / f"assets-{format}.json"
     script_path = directory / f"{format}.json"
     if not script_path.exists():
-        _fail(f"No {format} script for '{slug}'. Run 'videoai script {slug}' first.")
+        _fail(f"No {format} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
     if not assets_path.exists():
-        _fail(f"No {format} assets for '{slug}'. Run 'videoai assets {slug}' first.")
+        _fail(f"No {format} assets for '{slug}'. Run 'ash_speaks assets {slug}' first.")
     script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
     pack = AssetPack.model_validate_json(assets_path.read_text(encoding="utf-8"))
     genre = None
@@ -452,15 +548,196 @@ def render_cmd(
     with console.status(f"Assembling the {format} video..."):
         try:
             render(
-            script, pack, directory / "audio", out_path,
-            stem=stem, genre=genre, music=music,
-        )
+                script, pack, directory / "audio", out_path,
+                stem=stem, genre=genre, music=music,
+            )
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])
     console.print("[green]Video ready[/green] -> " + str(out_path))
 
 
+_ALL_STAGES = ("research", "script", "assets", "voice", "render", "title", "publish")
+
+
 # -- slug scheduler ----------------------------------------------------------
+def make_cmd(
+    count: int = typer.Option(1, "--count", "-n", help="How many videos to make."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+    discover_limit: int = typer.Option(20, "--discover", help="Discover if catalog is empty."),
+    publish: bool = typer.Option(
+        False, "--publish/--no-publish", help="Upload to YouTube (needs AUTO_PUBLISH on)."
+    ),
+    only: str | None = typer.Option(
+        None, "--only",
+        help="Restrict stages, comma-separated: research,script,assets,voice,render,title,publish.",
+    ),
+    skip: str | None = typer.Option(
+        None, "--skip", help="Stages to skip, comma-separated (implies --no-publish).",
+    ),
+) -> None:
+    """Make one or more complete videos end-to-end on random catalog topics.
+
+    Picks random theories from the local catalog (discovering first if it is
+    empty), then runs research -> script -> assets -> voice -> render ->
+    title -> publish for each, in a single command.
+    """
+
+    import random
+
+    settings = get_settings()
+    if format not in _FORMATS:
+        _fail(f"Unknown format '{format}'. Choose short or long.")
+
+    wanted = _stage_set(only, skip)
+    if not publish:
+        wanted.discard("publish")
+
+    with TheoryCatalog(settings.catalog_path) as catalog:
+        theories = catalog.list(limit=500)
+    if not theories:
+        with console.status("Catalog empty; discovering theories..."):
+            discover(limit=discover_limit, metrics=False, niche="all")
+        theories = catalog.list(limit=500)
+    if not theories:
+        _fail("No theories available; run 'ash_speaks discover' first.")
+
+    chosen = random.sample(theories, k=min(count, len(theories)))
+    pipeline = build_content_pipeline(settings)
+    from blocks.title_description import TitleDescriptionBlock
+    from providers.llm import create_llm_provider
+    from publish import YouTubePublisher
+    from render.assemble import render
+    from voice.tts import VoiceOver
+
+    vo = VoiceOver()
+    stem = "voice" if format == "short" else f"voice-{format}"
+    publisher = YouTubePublisher()
+    llm = create_llm_provider(settings)
+    title_block = TitleDescriptionBlock(llm)
+
+    for theory in chosen:
+        slug = theory.slug
+        console.rule(f"[bold]{theory.name}[/bold] ({slug})")
+        out_dir = Path(settings.output_dir) / slug
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # research + script
+        brief_path = out_dir / "brief.json"
+        script_path = out_dir / f"{format}.json"
+        assets_path = out_dir / f"assets-{format}.json"
+        out_path = out_dir / f"{slug}-{format}.mp4"
+        title_path = out_dir / f"{format}.title.json"
+
+        if "research" in wanted and not brief_path.exists():
+            with console.status("Researching..."):
+                brief = pipeline.research(theory)
+            _save(settings.output_dir, slug, "brief.json", brief.model_dump_json(indent=2))
+        elif brief_path.exists():
+            brief = ResearchBrief.model_validate_json(brief_path.read_text(encoding="utf-8"))
+        else:
+            brief = None  # only research + render need it
+
+        if "script" in wanted:
+            if brief is None:
+                _fail(f"No brief at {brief_path}; run without skipping research.")
+            seconds = (
+                settings.script_short_seconds if format == "short" else settings.script_long_seconds
+            )
+            with console.status("Writing script..."):
+                script = pipeline.script(brief, format, target_seconds=seconds)
+            from blocks.music import annotate_music
+            script = annotate_music(create_llm_provider(settings), script)
+            _save(settings.output_dir, slug, f"{format}.json", script.model_dump_json(indent=2))
+            _save(settings.output_dir, slug, f"{format}.md", render_markdown(script))
+        elif script_path.exists():
+            script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+        else:
+            _fail(f"No {format} script; run without skipping script.")
+
+        # assets
+        if "assets" in wanted:
+            with console.status("Matching assets..."):
+                trace: dict[str, str] = {}
+                pack = pipeline.assets(theory, brief, script, trace=trace)
+            for name, content in trace.items():
+                _save(settings.output_dir, slug, name, content)
+            _save(
+                settings.output_dir, slug, f"assets-{format}.json", pack.model_dump_json(indent=2)
+            )
+        elif assets_path.exists():
+            pack = AssetPack.model_validate_json(assets_path.read_text(encoding="utf-8"))
+        else:
+            pack = None
+
+        # voice
+        if "voice" in wanted:
+            with console.status("Narrating..."):
+                vo.render_script(script, out_dir / "audio", stem=stem)
+            _design_sfx(settings, slug, script)
+
+        # render
+        if "render" in wanted:
+            if pack is None:
+                _fail(f"No {format} asset pack; run without skipping assets.")
+            with console.status("Rendering..."):
+                try:
+                    render(
+                        script, pack, out_dir / "audio", out_path,
+                        stem=stem, genre=brief.genre if brief else None,
+                    )
+                except FileNotFoundError as error:
+                    _fail(str(error).split(";")[0])
+            console.print(f"[green]video[/green] -> {out_path}")
+
+        # title
+        if "title" in wanted:
+            with console.status("Crafting title..."):
+                title_pack = title_block.run(script, topic=theory.name)
+            _save(
+                settings.output_dir, slug, f"{format}.title.json",
+                title_pack.model_dump_json(indent=2)
+            )
+            console.print(f"[bold]{title_pack.title}[/bold]")
+        elif title_path.exists():
+            from blocks.title_description import TitlePack
+            title_pack = TitlePack.model_validate_json(title_path.read_text(encoding="utf-8"))
+        else:
+            title_pack = None
+
+        # publish
+        if "publish" in wanted and title_pack is not None:
+            if settings.auto_publish:
+                with console.status("Publishing to YouTube..."):
+                    video_id = publisher.upload(out_path, title_pack)
+                console.print(f"[green]published[/green] https://youtu.be/{video_id}")
+            else:
+                console.print("[yellow]AUTO_PUBLISH off; skipping upload.[/yellow]")
+        elif "publish" in wanted:
+            console.print("[dim]no title; skipping upload.[/dim]")
+
+    console.print(f"[green]Done: {len(chosen)} video(s).[/green]")
+
+
+def _stage_set(only: str | None, skip: str | None) -> set[str]:
+    """Parse ``--only``/``--skip`` into one stage set with validation."""
+
+    wanted: set[str] = set(_ALL_STAGES)
+    for name, value in (("only", only), ("skip", skip)):
+        if not value:
+            continue
+        stages = [s.strip() for s in value.split(",") if s.strip()]
+        unknown = [s for s in stages if s not in _ALL_STAGES]
+        if unknown:
+            _fail(
+                f"Unknown stage(s) in --{name}: {', '.join(unknown)}. "
+                f"Stages: {', '.join(_ALL_STAGES)}."
+            )
+        wanted = set(stages) if name == "only" else wanted - set(stages)
+    if not wanted:
+        _fail("Nothing left to run: every stage was skipped.")
+    return wanted
+
+
 def run_all_cmd(
     slugs: list[str] = typer.Argument(..., help="Catalog slugs in queue order."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
@@ -539,7 +816,7 @@ def story_cmd(
     settings = get_settings()
     corpus = Path(settings.output_dir) / "corpus" / "horror" / "creepypasta.jsonl"
     if not corpus.exists():
-        _fail("No horror corpus. Run 'videoai horror-pull' first.")
+        _fail("No horror corpus. Run 'ash_speaks horror-pull' first.")
     style_path = corpus.parent / "style.json"
 
     if style_path.exists() and not fresh_style:
@@ -572,8 +849,8 @@ def story_cmd(
     _save(settings.output_dir, slug, "brief.json", brief.model_dump_json(indent=2))
     console.print(
         f"[green]{script.title}[/green] -> {script_path}\n"
-        f"Next: videoai assets {slug} -f short && videoai voice {slug} && "
-        f"videoai render {slug}"
+        f"Next: ash_speaks assets {slug} -f short && ash_speaks voice {slug} && "
+        f"ash_speaks render {slug}"
     )
 
 

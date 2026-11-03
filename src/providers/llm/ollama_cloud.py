@@ -93,28 +93,32 @@ class OllamaCloudProvider(BaseLLMProvider):
         errors: list[str] = []
 
         for idx in self._model_order():
-            attempt = payload
-            while True:
-                try:
-                    content = self._post(self._models[idx], attempt)
-                except _CloudFailure as exc:
-                    errors.append(f"model '{self._models[idx]}': {exc}")
-                    logger.warning(
-                        "Ollama Cloud model '%s' failed (%s); rotating",
-                        self._models[idx],
-                        exc,
-                    )
-                    if "rate limit" not in str(exc).lower():
-                        self._dead.add(idx)
-                    else:
-                        with self._lock:
-                            self._cooldown[idx] = time.monotonic() + 30.0
-                    break
-                return content
+            try:
+                content = self._post(self._models[idx], payload)
+            except _CloudFailure as exc:
+                errors.append(f"model '{self._models[idx]}': {exc}")
+                logger.warning(
+                    "Ollama Cloud model '%s' failed (%s); rotating",
+                    self._models[idx],
+                    exc,
+                )
+                if "rate limit" not in str(exc).lower():
+                    self._dead.add(idx)
+                else:
+                    with self._lock:
+                        self._cooldown[idx] = time.monotonic() + 30.0
+                continue
+            # remembered start of the last successful rotation, so the next
+            # call does not always slam whatever failed most recently
+            with self._lock:
+                self._cloud_index = idx
+            return content
 
         if self._local_fallback is None:
+            detail = "; ".join(errors) if errors else "no usable model"
             raise LLMError(
-                "All Ollama Cloud models failed. No local fallback configured."
+                f"All Ollama Cloud models failed ({detail}). "
+                "No local fallback configured."
             )
         logger.info(
             "All Ollama Cloud models failed; delegating to local fallback"

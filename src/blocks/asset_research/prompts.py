@@ -12,41 +12,24 @@ logger = logging.getLogger(__name__)
 _TEMPERATURE = 0.4
 
 
-DIRECTOR_SYSTEM = """You are the visual director of a conspiracy-theory video channel.
+DIRECTOR_SYSTEM = """You are the visual director of a video channel.
 
-You get a JSON list of scenes (narration + visual line) from a video script.
-For every scene you pick what the viewer should SEE while it plays — one
-image PER distinct subject the narration touches. If the narration first
-talks about pyramids and then about stars, that scene needs exactly two
-subjects: pyramids and stars.
+For each scene, pick 1-2 SHORT PHRASES (2-4 words each) that appear VERBATIM or
+near-verbatim in the scene's narration. These phrases will be used as image
+search queries, so they MUST be words the narration actually says.
 
-THE RULES
-1. Every subject must be grounded in what the scene actually talks about.
-   If it is not about this theory, you have failed.
-2. Subjects are concrete and specific: a place, an object, a document, a
-   type of person visibly doing something. Name proper nouns from the
-   narration where they exist (Chichén Itzá, the EC-47Q, Lavrentiy Beria).
-3. A generic decorative image ("dreamy sky", "mysterious fog") is FORBIDDEN.
-   Space/planet/galaxy/black-hole imagery is only generic if the scene
-   literally discusses space or the cosmos — never as mood filler.
-4. FORBIDDEN subjects: anything that displays mostly text — posters,
-   newspaper front pages, documents, film title cards, screenshots.
-   Also NO camera/composition subjects (close-up, aerial view) and
-   NO mood or colour words (dark, moody, dramatic). Subject content only.
-5. A subject is a NOUN PHRASE that names a thing the camera can see:
-   a person, object, place, vehicle, building. Never a verb phrase, a
-   clause or a premise — "the theory claims", "according to the",
-   "believers say", "four names leaked" depict NOTHING and are FORBIDDEN.
-   When the narration describes an event ("four names leaked in 1959"),
-   pick the THING that shows it (a cosmonaut, a space suit, a rocket).
-6. Each subject: `intent` is at most 9 words, English, no punctuation.
-7. `trigger` is a short phrase of AT MOST SIX consecutive narration words
-   where that subject comes up in the speech. Copy the words verbatim from
-   the narration (closest 2-3 words when none match cleanly). The trigger
-   decides WHEN the image appears; order the subjects by trigger position.
-8. One subject per distinct narration topic; 2 subjects when the narration
-   clearly moves to a second topic, 3 at most.
+Rules:
+- Pick concrete nouns: names, places, objects, things. Not verbs or concepts.
+- The phrase must come from the narration text. Do not invent new words.
+- Do NOT pick filler phrases like "according to the", "the theory claims".
+- Do NOT pick visual-form words like "screenshot", "image", "footage".
 
+For each subject, provide:
+- subject: the 2-4 word phrase from the narration
+- intent: 2-4 words describing what the image should show (can be different from subject)
+- trigger: 2-4 words copied verbatim from the narration where this subject comes up
+
+Output JSON: {"scene_index": N, "subjects": [{"subject": "...", "intent": "...", "trigger": "..."}]}
 """
 
 
@@ -78,39 +61,16 @@ THIS IS A HORROR STORY (fiction). Search for the SETTING and PROPS only:
 
 QUERY_SYSTEM = """You route image searches for a video channel.
 
-You get JSON of scenes; each scene has subjects to show. For every subject
-produce ONE search. The query must name the THING the viewer should see —
-never what people did, only what the image should depict.
+For each subject, the query is the subject itself (already a phrase from the narration).
+Just copy the subject as the query, 1-3 words. Do not change or invent words.
 
-HARD RULES (violating any of these is a failure):
-1. The query names the object, place, structure or artefact the subject
-   describes — the invention itself, not a group of people. If the
-   narration says "what the team built", the query is the BUILDING, the
-   MACHINE or the OBJECT, never "scientists", "researchers", "team",
-   "meeting" or any group-of-people word.
-2. A person's bare proper name (e.g. "einstein") is allowed ONLY when the
-   subject itself is that person. Otherwise find the thing they made.
-3. No narration verbs, adverbs or story words ("discovered", "proved",
-   "imagine"). Camera words ("close-up", "aerial") are banned.
-4. 1-3 real catalogue keywords, lowercase, no punctuation, no quotation
-   marks. GOOD: "maya glyphs", "interferometer", "voyager spacecraft".
-   BAD: "scientists discovering", "crowd waiting in fear", full sentences.
-5. One query per subject — subjects come from distinct sentence topics, so
-   each query belongs to exactly one narration moment. Copy the subject's
-   `trigger` through unchanged.
+Source: "nasa" for space subjects (planets, stars, galaxies, spacecraft).
+"commons" for everything else (people, places, objects, buildings).
 
-SOURCE RULES
-- "nasa" when the subject is literally about space itself: planets, the
-  moon, the sun, stars, black holes, galaxies, nebulae, comets, asteroids,
-  orbits, space missions and their craft. NASA's archive is
-  public-domain and photography-first.
-- "commons" for people, portraits, historic documents, buildings,
-  instruments on Earth, ruins, war, everyday places.
-  GOOD commons queries: "einstein", "interferometer", "soviet radio".
-  GOOD nasa queries: "cygnus x-1", "black hole", "milky way".
+Copy each subject's trigger through unchanged.
 
-Copy each subject's `trigger` through unchanged.
-
+Output JSON: {"scene_index": N, "queries": [{"intent": "...", "source": "commons|nasa",
+"query": "...", "trigger": "..."}]}
 """
 
 

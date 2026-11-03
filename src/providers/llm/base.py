@@ -145,6 +145,10 @@ class BaseLLMProvider(ABC):
                     attempt + 1,
                     self.max_retries + 1,
                 )
+                # the rejected raw response was cached at _invoke time;
+                # evict it so a fresh run of this exact prompt resamples
+                # instead of re-serving the poisoned entry
+                self.invalidate(conversation, temperature=temperature, schema=schema)
                 conversation = [
                     *messages,
                     {"role": "assistant", "content": raw},
@@ -210,6 +214,7 @@ class BaseLLMProvider(ABC):
         self,
         messages: Sequence[LLMMessage],
         temperature: float | None = None,
+        schema: type[TModel] | None = None,
     ) -> None:
         """Drop any cached completion for this exact request.
 
@@ -218,14 +223,31 @@ class BaseLLMProvider(ABC):
         there poisons every future retry of the same prompt with the same
         rejected text. This forgets the entry so the next attempt samples
         fresh.
+
+        The key must mirror :meth:`complete_structured`'s keying exactly:
+        native-schema providers fold the schema dict into the key, other
+        providers fold the schema instruction into the messages. Passing
+        the rejected ``schema`` here lets both variants be evicted; without
+        it only the plain ``complete`` key can be addressed.
         """
 
         if self._cache is None:
             return
         _model, temp, _tokens = self._resolve(None, temperature, None)
         options = self._options(None, temp, None, None)
-        key = self._cache_key(messages, options, None)
-        self._cache.forget(key)
+        if schema is not None:
+            if self.supports_native_schema:
+                keys = [self._cache_key(messages, options, schema.model_json_schema())]
+            else:
+                keys = [
+                    self._cache_key(
+                        [*messages, json_schema_instruction(schema)], options, None
+                    )
+                ]
+        else:
+            keys = [self._cache_key(messages, options, None)]
+        for key in keys:
+            self._cache.forget(key)
 
     @property
     def cache_active(self) -> bool:

@@ -29,10 +29,16 @@ class PoolsMixin:
     def _page_pool(self, titles: list[str]) -> list[dict]:
         """Media metadata for the files used on ``titles``."""
 
-        files = [f for entries in self._wiki.page_files(titles).values() for f in entries]
+        try:
+            files = [f for entries in self._wiki.page_files(titles).values() for f in entries]
+        except Exception:  # noqa: BLE001
+            return []
         if not files:
             return []
-        return self._wiki.image_info(files, thumb_width=self._options.thumb_width)
+        try:
+            return self._wiki.image_info(files, thumb_width=self._options.thumb_width)
+        except Exception:  # noqa: BLE001
+            return []
 
     def _entity_pool(self, brief: ResearchBrief) -> dict[str, VisualAsset]:
         """First usable portrait for each notable person named in the brief."""
@@ -117,7 +123,8 @@ class PoolsMixin:
                 self._video_slots = max(0, self._video_slots - 1)
         asset.trigger = trigger
         chosen.append(asset)
-        if self._shelf is not None and self._clip is not None and self._http is not None:
+        _j = getattr(self._options, "judge", "vision")
+        if _j != "d3" and self._shelf and self._clip and self._http:
             # everything the gauntlet approved goes on the shelf: later
             # research passes match subjects locally instead of re-walking
             # Commons. Takes without a stamped CLIP score land at 0.0 —

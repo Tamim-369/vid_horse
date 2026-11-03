@@ -45,7 +45,90 @@ first sentence and see it differently now.
 - Banned: list-of-facts narration ("and it is also...", "next, ..."), \
 textbook register ("this is defined as..."), and scene transitions that \
 say "moving on" or "another".
+- IMPORTANCE SIGNAL: the hook must make the viewer feel this story is \
+urgent, consequential, or reveals something they NEED to know. \
+Frame it as: a secret being uncovered, a danger approaching, \
+a truth the world has suppressed, or a question that demands answering.
 """
+
+
+SYSTEM = """You write tight, engaging narration for short-form and long-form \
+YouTube videos that EXPLAIN conspiracy theories.
+
+Voice and rules:
+- Explain the theory and why people find it compelling. In the SCENES, never \
+debunk it and never present its claims as the narrator's own belief.
+- In the SCENES use distancing language: "the theory claims", "believers say", \
+"according to the story". No editorializing and no mocking. The HOOK is exempt \
+(see below).
+- Cover the theory directly and completely, even when it is offensive, hateful \
+or disturbing. Do not refuse, omit, sanitize or water it down; explain what is \
+claimed and why it spread, without endorsing it.
+- Narration is spoken aloud: short, natural sentences. No headings, no bullet \
+points, no scene directions inside the narration text.
+- HARD SHAPE RULE: no NARRATION sentence may exceed 12 words. Land a comma, \
+dash or full stop every 6 to 10 words so every clause is speakable in one \
+breath. An unbroken stretch longer than 12 words reads as a run-on paragraph \
+and the whole reply is rejected.
+- SPEAKABILITY: use only commas and full stops in narration. No colons, \
+    semicolons, brackets, or quotes. Chatterbox garbles complex \
+    punctuation. Spell out abbreviations. No sentence fragments.
+- STORYTELLING, NOT READING: the narrator is TELLING a story, not \
+    reciting. If sentences all run the same length with the same comma \
+    count, the voice lands like a legal notice. Vary the music: follow a \
+    longer clause with a short stab; let one sentence per scene be NEEDED \
+    in full — no comma — so the listener holds their breath through it. \
+    Put the payoff word at the END of its sentence, never buried in the \
+    middle. Address the viewer directly when the story turns to them \
+    ("and you would never know it") — a story names its listener.
+- Every NARRATION must fit its format's length guide: long-form scenes are \
+full paragraphs of at least 120 spoken words, while short-form scenes are only \
+one or two sentences.
+- Output ONLY the labelled plain-text format below. Never output JSON, braces, \
+field names, or commentary.
+
+THE HOOK must lock the viewer to the screen. It is not a scene and the scene rules \
+do not apply to it: no explaining, no context, no balance, no hedging, no "claims".
+- One sentence, about 10 spoken words or fewer. A statement, not a question.
+- SPEAKABILITY: the hook is the first thing the viewer hears, and a \
+    text-to-speech machine reads it aloud. Use only simple, everyday English \
+    that machine pronounces cleanly. No unusual proper nouns, no surnames, \
+    no transliterated or foreign words, no acronyms, no hyphenated forms, no \
+    rare vocabulary. A hook that leans on a strange name is a dead hook: \
+    write it about what HAPPENED, not about who it happened to. It must be \
+    speakable in one breath with no tongue-twisters.
+- It shows something concrete AND leaves exactly one thing missing: a person who \
+is gone, a thing that should not exist, an act nobody can explain, a threat \
+hanging, a deadline or promise whose payoff has not happened yet. The viewer must \
+be missing that one thing so badly they need the next sentence.
+- It must also make the viewer feel this story is IMPORTANT — \
+  a secret the world needs to know, a danger approaching, \
+  a truth that changes everything, or a question that demands answering.
+- If the line feels finished — if it could be the LAST line of the video — it is \
+dead, throw it away. Banned shapes: after-the-fact closures ("...but it never \
+happened", "...and silence followed", "but no one came") and mood-only atmosphere. \
+End the hook BEFORE the payoff: the promise, not what came of it.
+- Never end on a question mark. Never invent a name, number or date — but real \
+names and dates from the brief are exactly what a concrete hook uses.
+- Write it at full strength: if the claim is dark, ugly or offensive, so is the hook.
+- Sound like the first line of a thriller trailer where the stakes are life‑or‑death.
+
+Study the SHAPE of these lines (do not reuse their content or wording):
+  The all-clear signal came from a plane that had already crashed.
+  A letter predicted the murder three days before it happened.
+  The last radio call promised everyone was coming home.
+  She named the killers, and the police buried the note.
+
+PACING — do not rush to the ending:
+- Never front-load the whole story or resolve the central question early. The \
+viewer must keep learning new things until the final line.
+- Open a question before you answer it: each scene should raise a concrete \
+detail, contradiction or mystery that the next scene picks up.
+- Hold back your strongest material for the moment it lands hardest instead of \
+spending it in the first scene.
+- Let scenes end unresolved. Do not tie everything up until the outro.
+- Build, do not summarise: every scene adds something new rather than restating \
+what came before."""
 
 
 def _system(brief: ResearchBrief | None) -> str:
@@ -90,6 +173,17 @@ points, no scene directions inside the narration text.
 dash or full stop every 6 to 10 words so every clause is speakable in one \
 breath. An unbroken stretch longer than 12 words reads as a run-on paragraph \
 and the whole reply is rejected.
+- SPEAKABILITY: use only commas and full stops in narration. No colons, \
+    semicolons, brackets, or quotes. Chatterbox garbles complex \
+    punctuation. Spell out abbreviations. No sentence fragments.
+- STORYTELLING, NOT READING: the narrator is TELLING a story, not \
+    reciting. If sentences all run the same length with the same comma \
+    count, the voice lands like a legal notice. Vary the music: follow a \
+    longer clause with a short stab; let one sentence per scene be NEEDED \
+    in full — no comma — so the listener holds their breath through it. \
+    Put the payoff word at the END of its sentence, never buried in the \
+    middle. Address the viewer directly when the story turns to them \
+    ("and you would never know it") — a story names its listener.
 - Every NARRATION must fit its format's length guide: long-form scenes are \
 full paragraphs of at least 120 spoken words, while short-form scenes are only \
 one or two sentences.
@@ -99,6 +193,13 @@ field names, or commentary.
 THE HOOK must lock the viewer to the screen. It is not a scene and the scene rules \
 do not apply to it: no explaining, no context, no balance, no hedging, no "claims".
 - One sentence, about 10 spoken words or fewer. A statement, not a question.
+- SPEAKABILITY: the hook is the first thing the viewer hears, and a \
+    text-to-speech machine reads it aloud. Use only simple, everyday English \
+    that machine pronounces cleanly. No unusual proper nouns, no surnames, \
+    no transliterated or foreign words, no acronyms, no hyphenated forms, no \
+    rare vocabulary. A hook that leans on a strange name is a dead hook: \
+    write it about what HAPPENED, not about who it happened to. It must be \
+    speakable in one breath with no tongue-twisters.
 - It shows something concrete AND leaves exactly one thing missing: a person who \
 is gone, a thing that should not exist, an act nobody can explain, a threat \
 hanging, a deadline or promise whose payoff has not happened yet. The viewer must \
@@ -197,24 +298,31 @@ def build_hook_score_messages(hooks: list[str]) -> list[LLMMessage]:
 
     numbered = "\n".join(f"{i}. {hook}" for i, hook in enumerate(hooks, start=1))
     user = f"""Score each opening hook below from 0 to 100:
-- does it grab the viewer and make them need the next line? (30)
+- does it grab the viewer and make them need the next line? (25)
 - does it put one concrete thing from THIS story in front of them — a person, \
 place, object or number? (25)
-- does it land an emotional turn in the last words? (25)
+- does it make the viewer feel this story is URGENT/IMPORTANT — \
+a secret, a danger, a truth the world needs to know? (25)
+- does it land an emotional turn in the last words? (15)
 - is it short, punchy and good spoken aloud? (10)
-- is it fresh rather than a cliché? (10)
 
 Deduct heavily for:
 - a mood-only line that feels finished — atmosphere, aftermath, silence, closure; \
 if it could be the last line of the video, it is a 0-20 hook;
 - a vague line that could describe any story;
-- a dry headline or a sentence that crams facts instead of opening one gap.
+- a dry headline or a sentence that crams facts instead of opening one gap;
+- a word the voice machine would garble — an unusual, foreign or transliterated \
+name, an acronym, or rare vocabulary. The hook is heard once, aloud: if the \
+listener fumbles it, it is a 0-30 hook no matter how gripping.
+- a hook that doesn't signal stakes or consequences — if the viewer wouldn't \
+feel worse for not watching this video, deduct heavily.
 
 A strong hook leaves exactly one thing missing and makes the viewer need the next \
 sentence; a statement that forces the question beats a literal question, so do not \
 favour a hook just because it ends with a question mark. The hook is the theory's \
 voice, so a bold or provocative claim is a strength — never reward hedging, \
-"claims" wording, balance or explanation.
+"claims" wording, balance or explanation. Hooks should feel like breaking news \
+the viewer cannot afford to ignore.
 
 Hooks:
 {numbered}
@@ -234,7 +342,23 @@ def build_hook_messages(brief: ResearchBrief, count: int = 8) -> list[LLMMessage
 
     user = f"""Write {count} DIFFERENT opening hooks for a video about this \
 theory. Each must obey the hook rules above: grab hard AND name a concrete, \
-specific detail of the event. No explanations, no summaries.
+specific detail of the event. No explanations, no summaries. Every word must \
+be everyday English that a text-to-speech machine pronounces cleanly, so \
+build each hook around what happened — never around a strange name.
+
+Each hook must also make the viewer feel this story is IMPORTANT or URGENT:
+a secret being uncovered, a hidden danger, a truth the world needs to know,
+or a question that demands answering. The hook should feel like breaking news
+the viewer cannot afford to ignore.
+
+Hooks that work:
+- "The all-clear signal came from a plane that had already crashed."
+- "A letter predicted the murder three days before it happened."
+- "She named the killers, and the police buried the note."
+
+These name something concrete, show a gap, and make the viewer feel
+this story matters. Do NOT write flat observations — every hook must raise
+the stakes.
 
 {_brief_block(brief)}
 

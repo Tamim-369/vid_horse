@@ -103,7 +103,6 @@ class RoutingMixin:
                     ranked.append((score, info))
         ranked.sort(key=lambda pair: pair[0], reverse=True)
         eligible: list[tuple[int, dict]] = []
-        clip_scored: list[tuple[float, int, dict]] = []
         for score, info in ranked:
             if len(eligible) >= self._chooser_pool:
                 break
@@ -118,70 +117,22 @@ class RoutingMixin:
                 continue
             eligible.append((score, info))
 
-        # CLIP: what does the image DEPICT about the subject?
-        if self._clip is not None and self._http is not None and eligible:
-            subject_text = f"{action.intent} {action.query}".strip()
-            clip_scored: list[tuple[float, int, dict]] = []
-            with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
-                results = list(
-                    pool.map(
-                        lambda pair: self._clip.analyze(
-                            subject_text,
-                            pair[1].get("thumburl") or pair[1].get("url"),
-                            self._http,
-                        ),
-                        eligible,
-                    )
-                )
-            for index, (similarity, collage_like, texty) in enumerate(results):
-                if collage_like or texty:
-                    # multi-panel sheets read as clutter; text posters
-                    # violate the no-text-as-image rule
-                    continue
-                if similarity is not None and similarity < _CLIP_FLOOR:
-                    # pixels that don't depict the subject at all
-                    continue
-                if similarity is None:
-                    similarity = -1.0 + 0.001 * index
-                else:
-                    info = eligible[index][1]
-                    info["_clip_score"] = similarity
-                clip_scored.append((similarity, index, eligible[index][1]))
-            clip_scored.sort(
-                key=lambda pair: (
-                    -pair[0] - (_VIDEO_BONUS if info_kind(pair[2]) == "video" else 0.0),
-                    pair[1],
-                )
-            )
-            eligible = [(score, info) for _sim, _idx, info in clip_scored]
-        # A top shot that clearly depicts the subject needs no editor: when
-        # CLIP both likes the pick and separates it from the runner-up the
-        # pixels settle it and the LLM's flaky veto never runs.
-        margin = 1.0
-        if clip_scored:
-            top_sim = clip_scored[0][0]
-            next_sim = clip_scored[1][0] if len(clip_scored) > 1 else -1.0
-            margin = top_sim - next_sim
-            confident = top_sim >= 0.30 and margin >= 0.02
-        else:
-            confident = False
-        for rank, _entry in enumerate(eligible):
-            pick = self._choose(
-                scene, search_words, eligible[rank:], confirm_only=not confident
-            )
-            if pick is None:
+        # d3 single-judge path: no CLIP, no chooser LLM. Take the top
+        # unclaimed candidates by source score; the caption judge filters
+        # them afterwards.
+        for _score, info in eligible:
+            if self._blocked(info, used):
                 continue
-            if self._take(pick, chosen, used):
+            if self._take(info, chosen, used):
                 break
-            # a parallel scene claimed it between the outline check and the
-            # chooser verdict; the next rank is still up for grabs
 
     def _route_shelf(
         self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: _Claims
     ) -> None:
         """Local shelf match — the fast path for subjects research has seen."""
 
-        if len(chosen) >= target or self._clip is None or self._http is None:
+        _j = getattr(self._options, "judge", "vision")
+        if _j == "d3" or len(chosen) >= target or self._clip is None or self._http is None:
             return
         text_embed = self._clip.text_embed(query)
         if text_embed is None:
@@ -223,11 +174,16 @@ class RoutingMixin:
         channel opener with nothing to say.
         """
 
-        if self._clip is None or self._http is None or not query.strip():
+        _j = getattr(self._options, "judge", "vision")
+        if _j == "d3" or self._clip is None or self._http is None or not query.strip():
             return
 
         candidates: list[dict] = []
-        for info in self._web.search(query, limit=self._options.search_limit):
+        try:
+            _web_hits = list(self._web.search(query, limit=self._options.search_limit))
+        except Exception:  # noqa: BLE001
+            _web_hits = []
+        for info in _web_hits:
             if not self._usable(info) or self._blocked(info, used):
                 continue
             candidates.append(info)
@@ -236,6 +192,13 @@ class RoutingMixin:
         if not candidates:
             return
 
+        if getattr(self._options, "judge", "vision") == "d3":
+            for info in candidates:
+                if self._blocked(info, used):
+                    continue
+                if self._take(info, chosen, used):
+                    break
+            return
         subject_text = query
         clip_scored: list[tuple[float, int, dict]] = []
         with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
@@ -277,6 +240,8 @@ class RoutingMixin:
     def _route_yandex(
         self, query: str, scene: str, chosen: list[VisualAsset], target: int, used: _Claims
     ) -> None:
+        if getattr(self._options, "judge", "vision") == "d3":
+            return
         """Yandex Images search, CLIP-ranked, vision-verified picks.
 
         Yandex has no per-query rate limit, so it is the unlimited source
@@ -288,7 +253,11 @@ class RoutingMixin:
 
         if len(chosen) >= target or self._yandex is None or not query.strip():
             return
-        results = self._yandex.search(query, limit=self._options.search_limit)
+        try:
+            results = self._yandex.search(query, limit=self._options.search_limit)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("Yandex search failed: %s", exc)
+            return
         if not results:
             return
 
@@ -315,6 +284,14 @@ class RoutingMixin:
         if not candidates:
             return
 
+        # d3 mode: skip CLIP/vision/chooser, take first unclaimed.
+        if getattr(self._options, "judge", "vision") == "d3":
+            for info in candidates:
+                if self._blocked(info, used):
+                    continue
+                if self._take(info, chosen, used):
+                    break
+            return
         # CLIP first: cheap, catches off-topic pixels and collage/poster junk.
         ranked: list[tuple[float, dict]] = []
         if self._clip is not None and self._http is not None:
@@ -379,7 +356,12 @@ class RoutingMixin:
         }
         bar = max(2, len(tokens) - 2)
         passing: list[dict] = []
-        for info in search(search_words, limit=limit):
+        try:
+            hits = list(search(search_words, limit=limit))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("%s search failed: %s", source, exc)
+            hits = []
+        for info in hits:
             if len(passing) >= target * 2:
                 break
             if not self._usable(info) or self._blocked(info, used):
@@ -394,7 +376,8 @@ class RoutingMixin:
             if source != "nasa" and len(tokens & text) < bar:
                 continue
             passing.append(info)
-        if passing and self._clip is not None and self._http is not None:
+        _j = getattr(self._options, "judge", "vision")
+        if _j != "d3" and passing and self._clip is not None and self._http is not None:
             subject_text = f"{relevance} {search_words}".strip()
             clip_scored: list[tuple[float, int, dict]] = []
             with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
@@ -436,13 +419,13 @@ class RoutingMixin:
     # -- helpers ---------------------------------------------------------------
 
     def _query_for(self, scene: ScriptScene, brief: ResearchBrief) -> str:
-        phrases = proper_phrases(scene.visual)
+        phrases = proper_phrases(scene.narration)
         if phrases:
             return phrases[0]
         nouns = sorted(
-            content_tokens(scene.visual),
+            content_tokens(scene.narration),
             key=lambda w: -len(w),
         )
         if not nouns:
-            return ""
+            return brief.title
         return f"{brief.title} {nouns[0]}".strip()

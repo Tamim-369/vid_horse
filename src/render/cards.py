@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
 import textwrap
 from pathlib import Path
 
@@ -227,26 +226,6 @@ def _credit_draw(asset, work: Path, tag: str | int) -> str | None:
     return f"drawtext={':'.join(draw)}"
 
 
-def _credited_clip(clip: Path, asset, work: Path, tag: str | int) -> Path:
-    """Old external stamping; superseded by ``_credit_draw`` in-card.
-
-    Kept for callers outside the main card pipeline. The main pipeline
-    applies the credit inside the card's own zoompan encode (free).
-    """
-
-    credit = _credit_draw(asset, work, tag)
-    if not credit:
-        return clip
-    out = work / f"credit-{tag}.mp4"
-    _run([
-        "ffmpeg", "-y", "-i", str(clip),
-        "-vf", credit,
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        "-pix_fmt", "yuv420p", "-an", str(out),
-    ])
-    return out
-
-
 def _still_clip(
     source: Path,
     work: Path,
@@ -304,7 +283,6 @@ def _fade_out_clip(clip: Path, length: float, work: Path, index: int) -> Path:
 
 _CROSSFADE = 0.45
 _MIN_SWITCH_GAP = 0.9
-_MAX_SUBJECTS = 4
 
 
 def _narr_tokens(text: str) -> list[str]:
@@ -637,26 +615,3 @@ def _moving_still(
     ]
     _run(args)
     return out
-
-
-HORROR_GRADE = (
-    "eq=contrast=1.08:saturation=0.42:brightness=-0.05:gamma=1.07,"
-    "colorbalance=rs=-0.12:gs=0.02:bs=0.12,"
-    "noise=alls=7:allf=t,"
-    "vignette=PI/4.2"
-)
-
-
-def _probe_duration(clip: Path) -> float:
-    """Seconds of video stream in an mp4 card, via ffprobe."""
-
-    result = subprocess.run(
-        [
-            "ffprobe", "-v", "error", "-select_streams", "v:0",
-            "-show_entries", "stream=duration", "-of", "csv=p=0", str(clip),
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    )
-    return float(result.stdout.strip())

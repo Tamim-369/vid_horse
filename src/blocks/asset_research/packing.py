@@ -34,7 +34,7 @@ class PackingMixin:
             else:
                 claimed.add(first)
 
-    def unique_within(self, scenes, tasks, brief, entity_pool, article_pool):
+    def unique_within(self, scenes):
         """Drop repeats inside one card: a card never shows one url twice."""
         for entry in scenes:
             per_entry: set[str] = set()
@@ -116,7 +116,7 @@ class PackingMixin:
             if not progress:
                 break
 
-    def fill_blanks(self, scenes, tasks, brief, entity_pool, article_pool):
+    def fill_blanks(self, scenes):
         """Hand an underfed entry the least-shown visual of a distant scene."""
         freq = Counter(asset.url for entry in scenes for asset in entry.assets)
         for entry in scenes:

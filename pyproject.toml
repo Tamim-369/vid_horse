@@ -9,6 +9,8 @@ dependencies = [
     "chatterbox-tts>=0.1.7",
     "ddgs>=9.0",
     "faster-whisper>=1.2.1",
+    "google-api-python-client>=2.201.0",
+    "google-auth-oauthlib>=1.5.0",
     "httpx>=0.27",
     "num2words>=0.5.14",
     "ollama>=0.4",
@@ -16,8 +18,10 @@ dependencies = [
     "pillow>=12.3.0",
     "pydantic>=2.10",
     "pydantic-settings>=2.7",
+    "pyyaml>=6.0",
     "rich>=13.9",
     "typer>=0.15",
+    "wordfreq>=3.1.1",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +43,7 @@ packages = [
     "src/config",
     "src/providers",
     "src/blocks",
+    "src/publish",
     "src/pipeline",
     "src/cli",
     "src/utils",

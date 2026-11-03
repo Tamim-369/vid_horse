@@ -120,7 +120,7 @@ class Settings(BaseSettings):
     script_long_seconds: int = Field(default=600, gt=0)
     script_long_scenes: int = Field(default=10, ge=3, le=20)
     script_long_chunk_size: int = Field(default=3, ge=1, le=10)
-    script_hook_candidates: int = Field(default=6, ge=1, le=6)
+    script_hook_candidates: int = Field(default=3, ge=1, le=6)
 
     # -- Asset fetch --------------------------------------------------------
     asset_max_per_scene: int = Field(default=3, ge=1, le=6)
@@ -129,7 +129,8 @@ class Settings(BaseSettings):
     asset_nasa_limit: int = Field(default=6, ge=1, le=20)
     asset_entity_limit: int = Field(default=5, ge=0, le=20)
     asset_thumb_width: int = Field(default=1280, gt=0)
-    asset_min_score: int = Field(default=3, ge=1, le=9)
+    asset_min_score: int = Field(default=5, ge=1, le=9)
+    asset_judge: str = Field(default="d3", validation_alias=AliasChoices("ASSET_JUDGE"))
 
     # -- Caching / output ---------------------------------------------------
     cache_enabled: bool = Field(default=True)
@@ -137,6 +138,61 @@ class Settings(BaseSettings):
     catalog_path: Path = Field(default=Path(".cache/videoai/catalog.sqlite3"))
     output_dir: Path = Field(default=Path("output"))
     log_level: str = Field(default="INFO")
+
+    # -- Voice --------------------------------------------------------------
+    voice_prompt: Path = Field(
+        default=Path("assets/voice/voice_prompt_short.wav"),
+        validation_alias=AliasChoices("VIDEOAI_VOICE_PROMPT", "VOICE_PROMPT"),
+    )
+    # Chatterbox expressiveness: 0 = a flat, newsread-ish read; ~0.4 lands a
+    # dramatic storyteller delivery without shouting. Tune in 0.1 steps.
+    voice_exaggeration: float = Field(default=0.4, ge=0.0, le=1.0)
+    voice_cfg_weight: float = Field(default=0.4, ge=0.0, le=1.0)
+    # Silence between sentences inside one line, and between script lines
+    voice_sentence_gap: float = Field(default=0.24, ge=0.0, le=2.0)
+    voice_line_gap: float = Field(default=0.35, ge=0.0, le=2.0)
+
+    # -- Vision / subtitles ---------------------------------------------------
+    vision_model: str = Field(
+        default="qwen3-vl:2b",
+        validation_alias=AliasChoices("VIDEOAI_VISION_MODEL", "VISION_MODEL"),
+    )
+    vision_decision_model: str = Field(
+        default="d3:2b",
+        validation_alias=AliasChoices("VIDEOAI_VISION_DECISION_MODEL", "VISION_DECISION_MODEL"),
+    )
+    subtitle_whisper_model: str = Field(
+        default="base.en",
+        validation_alias=AliasChoices(
+            "VIDEOAI_SUBTITLE_WHISPER_MODEL", "SUBTITLE_WHISPER_MODEL"
+        ),
+    )
+
+    # -- YouTube publishing ----------------------------------------------
+    youtube_client_secrets_path: Path = Field(
+        default=Path("client_secrets.json"),
+        validation_alias=AliasChoices("YOUTUBE_CLIENT_SECRETS"),
+    )
+    youtube_token_path: Path = Field(
+        default=Path("token.json"),
+        validation_alias=AliasChoices("YOUTUBE_TOKEN"),
+    )
+    youtube_privacy_status: str = Field(
+        default="private",
+        validation_alias=AliasChoices("YOUTUBE_PRIVACY_STATUS"),
+    )
+    youtube_redirect_port: int = Field(
+        default=8080, gt=0, le=65535,
+        validation_alias=AliasChoices("YOUTUBE_REDIRECT_PORT"),
+    )
+    youtube_category_id: str = Field(
+        default="22",
+        validation_alias=AliasChoices("YOUTUBE_CATEGORY_ID"),
+    )
+    auto_publish: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("AUTO_PUBLISH"),
+    )
 
     @property
     def groq_api_keys(self) -> list[str]:

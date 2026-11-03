@@ -6,8 +6,6 @@ import logging
 import re
 from dataclasses import dataclass
 
-from pydantic import BaseModel
-
 from core.models import (
     VisualAsset,
 )
@@ -27,34 +25,6 @@ _MAGICAL_WORDS = (
 )
 
 _STOPWORDS = frozenset(_MAGICAL_WORDS.split())
-
-CHOOSER_SYSTEM = """You are the image editor who makes the final pick for
-one narration moment of a video. One image is selected from the candidates
-by reading the file titles and descriptions alone.
-
-Pick the candidate that actually shows the SUBJECT OF THE QUERY as part of
-the narration moment. Reject everything else. REJECT (empty file) when:
-- the image shows a DIFFERENT thing than the query subject — especially:
-  for a person query where the description does not clearly identify the
-  SAME person (right name AND era/profession, not just a shared name),
-  or 'no caption' portraits whose identity cannot be verified;
-- a group of people, a conference, a portrait of somebody else, when the
-  subject is a thing these people invented, used or worked on;
-- the image is mostly TEXT — poster, cover, infographic, diagram, chart,
-  comic, screenshot, map, scanned page, award banner;
-- it is a grave, tomb or cemetery shot when the subject is a living
-  contribution, or any image that would look silly or tone-breaking on
-  a serious narration channel (gags, parody, tongue-out poses);
-- the connection is only a shared word, not the same referent.
-
-When several qualify, prefer the one showing the subject itself, clearly,
-in a photograph or faithful artistic depiction, with no text overlay.
-"""
-
-class PickSchema(BaseModel):
-    """The chooser's verdict: one file title, or "" to reject all."""
-
-    file: str = ""
 
 
 _ALLOWED_MIME = frozenset(
@@ -244,6 +214,7 @@ class AssetOptions:
     """Tuning knobs for :class:`AssetResearchBlock`."""
 
     assets_max: int = 3
+    judge: str = "d3"
     words_per_asset: int = 18
     search_limit: int = 12
     nasa_limit: int = 6

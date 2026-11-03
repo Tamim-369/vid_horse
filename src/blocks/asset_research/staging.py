@@ -76,17 +76,9 @@ class StagingMixin:
                 chosen.append(asset)
 
         searches: list[str] = []
-        if len(chosen) < target and self._shelf is not None:
-            # local shelf first: approved-by-us candidates from earlier
-            # research passes, matched by embedding and re-verified with
-            # the same CLIP gates — zero network when the shelf is warm
-            self._route_shelf(query or brief.title, text_scene, chosen, target, used)
-
         if len(chosen) < target and self._yandex is not None:
-            # Yandex Images: unlimited search with vision model verification.
-            # The routed agent queries lead; the text-mine query trails only
-            # as a fallback (it is a noun slice, weaker than the router's
-            # scene-aware phrase)
+            # Yandex Images (search engine) is the primary source: unlimited
+            # search, no API keys, no rate limits like Wikipedia/NASA.
             routed = [item.query for item in (actions or [])]
             for candidate in [*routed, query, brief.title]:
                 candidate = (candidate or "").strip()
@@ -94,8 +86,13 @@ class StagingMixin:
                     continue
                 self._route_yandex(candidate, text_scene, chosen, target, used)
 
+        if len(chosen) < target and self._shelf is not None:
+            # local shelf: approved-by-us candidates from earlier research
+            # passes — zero network when the shelf is warm
+            self._route_shelf(query or brief.title, text_scene, chosen, target, used)
+
         if len(chosen) < target:  # fallback: mine the scene's own phrases
-            phrases = [phrase.lower() for phrase in proper_phrases(scene.visual)]
+            phrases = [phrase.lower() for phrase in proper_phrases(scene.narration)]
             searches = [query] if query else []
             for phrase in phrases:
                 if len(searches) >= 2:
@@ -137,9 +134,12 @@ class StagingMixin:
         # One score for every pick on one scale: what the shot depicts
         # matters across paths (routed, entity, filler), not just inside
         # whichever candidate pool it came from.
-        if len(chosen) < self._MIN_TOPIC_ASSETS:
+        # Deep search is for scenes that route/target more than the normal
+        # quota; a one-asset scene with its asset must not pay for it
+        _judge = getattr(self._options, "judge", "vision")
+        if _judge != "d3" and len(chosen) < min(self._MIN_TOPIC_ASSETS, target):
             self._deep_search(text_scene, brief, query, chosen, used)
-        if self._clip is not None and self._http is not None and chosen:
+        if _judge != "d3" and self._clip is not None and self._http is not None and chosen:
             with ThreadPoolExecutor(max_workers=computing.clip_workers()) as pool:
                 results = list(
                     pool.map(
@@ -177,18 +177,28 @@ class StagingMixin:
             if healthy:
                 best_sim = max(a.clip_score or 0.0 for a in healthy)
                 healthy = [a for a in healthy if (a.clip_score or 0.0) >= best_sim - 0.12]
-            else:
-                # nothing healthy: AIR NOTHING — a junk pile must never
-                # leak out as served scenes
-                chosen = []
+            # the filter's verdict must actually replace the picks below
+            # the floor were staged before scoring and only this pass can
+            # veto them; an empty healthy list means AIR NOTHING (a junk
+            # pile must never leak out as served scenes)
+            chosen = healthy
 
         # the vision model is the judge what CLIP could not confidently
         # read: each marginal pick is looked at in actual pixels. A veto
         # opens the slot for the deeper re-search underneath
-        if self._vision is not None and chosen:
+        _j = getattr(self._options, "judge", "vision")
+        if _j == "d3" and self._vision is not None and chosen:
+            kept = []
+            for asset in chosen:
+                relevant, _prob = self._vision.d3_judge(asset.caption or asset.file, text_scene)
+                if relevant:
+                    kept.append(asset)
+            chosen = kept[:target]
+        elif self._vision is not None and chosen:
             certain = [a for a in chosen if not self._vision_policy(a.clip_score)]
             marginal = [a for a in chosen if self._vision_policy(a.clip_score)]
             visioned: list[VisualAsset] = []
+            rescued: list[VisualAsset] = []
             for asset in marginal:
                 info = {
                     "url": asset.url,
@@ -204,9 +214,15 @@ class StagingMixin:
                     asset.vision_confidence = info.get("_vision_confidence")
                     asset.vision_reason = info.get("_vision_reason")
                 else:
-                    # the model rejected it: search for something better
-                    self._deep_search(text_scene, brief, query, chosen, used)
-            chosen = certain + visioned
+                    # the model rejected it: search for something better.
+                    # _deep_search FILLS the list it is handed; its fresh
+                    # picks must survive the rebind below or the rescue
+                    # silently evaporates
+                    search_list = certain + visioned + rescued
+                    before = len(search_list)
+                    self._deep_search(text_scene, brief, query, search_list, used)
+                    rescued.extend(search_list[before:])
+            chosen = certain + visioned + rescued
             if len(chosen) > target:
                 chosen = chosen[:target]
         self._timing_for(chosen, scene.narration)
@@ -377,31 +393,6 @@ class StagingMixin:
                         else:
                             info["_clip_score"] = similarity
                     self._take(info, chosen, used)
-
-    def _rescue_visuals(
-        self, text_scene: str, topic: str, used: _Claims
-    ) -> list[VisualAsset]:
-        """Last-hope search under the scene's topic name, CLIP-checked."""
-
-        rescue: list[VisualAsset] = []
-        for score, info in self._search_ranked(topic, text_scene):
-            if score < self._options.min_score:
-                break
-            similarity = None
-            if self._clip is not None and self._http is not None:
-                similarity, collage_like, texty = self._clip.analyze(
-                    text_scene, info.get("thumburl") or info.get("url"), self._http
-                )
-                if collage_like or texty:
-                    continue
-                if similarity is not None and similarity < _CLIP_FLOOR:
-                    continue
-                else:
-                    info["_clip_score"] = similarity
-            self._take(info, rescue, used)
-            if len(rescue) >= 2:
-                break
-        return rescue
 
     def _timing_for(self, chosen: list[VisualAsset], narration: str) -> None:
         """Pin each visual to its narration trigger; order and stagger the rest."""

@@ -46,3 +46,5 @@ output/
 .vscode/
 *.swp
 .DS_Store
+token.json
+client_secrets.json

@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from pathlib import Path
+
+import yaml
 
 from catalog.store import TheoryCatalog
 from config.settings import Settings, get_settings
@@ -12,47 +15,16 @@ from core.models import PopularityTier, SourceTheory, Theory, TheorySource
 from providers.sources.base import SourceConnector
 from utils.text import slugify
 
-# Curated niche packs: what the channel covers beyond the space/conspiracy
-# default. Each niche is (extra Wikipedia categories, seed pages) — every
-# category was verified to exist and to produce real horror-science /
-# unsolved-phenomena articles, not ghost stories or random junk.
-NICHES: dict[str, dict[str, tuple[str, ...]]] = {
-    "experiments": {
-        "categories": (
-            "Human subject research",
-            "Mind control",
-            "Nazi human subject research",
-            "Japanese human subject research",
-            "Eugenics",
-        ),
-        "seed_pages": (
-            "Project MKUltra",
-            "Unit 731",
-            "Tuskegee syphilis experiment",
-            "Guatemala syphilis experiments",
-            "Human radiation experiments",
-            "Edgewood Arsenal human experiments",
-            "Project 112",
-        ),
-    },
-    "mysteries": {
-        "categories": (
-            "Cryptids",
-            "Paranormal triangles",
-            "Unidentified flying objects",
-            "Hoaxes",
-        ),
-        "seed_pages": (
-            "Bermuda Triangle",
-            "Dyatlov Pass incident",
-            "Voynich manuscript",
-            "Devil's Sea",
-        ),
-    },
-}
-
 _META_PREFIXES = ("list of ", "outline of ", "index of ", "category: ", "bibliography of ")
 _META_NAMES = {"conspiracy theory", "conspiracy theories"}
+
+# Load niche config
+_NICHES_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "niches.yaml"
+with _NICHES_CONFIG_PATH.open() as f:
+    _NICHES_CONFIG = yaml.safe_load(f)
+
+NICHES = _NICHES_CONFIG["niches"]
+DEFAULT_ACTIVE_NICHES = _NICHES_CONFIG.get("active_niches", list(NICHES.keys()))
 
 
 @dataclass
@@ -62,6 +34,7 @@ class DiscoveryReport:
     discovered: int = 0
     skipped: int = 0
     per_source: dict[str, int] = field(default_factory=dict)
+    per_niche: dict[str, int] = field(default_factory=dict)
 
 
 def is_meta(name: str) -> bool:
@@ -109,27 +82,113 @@ def to_theory(hit: SourceTheory, now: datetime, settings: Settings) -> Theory:
     )
 
 
+def _build_connectors_for_niche(niche_name: str, settings: Settings) -> list[SourceConnector]:
+    """Build source connectors configured for a specific niche."""
+
+    from providers.sources.factory import build_connectors
+
+    niche = NICHES[niche_name]
+    # Temporarily override settings for this niche
+    original_categories = settings.discovery_categories
+    original_seed_pages = settings.discovery_seed_pages
+    original_fandom_wikis = settings.fandom_wikis
+
+    settings.discovery_categories = list(niche["categories"])
+    settings.discovery_seed_pages = list(niche["seed_pages"])
+    settings.fandom_wikis = list(niche["fandom_wikis"])
+
+    try:
+        connectors = build_connectors(settings)
+    finally:
+        # Restore original settings
+        settings.discovery_categories = original_categories
+        settings.discovery_seed_pages = original_seed_pages
+        settings.fandom_wikis = original_fandom_wikis
+
+    return connectors
+
+
 def discover(
     catalog: TheoryCatalog,
-    connectors: Iterable[SourceConnector],
+    connectors: Iterable[SourceConnector] | None = None,
+    *,
+    limit: int | None = None,
+    with_metrics: bool = True,
+    settings: Settings | None = None,
+    niches: list[str] | None = None,
+) -> DiscoveryReport:
+    """Run discovery for specified niches and merge results into ``catalog``.
+
+    If ``connectors`` is provided, uses those directly (backward compat).
+    Otherwise, builds connectors per niche from the niche config.
+    """
+
+    settings = settings or get_settings()
+    niches = niches or DEFAULT_ACTIVE_NICHES
+    now = datetime.now(UTC)
+    report = DiscoveryReport()
+
+    if connectors is not None:
+        # Legacy path: use provided connectors directly
+        for connector in connectors:
+            for hit in connector.discover(limit=limit, with_metrics=with_metrics):
+                if is_meta(hit.name):
+                    report.skipped += 1
+                    continue
+                catalog.upsert(to_theory(hit, now, settings))
+                report.discovered += 1
+                report.per_source[hit.source] = report.per_source.get(hit.source, 0) + 1
+        return report
+
+    # Multi-niche path
+    for niche_name in niches:
+        if niche_name not in NICHES:
+            continue
+        niche_connectors = _build_connectors_for_niche(niche_name, settings)
+        niche_discovered = 0
+
+        for connector in niche_connectors:
+            for hit in connector.discover(limit=limit, with_metrics=with_metrics):
+                if is_meta(hit.name):
+                    report.skipped += 1
+                    continue
+                catalog.upsert(to_theory(hit, now, settings))
+                report.discovered += 1
+                niche_discovered += 1
+                report.per_source[hit.source] = report.per_source.get(hit.source, 0) + 1
+
+        report.per_niche[niche_name] = niche_discovered
+
+    return report
+
+
+def discover_niche(
+    catalog: TheoryCatalog,
+    niche_name: str,
     *,
     limit: int | None = None,
     with_metrics: bool = True,
     settings: Settings | None = None,
 ) -> DiscoveryReport:
-    """Run every connector and merge results into ``catalog``."""
+    """Discover theories for a single niche."""
 
-    settings = settings or get_settings()
-    now = datetime.now(UTC)
-    report = DiscoveryReport()
+    return discover(
+        catalog,
+        None,
+        limit=limit,
+        with_metrics=with_metrics,
+        settings=settings,
+        niches=[niche_name],
+    )
 
-    for connector in connectors:
-        for hit in connector.discover(limit=limit, with_metrics=with_metrics):
-            if is_meta(hit.name):
-                report.skipped += 1
-                continue
-            catalog.upsert(to_theory(hit, now, settings))
-            report.discovered += 1
-            report.per_source[hit.source] = report.per_source.get(hit.source, 0) + 1
 
-    return report
+def list_niches() -> dict[str, dict]:
+    """Return all configured niche definitions."""
+
+    return NICHES
+
+
+def list_active_niches() -> list[str]:
+    """Return the list of niches active by default."""
+
+    return DEFAULT_ACTIVE_NICHES

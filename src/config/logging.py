@@ -22,6 +22,8 @@ def setup_logging(level: str = "INFO") -> None:
         datefmt="[%X]",
         handlers=[RichHandler(rich_tracebacks=True, show_path=False)],
     )
-    for noisy in ("httpx", "httpcore", "openai", "urllib3"):
+    for noisy in ("httpx", "httpcore", "openai", "urllib3", "diffusers"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
+    import warnings
+    warnings.filterwarnings("ignore", category=FutureWarning, module="diffusers")
     _CONFIGURED = True

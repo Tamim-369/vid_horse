@@ -80,7 +80,29 @@ def _fallback_intents(script: VideoScript, index: int) -> SceneIntents:
 
     narration = script.hook if index < 0 else script.scenes[index].narration
     words = [w.strip(".,;:!?\u2014\"'") for w in narration.split()]
-    subject = " ".join(words[:3]) or "documentary scene"
+    from blocks.asset_research.quality import _STOPWORDS_GATE, _VISUAL_FORM_WORDS
+    # prefer capitalized words (proper nouns) first, then content words
+    caps = [
+        w for w in words
+        if w and w[0].isupper() and len(w) >= 3
+        and w.lower() not in _STOPWORDS_GATE
+    ]
+    content = [
+        w for w in words
+        if w.lower() not in _STOPWORDS_GATE
+        and w.lower() not in _VISUAL_FORM_WORDS
+        and len(w) >= 3
+    ]
+    # deduplicate while preserving order
+    seen = set()
+    picked = []
+    for w in caps + content:
+        if w.lower() not in seen:
+            seen.add(w.lower())
+            picked.append(w)
+            if len(picked) >= 3:
+                break
+    subject = " ".join(picked[:3]) or "documentary scene"
     return SceneIntents(
         scene_index=index,
         subjects=[Subject(subject=subject[:40], intent=subject[:60], trigger="")],
@@ -96,9 +118,10 @@ def _fallback_queries(intent: SceneIntents) -> SceneQueries:
     )
     queries: list[SceneQuery] = []
     for subject in intent.subjects:
-        name = " ".join(
-            re.sub(r"[^a-z0-9 ]", " ", subject.subject.lower()).split()[:4]
-        )
+        from blocks.asset_research.quality import _VISUAL_FORM_WORDS
+        words = re.sub(r"[^a-z0-9 ]", " ", subject.subject.lower()).split()
+        words = [w for w in words if w not in _VISUAL_FORM_WORDS]
+        name = " ".join(words[:4])
         if not name:
             continue
         source: AssetSource = (
@@ -143,7 +166,7 @@ def _one_scene_intents(
             messages,
             StrictSceneIntents,
             quality=lambda parsed: _scene_intent_quality(index, parsed, narrations),
-            attempts=3,
+            attempts=1,
             race=0,
             temperature=_TEMPERATURE,
             label=f"scene {index} direction",
@@ -190,7 +213,7 @@ def _one_scene_queries(
             messages,
             StrictSceneQueries,
             quality=lambda parsed: _scene_query_quality(intent.scene_index, parsed, narrations),
-            attempts=3,
+            attempts=1,
             race=0,
             temperature=_TEMPERATURE,
             label=f"scene {intent.scene_index} routing",
@@ -198,10 +221,15 @@ def _one_scene_queries(
     except BlockError as exc:
         logger.warning("scene %d routing fell back: %s", intent.scene_index, exc)
         return _fallback_queries(intent)
+    from blocks.asset_research.quality import _VISUAL_FORM_WORDS
+    good_queries = [
+        SceneQuery(intent=q.intent, source=q.source, query=q.query, trigger=q.trigger)
+        for q in answer.queries
+        if not any(w in _VISUAL_FORM_WORDS for w in q.query.lower().split())
+    ]
+    if not good_queries:
+        return _fallback_queries(intent)
     return SceneQueries(
         scene_index=intent.scene_index,
-        queries=[
-            SceneQuery(intent=q.intent, source=q.source, query=q.query, trigger=q.trigger)
-            for q in answer.queries
-        ],
+        queries=good_queries,
     )

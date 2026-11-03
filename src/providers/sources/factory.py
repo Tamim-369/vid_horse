@@ -22,19 +22,28 @@ def build_connectors(
     settings = settings or get_settings()
     http = client or build_http_client(settings)
 
+    categories = tuple(settings.discovery_categories)
+    seed_pages = tuple(settings.discovery_seed_pages)
+
     connectors: list[SourceConnector] = [
         WikipediaConnector(
             client=http,
             language=settings.wikipedia_language,
-            categories=tuple(settings.discovery_categories),
-            seed_pages=tuple(settings.discovery_seed_pages),
+            categories=categories,
+            seed_pages=seed_pages,
             delay=settings.request_delay,
             pageviews_months=settings.pageviews_months,
         ),
         WikidataConnector(client=http, delay=settings.request_delay),
     ]
     connectors.extend(
-        FandomConnector(client=http, wiki=wiki, delay=settings.request_delay)
+        FandomConnector(
+            client=http,
+            wiki=wiki,
+            categories=categories,
+            seed_pages=seed_pages,
+            delay=settings.request_delay,
+        )
         for wiki in settings.fandom_wikis
     )
     connectors.append(SpaceConnector())

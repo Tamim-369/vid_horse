@@ -83,11 +83,34 @@ class VisualDirectorBlock:
                 )
                 for index, narration, visual in jobs
             ]
-            scenes = [future.result() for future in futures]
-        scenes = [
-            scene if scene.subjects else _fallback_intents(script, scene.scene_index)
-            for scene in scenes
-        ]
+            scenes = []
+            for future in futures:
+                try:
+                    scenes.append(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("visual direction failed: %s", exc)
+                    scenes.append(None)
+        # filter out subjects that are visual forms or filler
+        from blocks.asset_research.quality import _STOPWORDS_GATE, _VISUAL_FORM_WORDS
+        _BAD_SUBJECTS = _VISUAL_FORM_WORDS | {"according", "claims", "believers", "theory", "story"}
+        filtered_scenes = []
+        for scene in scenes:
+            if scene is None or not getattr(scene, "subjects", None):
+                filtered_scenes.append(_fallback_intents(script, 0))
+                continue
+            good_subjects = [
+                subj for subj in scene.subjects
+                if not any(w in _BAD_SUBJECTS for w in subj.subject.lower().split())
+                and any(
+                    w not in _STOPWORDS_GATE and len(w) >= 3
+                    for w in subj.subject.lower().split()
+                )
+            ]
+            if not good_subjects:
+                filtered_scenes.append(_fallback_intents(script, 0))
+            else:
+                filtered_scenes.append(scene.model_copy(update={"subjects": good_subjects}))
+        scenes = filtered_scenes
         return IntentPack(
             slug=theory.slug,
             topic=theory.name,
@@ -127,10 +150,16 @@ class QueryBuilderBlock:
                 )
                 for intent in intents.scenes
             ]
-            scenes = [future.result() for future in futures]
+            scenes = []
+            for future in futures:
+                try:
+                    scenes.append(future.result())
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("query routing failed: %s", exc)
+                    scenes.append(None)
         return QueryPack(
             slug=intents.slug,
             topic=intents.topic,
-            scenes=_repair_queries(scenes),
+            scenes=_repair_queries([sc for sc in scenes if sc is not None]),
             fiction=intents.fiction,
         )

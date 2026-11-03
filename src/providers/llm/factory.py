@@ -11,6 +11,7 @@ from collections.abc import Callable
 from config.settings import Settings, get_settings
 from core.errors import ConfigurationError
 from providers.llm.base import BaseLLMProvider
+from providers.llm.fallback import FallbackLLMProvider
 from providers.llm.groq import GroqProvider
 from providers.llm.ollama import OllamaProvider
 from providers.llm.ollama_cloud import OllamaCloudProvider
@@ -63,7 +64,7 @@ def _build_ollama(settings: Settings) -> BaseLLMProvider:
     )
 
 
-def _build_groq(settings: Settings) -> BaseLLMProvider:
+def _build_groq_chain(settings: Settings) -> BaseLLMProvider:
     keys = settings.groq_api_keys
     if not keys:
         raise ConfigurationError(
@@ -71,7 +72,7 @@ def _build_groq(settings: Settings) -> BaseLLMProvider:
             "numbered GROQ_API_KEY_FIRST..GROQ_API_KEY_FOURTH (pool mode)."
         )
     cache = DiskCache(settings.cache_dir, enabled=settings.cache_enabled)
-    return GroqProvider(
+    primary = GroqProvider(
         model=settings.groq_model,
         api_keys=keys,
         base_url=settings.groq_base_url,
@@ -81,6 +82,45 @@ def _build_groq(settings: Settings) -> BaseLLMProvider:
         max_retries=settings.max_retries,
         cache=cache,
     )
+    # Fall back to Ollama Cloud when all Groq keys are exhausted
+    api_key = settings.ollama_cloud_api_key
+    if api_key:
+        cloud_models = [m.strip() for m in settings.ollama_cloud_models.split(",") if m.strip()]
+        if cloud_models:
+            # local fallback for when all cloud models are exhausted
+            local_fallback = None
+            if settings.ollama_cloud_fallback_to_local:
+                local_fallback = OllamaProvider(
+                    model=settings.ollama_model,
+                    host=settings.ollama_host,
+                    num_ctx=settings.ollama_num_ctx,
+                    temperature=settings.ollama_temperature,
+                    max_tokens=settings.ollama_num_predict,
+                    repeat_penalty=settings.ollama_repeat_penalty,
+                    repeat_last_n=settings.ollama_repeat_last_n,
+                    keep_alive=settings.ollama_keep_alive,
+                    timeout=settings.ollama_timeout,
+                    max_retries=settings.max_retries,
+                    cache=cache,
+                )
+            fallback = OllamaCloudProvider(
+                model=cloud_models[0],
+                api_key=api_key,
+                base_url=settings.ollama_cloud_host,
+                models=cloud_models,
+                temperature=settings.ollama_cloud_temperature,
+                max_tokens=settings.ollama_cloud_max_tokens,
+                timeout=settings.ollama_cloud_timeout,
+                max_retries=settings.max_retries,
+                cache=cache,
+                local_fallback=local_fallback,
+            )
+            return FallbackLLMProvider(
+                primary=fallback,   # ollama cloud first
+                fallback=primary,   # groq key loop as fallback
+                cache=cache,
+            )
+    return primary
 
 
 def _build_ollama_cloud(settings: Settings) -> BaseLLMProvider:
@@ -127,5 +167,5 @@ def _build_ollama_cloud(settings: Settings) -> BaseLLMProvider:
 
 
 register_provider("ollama", _build_ollama)
-register_provider("groq", _build_groq)
+register_provider("groq", _build_groq_chain)
 register_provider("ollama-cloud", _build_ollama_cloud)

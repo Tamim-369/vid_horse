@@ -79,11 +79,18 @@ class ContentPipeline:
             raise NotImplementedError("No asset block configured for this pipeline.")
         queries = None
         if self._asset_direction is not None and self._query_routing is not None:
-            intents = self._asset_direction.run(theory, script)
-            queries = self._query_routing.run(brief, intents)
-            if trace is not None:
-                trace["direction.json"] = intents.model_dump_json(indent=2)
-                trace["queries.json"] = queries.model_dump_json(indent=2)
+            try:
+                intents = self._asset_direction.run(theory, script)
+                queries = self._query_routing.run(brief, intents)
+                if trace is not None:
+                    trace["direction.json"] = intents.model_dump_json(indent=2)
+                    trace["queries.json"] = queries.model_dump_json(indent=2)
+            except Exception as exc:  # noqa: BLE001
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Visual director failed; using fallback: %s", exc
+                )
+                queries = None
         return self._asset_research.run(theory, brief, script, queries)
 
     def run(

@@ -1,0 +1,309 @@
+# Niche profiles for ash_speaks discovery.
+# Each niche defines where to crawl and what visual concepts to expect.
+# Add new niches here — no Python changes needed.
+
+niches:
+  conspiracy-theories:
+    label: "Conspiracy Theories"
+    description: "Government cover-ups, secret projects, hidden history"
+    categories:
+      - "Conspiracy theories"
+      - "Conspiracy theories by subject"
+      - "Fraternity conspiracy theories"
+    seed_pages:
+      - "List of conspiracy theories"
+      - "Category:Conspiracy theories"
+    fandom_wikis:
+      - "conspiracy.fandom.com"
+    visual_concepts:
+      - "government building"
+      - "classified document"
+      - "secret facility"
+      - "whistleblower"
+      - "cover-up"
+      - "experiment"
+    asset_sources: ["commons", "nasa", "openverse", "wikidata", "fandom", "wikipedia"]
+    min_score: 3
+    priority: 1
+
+  cryptids-folklore:
+    label: "Cryptids & Folklore"
+    description: "Legendary creatures, mythical beasts, regional monsters"
+    categories:
+      - "Cryptids"
+      - "Legendary creatures"
+      - "Folklore by region"
+      - "Mythological creatures"
+    seed_pages:
+      - "List of cryptids"
+      - "List of legendary creatures"
+      - "Category:Cryptids"
+    fandom_wikis:
+      - "cryptid.fandom.com"
+      - "monster.fandom.com"
+    visual_concepts:
+      - "creature"
+      - "monster"
+      - "forest"
+      - "lake"
+      - "wilderness"
+      - "footprint"
+      - "silhouette"
+    asset_sources: ["commons", "openverse", "fandom", "wikidata", "wikipedia"]
+    min_score: 3
+    priority: 2
+
+  historical-mysteries:
+    label: "Historical Mysteries & Archaeology"
+    description: "Lost civilizations, unexplained artifacts, ancient enigmas"
+    categories:
+      - "Historical mysteries"
+      - "Archaeological mysteries"
+      - "Lost cities"
+      - "Out-of-place artifacts"
+      - "Ancient mysteries"
+    seed_pages:
+      - "List of historical mysteries"
+      - "List of lost cities"
+      - "Category:Archaeological mysteries"
+    fandom_wikis:
+      - "ancient-mysteries.fandom.com"
+      - "lost-civilizations.fandom.com"
+    visual_concepts:
+      - "ruins"
+      - "artifact"
+      - "ancient site"
+      - "archaeological excavation"
+      - "megalith"
+      - "temple"
+      - "manuscript"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia", "nasa"]
+    min_score: 3
+    priority: 3
+
+  abandoned-places:
+    label: "Abandoned Places & Urbex"
+    description: "Ghost towns, derelict buildings, forgotten infrastructure"
+    categories:
+      - "Ghost towns"
+      - "Abandoned buildings"
+      - "Abandoned places by country"
+      - "Urban exploration"
+    seed_pages:
+      - "List of ghost towns"
+      - "Category:Abandoned places"
+      - "Urban exploration"
+    fandom_wikis:
+      - "abandoned-places.fandom.com"
+      - "urbex.fandom.com"
+    visual_concepts:
+      - "abandoned building"
+      - "ruins"
+      - "ghost town"
+      - "derelict"
+      - "decay"
+      - "peeling paint"
+      - "overgrown"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia"]
+    min_score: 2
+    priority: 4
+
+  ufo-uap:
+    label: "UFO / UAP Phenomena"
+    description: "Sightings, encounters, government programs, disclosure"
+    categories:
+      - "Ufology"
+      - "Unidentified flying objects"
+      - "Extraterrestrial life"
+      - "Close encounters"
+    seed_pages:
+      - "List of reported UFO sightings"
+      - "Category:Ufology"
+      - "Project Blue Book"
+    fandom_wikis:
+      - "ufo.fandom.com"
+      - "aliens.fandom.com"
+    visual_concepts:
+      - "UFO"
+      - "flying saucer"
+      - "sky"
+      - "radar"
+      - "military base"
+      - "night sky"
+      - "light in sky"
+    asset_sources: ["commons", "nasa", "openverse", "wikidata", "fandom", "wikipedia"]
+    min_score: 3
+    priority: 5
+
+  lost-media:
+    label: "Lost Media & Forgotten History"
+    description: "Lost films, missing episodes, erased recordings, recovered artifacts"
+    categories:
+      - "Lost films"
+      - "Lost television episodes"
+      - "Lost recordings"
+      - "Missing media"
+    seed_pages:
+      - "List of lost films"
+      - "List of lost television episodes"
+      - "Category:Lost media"
+    fandom_wikis:
+      - "lost-media.fandom.com"
+      - "lostmedia.fandom.com"
+    visual_concepts:
+      - "film reel"
+      - "VHS tape"
+      - "television"
+      - "broadcast"
+      - "archive"
+      - "recording"
+      - "missing poster"
+    asset_sources: ["commons", "openverse", "fandom", "wikidata", "wikipedia"]
+    min_score: 3
+    priority: 6
+
+  cold-cases:
+    label: "Cold Cases & True Crime Mysteries"
+    description: "Unsolved disappearances, murders, mysterious deaths"
+    categories:
+      - "Cold cases"
+      - "Missing persons cases"
+      - "Unsolved murders"
+      - "Mysterious disappearances"
+    seed_pages:
+      - "List of unsolved murders"
+      - "List of missing persons"
+      - "Category:Cold cases"
+    fandom_wikis:
+      - "coldcase.fandom.com"
+      - "true-crime.fandom.com"
+    visual_concepts:
+      - "police sketch"
+      - "missing person poster"
+      - "location"
+      - "evidence"
+      - "case file"
+      - "timeline"
+      - "map"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia"]
+    min_score: 4
+    priority: 7
+
+  paranormal-haunted:
+    label: "Paranormal & Haunted Locations"
+    description: "Ghost stories, haunted buildings, poltergeists, supernatural events"
+    categories:
+      - "Haunted locations"
+      - "Ghost stories"
+      - "Paranormal"
+      - "Poltergeist"
+    seed_pages:
+      - "List of reportedly haunted locations"
+      - "Category:Haunted places"
+      - "Paranormal"
+    fandom_wikis:
+      - "ghosts.fandom.com"
+      - "haunted-places.fandom.com"
+    visual_concepts:
+      - "haunted house"
+      - "cemetery"
+      - "old building"
+      - "fog"
+      - "night"
+      - "shadow"
+      - "apparition"
+    asset_sources: ["commons", "openverse", "fandom", "wikidata", "wikipedia"]
+    min_score: 3
+    priority: 8
+
+  secret-societies:
+    label: "Secret Societies & Hidden Orders"
+    description: "Freemasons, Illuminati, occult groups, esoteric organizations"
+    categories:
+      - "Secret societies"
+      - "Fraternal organizations"
+      - "Esoteric organizations"
+      - "Occult organizations"
+    seed_pages:
+      - "List of secret societies"
+      - "Category:Secret societies"
+      - "Illuminati"
+    fandom_wikis:
+      - "secret-societies.fandom.com"
+    visual_concepts:
+      - "symbol"
+      - "ritual"
+      - "temple"
+      - "meeting hall"
+      - "regalia"
+      - "seal"
+      - "manuscript"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia", "fandom"]
+    min_score: 3
+    priority: 9
+
+  ancient-technology:
+    label: "Ancient Technology & Anachronisms"
+    description: "OOPArts, ancient machines, advanced ancient knowledge"
+    categories:
+      - "Out-of-place artifacts"
+      - "Ancient technology"
+      - "Archaeoastronomy"
+      - "Ancient engineering"
+    seed_pages:
+      - "List of out-of-place artifacts"
+      - "Antikythera mechanism"
+      - "Category:Ancient technology"
+    fandom_wikis:
+      - "ancient-technology.fandom.com"
+    visual_concepts:
+      - "mechanism"
+      - "gear"
+      - "ancient device"
+      - "artifact"
+      - "engineering"
+      - "diagram"
+      - "reconstruction"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia", "nasa"]
+    min_score: 3
+    priority: 10
+
+  unsolved-codes:
+    label: "Unsolved Codes & Ciphers"
+    description: "Mysterious manuscripts, unbroken encryption, lost languages"
+    categories:
+      - "Unsolved ciphers"
+      - "Cipher manuscripts"
+      - "Undeciphered writing systems"
+      - "Cryptography"
+    seed_pages:
+      - "List of unsolved ciphers"
+      - "Voynich manuscript"
+      - "Category:Undeciphered writing"
+    fandom_wikis:
+      - "ciphers.fandom.com"
+    visual_concepts:
+      - "manuscript"
+      - "cipher"
+      - "code"
+      - "encryption"
+      - "symbol"
+      - "page"
+      - "diagram"
+    asset_sources: ["commons", "openverse", "wikidata", "wikipedia"]
+    min_score: 3
+    priority: 11
+
+# Default active niches (override via CLI --niche or env)
+active_niches:
+  - conspiracy-theories
+  - cryptids-folklore
+  - historical-mysteries
+  - abandoned-places
+  - ufo-uap
+  - lost-media
+  - cold-cases
+  - paranormal-haunted
+  - secret-societies
+  - ancient-technology
+  - unsolved-codes

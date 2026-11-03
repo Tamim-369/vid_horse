@@ -27,12 +27,13 @@ def _one_attempt(
     conversation: list[LLMMessage],
     parse: Callable[[str], object],
     temperature: float,
+    seed: int | None = None,
 ) -> tuple[object | None, Exception | None, str]:
     """One generate→parse shot: (result, None, raw) or (None, error, raw)."""
 
     raw = ""
     try:
-        raw = llm.complete(conversation, temperature=temperature)
+        raw = llm.complete(conversation, temperature=temperature, seed=seed)
     except LLMError as exc:
         return None, exc, raw
     try:
@@ -112,9 +113,14 @@ def generate_parsed[T](
             logger.info("Racing %d corrective %s attempts in parallel", wave, label)
             pool = ThreadPoolExecutor(max_workers=wave)
             try:
+                # one seed per wave member: distinct cache keys and truly
+                # independent samples; all-identical calls would just read
+                # the same cached text N times
                 futures = [
-                    pool.submit(_one_attempt, llm, conversation, parse, temperature)
-                    for _ in range(wave)
+                    pool.submit(
+                        _one_attempt, llm, conversation, parse, temperature, attempt_no
+                    )
+                    for attempt_no in range(1, wave + 1)
                 ]
                 for future in as_completed(futures):
                     try:
@@ -150,12 +156,22 @@ def _one_json_attempt[TModel: BaseModel](
     schema: type[TModel],
     temperature: float,
     quality: Callable[[TModel], list[str]] | None,
+    seed: int | None = None,
 ) -> tuple[TModel | None, Exception | None, str]:
     """One structured generate→parse→quality shot; errors carry the sample."""
 
     raw = ""
     try:
-        raw = llm.complete_structured(messages, schema, temperature=temperature)
+        raw = llm.complete_structured(
+            messages, schema, temperature=temperature, seed=seed
+        )
+        # normalize smart quotes to straight quotes so JSON parsing survives
+        raw = (
+            raw.replace("\u201c", '"')
+            .replace("\u201d", '"')
+            .replace("\u2018", "'")
+            .replace("\u2019", "'")
+        )
         answer = parse_json_as(raw, schema)
     except LLMError as exc:
         return None, exc, raw
@@ -169,7 +185,7 @@ def _one_json_attempt[TModel: BaseModel](
             invalidate = getattr(llm, "invalidate", None)
             if invalidate is not None:
                 try:
-                    invalidate(messages, temperature)
+                    invalidate(messages, temperature, schema)
                 except Exception as cache_exc:
                     logger.debug("Could not evict cached JSON: %s", cache_exc)
             return None, BlockError("; ".join(problems)), raw
@@ -224,11 +240,20 @@ def generate_json_parsed[TModel: BaseModel](
             ]
             pool = ThreadPoolExecutor(max_workers=wave)
             try:
+                # one seed per wave member: distinct cache keys and truly
+                # independent samples; all-identical calls would just read
+                # the same cached text N times
                 futures = [
                     pool.submit(
-                        _one_json_attempt, llm, correction, schema, temperature, quality
+                        _one_json_attempt,
+                        llm,
+                        correction,
+                        schema,
+                        temperature,
+                        quality,
+                        attempt_no,
                     )
-                    for _ in range(wave)
+                    for attempt_no in range(1, wave + 1)
                 ]
                 for future in as_completed(futures):
                     try:

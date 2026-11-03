@@ -64,6 +64,82 @@ _HOOK_CLICHES = (
     "fate haunts",
 )
 
+# two or more stacked capitals read as an acronym; the voice machine spells
+# them unpredictably and viewers hear letters, not words
+_ACRONYM = re.compile(r"\b[A-Z]{2,}(?:'s|s)?\b")
+# apostrophe punctuation is kept off the strip so contractions can be split
+# into their parts before the vocabulary check ("won't" -> "won" + "t")
+_HOOK_TOKEN_STRIP = ".,;:!?\"\u201c\u201d\u2014–—…"
+# below this Zipf frequency a word is rarer than one in ~a million English
+# words: exactly the range transliterated names land in (2.5 keeps everyday
+# narration words like "vanished" 3.7 or "surveillance" 4.2, while flagging
+# "beria" 2.0 or "timashuk" 0.0)
+_SPOKEN_ZIPF_FLOOR = 2.5
+
+
+def _non_english_char_problems(text: str) -> list[str]:
+    """Accented or non-Latin letters the voice model cannot pronounce."""
+
+    for char in text:
+        # ASCII letters are always safe; anything else (é, ł, я, 未) garbles
+        if char.isalpha() and ord(char) > 127:
+            return [
+                f'the hook uses a non-English character "{char}"; '
+                "write everything in plain English letters"
+            ]
+    return []
+
+
+def _acronym_problems(text: str) -> list[str]:
+    for match in _ACRONYM.finditer(text):
+        return [
+            f'the hook contains the acronym "{match.group(0)}"; spell it out '
+            "in common words or write around it entirely"
+        ]
+    return []
+
+
+def _vocabulary_problems(text: str) -> list[str]:
+    """Words too rare to be pronounced cleanly by the voice model.
+
+    A small local link between frequency and speakability: words outside
+    everyday English are overwhelmingly transliterated names ("timashuk",
+    "zhdanov") — exactly what Chatterbox slurs. Checked word-partwise so
+    contractions survive ("won't" -> "won" + "t").
+    """
+
+    flagged: list[str] = []
+    for token in text.split():
+        word = token.strip(_HOOK_TOKEN_STRIP).replace("\u2019", "'")
+        if not word or not all(part.isalpha() for part in word.split("'")):
+            continue
+        for part in word.lower().split("'"):
+            if len(part) < 2:
+                continue
+            if part in flagged:
+                continue
+            if _zipf(part) < _SPOKEN_ZIPF_FLOOR:
+                flagged.append(part)
+    if not flagged:
+        return []
+    quoted = ", ".join(f'"{word}"' for word in flagged[:3])
+    return [
+        f"the hook uses words the voice model cannot pronounce cleanly — "
+        f"{quoted}; replace them with common everyday words or write the "
+        "hook around what happened instead of the unusual name"
+    ]
+
+
+def _zipf(word: str) -> float:
+    """Word frequency on a 1-7 scale (0 = unknown); 0 when lexicon missing."""
+
+    try:
+        from wordfreq import zipf_frequency
+
+        return zipf_frequency(word, "en")
+    except ImportError:  # pragma: no cover - lexicon always ships with deps
+        return 7.0
+
 
 def hook_problems(hook: str) -> list[str]:
     """Return the reasons ``hook`` breaks the hook rules (empty if it is clean)."""
@@ -78,10 +154,17 @@ def hook_problems(hook: str) -> list[str]:
         problems.append(
             f"the hook is {len(words)} words; keep it to {_HOOK_MAX_WORDS} or fewer"
         )
+    if any(len(w.strip(".,")) > 12 for w in words):
+        problems.append("the hook contains a word too long to speak cleanly")
+    if any("-" in w for w in words):
+        problems.append("the hook contains a hyphenated word; use a simpler form")
     if any(char in text for char in _HOOK_BANNED_CHARS):
         problems.append(
             "the hook uses quotation marks or brackets, which do not survive voiceover"
         )
+    problems.extend(_acronym_problems(text))
+    problems.extend(_non_english_char_problems(text))
+    problems.extend(_vocabulary_problems(text))
     lowered = text.lower()
     for cliche in _HOOK_CLICHES:
         if cliche in lowered:

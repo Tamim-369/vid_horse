@@ -118,7 +118,7 @@ class GroqProvider(BaseLLMProvider):
                         # parallel waves share these keys; let a judged
                         # key rest briefly instead of walkers hammering it
                         with self._lock:
-                            self._cooldown[index] = time.monotonic() + 6.0
+                            self._cooldown[index] = time.monotonic() + 30.0
                         logger.warning("Groq key #%d rate-limited; cooling 6s", index + 1)
                     errors.append(f"key #{index + 1}: {exc}")
                     logger.warning("Groq key #%d failed (%s); rotating", index + 1, exc)

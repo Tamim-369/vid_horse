@@ -161,6 +161,8 @@ def speakable(text: str) -> str:
     """Expand numbers, years, symbols and designators into spoken words."""
 
     text = text.replace("‑", "-")
+    text = text.replace(":", ",").replace(";", ",").replace("—", ",")
+    text = text.replace("(", "").replace(")", "")
     text = re.sub(r"[₀-₉]", lambda m: _SUB.get(m.group(0), m.group(0)), text)
     for symbol, spoken in _SYMBOLS:
         text = text.replace(symbol, spoken)
@@ -174,6 +176,10 @@ def speakable(text: str) -> str:
     text = _LV_DASH.sub(r"\1 \2", text)
     text = _RAW_FORMULA_RE.sub(_raw_formula, text)
     text = _CARDINAL.sub(_expand, text)
+    # word-word hyphen chains garble the voice model ("thirty‑seven" reads
+    # as a single broken token); every remaining letter-hyphen-letter bond
+    # becomes the space Chatterbox pronounces reliably
+    text = re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text)
     text = re.sub(r"\s+", " ", text).strip()
     # Years read as fully separate words: "two thousand twenty two", never
     # hyphenated, since chained hyphen tokens garble the voice model.

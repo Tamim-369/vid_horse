@@ -7,7 +7,7 @@ a queue while keeping the box honest:
   profile-derived RAM/CPU weight fits inside what the machine reports as
   available *right now*, and a disk lane is free (HDD boxes get exactly
   one lane so parallel encodes never seek-thrash the platter);
-- every job is a plain `videoai` subprocess, so each one fails, logs and
+- every job is a plain `ash_speaks` subprocess, so each one fails, logs and
   resumes exactly like a manual run — nothing about the output or any
   quality gate changes with concurrency;
 - a watchdog samples process trees (/proc): logs utilization, kills a
@@ -428,7 +428,7 @@ def run_queue(
 
         def _spawn(label: str, args: list[str], covers: list[str]):
             dry = os.environ.get("VIDEOAI_SCHEDULER_DRY") == "1"
-            command = ["sleep", "2"] if dry else ["uv", "run", "videoai", *args]
+            command = ["sleep", "2"] if dry else ["uv", "run", "ash_speaks", *args]
             log_path = log_dir / f"{label}.log"
             try:
                 with open(log_path, "ab") as handle:

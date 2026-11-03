@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from blocks import ScriptGenerationBlock, TopicResearchBlock
 from blocks.asset_research import AssetOptions, AssetResearchBlock
-from blocks.asset_research.director import QueryBuilderBlock, VisualDirectorBlock
 from config.settings import Settings, get_settings
 from core.interfaces import ArticleFetcher, LLMProvider
 from pipeline.orchestrator import ContentPipeline
@@ -49,11 +48,13 @@ def _vision(settings: Settings):
     each verdict is only ever paid for once.
     """
 
-    provider = build_vision_provider()
+    provider = build_vision_provider(
+        model=settings.vision_model, host=settings.ollama_host
+    )
     provider.attach_cache(settings.cache_dir / "vision.sqlite3")
     # stage 1: the raw fast caption judge (d3 decision model); the slow
     # pixel look only gets the cases this stage is not confident about
-    provider.attach_decision()
+    provider.attach_decision(model=settings.vision_decision_model)
     return provider
 
 
@@ -106,7 +107,11 @@ def build_content_pipeline(
             commons,
             llm=llm,
             http=http,
-            clip=ClipScorer(settings.http_user_agent, threads=computing.torch_threads()),
+            clip=(
+                ClipScorer(settings.http_user_agent, threads=computing.torch_threads())
+                if settings.asset_judge != "d3"
+                else None
+            ),
             options=AssetOptions(
                 assets_max=settings.asset_max_per_scene,
                 words_per_asset=settings.asset_words_per_asset,
@@ -115,6 +120,7 @@ def build_content_pipeline(
                 entity_limit=settings.asset_entity_limit,
                 thumb_width=settings.asset_thumb_width,
                 min_score=settings.asset_min_score,
+                judge=settings.asset_judge,
             ),
             nasa=NasaImagesClient(client=http, delay=settings.request_delay),
             openverse=OpenverseClient(client=http, delay=settings.request_delay),
@@ -127,6 +133,6 @@ def build_content_pipeline(
             ),
             shelf=AssetShelf(settings.cache_dir / "shelf.sqlite3"),
         ),
-        asset_direction=VisualDirectorBlock(llm, race=computing.race_attempts()),
-        query_routing=QueryBuilderBlock(llm, race=computing.race_attempts()),
+        asset_direction=None,
+        query_routing=None,
     )

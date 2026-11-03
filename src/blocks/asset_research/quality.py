@@ -28,9 +28,17 @@ def _scrub_debris(value: str) -> str:
 _STOPWORD_WORDS = (
     "a an the of in on at to for from by with his her its their this that "
     "these those is are was were be been it it's as and or but not no yet so "
-    "then there here"
+    "then there here according to claims believers say story theory"
 )
 _STOPWORDS_GATE = frozenset(_STOPWORD_WORDS.split())
+
+# words that describe the visual FORM, not the subject — queries using these
+# produce images that cannot illustrate the narration
+_VISUAL_FORM_WORDS = frozenset({
+    "screenshot", "static", "image", "footage", "animated", "graphic",
+    "diagram", "illustration", "photo", "picture", "closeup", "close",
+    "aerial", "view", "render", "rendering", "clip", "frame",
+})
 
 
 def _content_words(text: str, *, min_len: int = 4) -> set[str]:
@@ -161,6 +169,16 @@ def _intent_problems(
                     f"{name}: intent has JSON debris/forbidden words; rewrite it as"
                     " a clean 3-9-word image description"
                 )
+            if any(w in _VISUAL_FORM_WORDS for w in subject.subject.lower().split()):
+                problems.append(
+                    f"{name}: subject names a visual form, not a real thing; "
+                    "name the actual object, place or person"
+                )
+            if any(w in _VISUAL_FORM_WORDS for w in subject.intent.lower().split()):
+                problems.append(
+                    f"{name}: intent describes a visual form, not a subject; "
+                    "describe the real thing to show"
+                )
             elif len(subject.intent.split()) > 12:
                 problems.append(f"{name}: intent is over 12 words")
             if subject.trigger and (
@@ -171,26 +189,10 @@ def _intent_problems(
                     f"{name}: trigger must be <= 6 words copied from the"
                     " narration, plain text"
                 )
-            elif (
-                subject.trigger
-                and scene_text
-                and not set(_words_of(subject.trigger))
-                <= set(_words_of(scene_text))
-            ):
-                problems.append(
-                    f"{name}: trigger {subject.trigger[:30]!r} is not part of"
-                    " this scene's narration; copy the exact words this scene"
-                    " speaks when the image should air"
-                )
+            # trigger is best-effort timing; an inexact trigger just
+            # falls back to even spacing, so don't reject the subject for
+            # it (only the shape checks above are hard gates)
     return problems
-
-
-def _scene_count_problems(got: int, expected: int) -> list[str]:
-    """Whole-document shape check; [] means the right number of scenes."""
-
-    if got == expected:
-        return []
-    return [f"expected {expected} scenes in the answer, got {got}"]
 
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?])\s+")
@@ -265,6 +267,11 @@ def _query_problems(
                 problems.append(f"{tag2}: over 6 keywords")
             if _JSON_JUNK.search(item.query):
                 problems.append(f"{tag2}: query has punctuation or JSON debris")
+            if any(w in _VISUAL_FORM_WORDS for w in item.query.lower().split()):
+                problems.append(
+                    f"{tag2}: query names a visual form, not a subject; "
+                    "name the real thing the scene talks about"
+                )
             if narrations is not None and not _share_word(
                 item.query, scene_words
             ) and not _share_word(item.query, global_words):

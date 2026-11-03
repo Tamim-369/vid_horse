@@ -24,11 +24,20 @@ def _voice_track(wavs: list[Path], lengths: list[float], work: Path) -> Path:
 
     tensors, sample_rate = [], None
     for wav, length in zip(wavs, lengths, strict=True):
-        tensor, sample_rate = torchaudio.load(str(wav))
+        tensor, rate = torchaudio.load(str(wav))
+        if sample_rate is None:
+            sample_rate = rate
+        elif rate != sample_rate:
+            # lines synthesized at different times can carry different
+            # rates (manual edits, older cached wavs): concatenating them
+            # unresampled warps pitch and speed, so normalize first
+            tensor = torchaudio.functional.resample(tensor, rate, sample_rate)
         target = int(sample_rate * length)
         if tensor.shape[1] < target:
             tensor = torch.nn.functional.pad(tensor, (0, target - tensor.shape[1]))
         tensors.append(tensor)
+    if sample_rate is None:
+        return work / "voice-full.wav"
     voice = work / "voice-full.wav"
     torchaudio.save(str(voice), torch.cat(tensors, dim=1), sample_rate)
     return voice
@@ -74,13 +83,16 @@ def _apply_sfx(
         if rate != sample_rate:
             effect = torchaudio.functional.resample(effect, rate, sample_rate)
         effect = effect[:, : int(min(5.0, item["seconds"]) * sample_rate)]
-        if effect.shape[1] < 64:
-            continue
         ramp = int(0.02 * sample_rate)
+        if effect.shape[1] < 2 * ramp:
+            continue
         effect[:, :ramp] *= torch.linspace(0.0, 1.0, ramp)
         effect[:, -ramp:] *= torch.linspace(1.0, 0.0, ramp)
         effect = effect * cue.gain
-        place = offsets[min(cue.scene_index, len(offsets) - 1)] + cue.at
+        # an LLM can return a negative scene index; clamp to the first card,
+        # not Python's negative wrap onto the outro
+        index = max(0, min(cue.scene_index, len(offsets) - 1))
+        place = offsets[index] + cue.at
         start = max(0, int(place * sample_rate))
         end = min(start + effect.shape[1], out.shape[1])
         if end > start:
@@ -167,7 +179,7 @@ def _bed_tracks(
     """
 
     if override:
-        return [Path("assets/music") / override, MUSIC_GAIN] * 1
+        return [(Path("assets/music") / override, MUSIC_GAIN)]
     plan = script.music
     if plan is None:
         path, gain = _pick_music(script, genre)

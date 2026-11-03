@@ -60,19 +60,29 @@ class FandomConnector:
                 seen_set.add(title)
                 seen.append(title)
 
+        from core.errors import ProviderError
+
         queue = [f"Category:{category}" for category in self._categories]
         for _ in range(self._max_depth):
             if not queue:
                 break
             next_queue: list[str] = []
             for category in queue:
-                for title in self._mw.category_members(category, namespace=0):
-                    add(title)
-                next_queue.extend(self._mw.category_members(category, namespace=14))
+                try:
+                    for title in self._mw.category_members(category, namespace=0):
+                        add(title)
+                    next_queue.extend(self._mw.category_members(category, namespace=14))
+                except ProviderError:
+                    # Category doesn't exist on this wiki; skip gracefully
+                    pass
             queue = next_queue
 
         for page in self._seed_pages:
-            for title in self._mw.links(page):
-                add(title)
+            try:
+                for title in self._mw.links(page):
+                    add(title)
+            except ProviderError:
+                # Seed page doesn't exist; skip gracefully
+                pass
 
         return seen[:limit] if limit is not None else seen

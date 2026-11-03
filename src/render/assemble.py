@@ -9,6 +9,7 @@ from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+from config.settings import get_settings
 from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript, VisualAsset
 from utils import computing
@@ -107,7 +108,7 @@ def render(
     for index in range(len(lines)):
         wav = audio_dir / f"{stem}-{index:02d}.wav"
         if not wav.exists():
-            raise FileNotFoundError(f"Missing narration {wav}; run 'videoai voice' first.")
+            raise FileNotFoundError(f"Missing narration {wav}; run 'ash_speaks voice' first.")
         wavs.append(wav)
 
     # Card length = the narration rounded UP to whole frames, so speech,
@@ -124,7 +125,10 @@ def render(
         offsets.append(start)
         start += length
     line_ends = offsets[1:] + [start]
-    word_lines, cues = align_speech(lines, wavs, offsets, line_ends)
+    word_lines, cues = align_speech(
+        lines, wavs, offsets, line_ends,
+        model_size=get_settings().subtitle_whisper_model,
+    )
     ass_path = write_ass(cues, work / "subs.ass")
 
     clips: list[Path] = []
@@ -153,9 +157,12 @@ def render(
 
     def hook_card() -> Path:
         if hook_visuals:
-            return _moving_still(
-                hook_visuals, work, 0, lengths[0], line=lines[0], word_line=word_lines[0]
-            )
+            try:
+                return _moving_still(
+                    hook_visuals, work, 0, lengths[0], line=lines[0], word_line=word_lines[0]
+                )
+            except (RuntimeError, OSError, ValueError):
+                logger.warning("hook card motion failed; using blank card")
         return _blank_clip(work, 0, lengths[0])
 
     build: list[tuple[int, Callable[..., Path]]] = [(0, hook_card)]
@@ -165,7 +172,10 @@ def render(
             card=index + 1, vis=visuals, text=lines[index + 1], words=word_lines[index + 1]
         ) -> Path:
             if vis:
-                return _moving_still(vis, work, card, lengths[card], line=text, word_line=words)
+                try:
+                    return _moving_still(vis, work, card, lengths[card], line=text, word_line=words)
+                except (RuntimeError, OSError, ValueError):
+                    logger.warning("scene %d card motion failed; using blank card", card)
             return _blank_clip(work, card, lengths[card])
 
         build.append((index + 1, scene_card))
@@ -191,11 +201,15 @@ def render(
         last_covered = scene_visuals[-1][0].url if scene_visuals and scene_visuals[-1] else None
         last_visuals.sort(key=lambda a: -(a.clip_score or 0.0))
         best = next((v for v in last_visuals if v.url != last_covered), last_visuals[0])
-        source = _asset_source(best, work, "img-outro")
-        outro_raw = _still_clip(
-            source, work, len(build), lengths[-1],
-            credit=_credit_draw(best, work, len(build)),
-        )
+        try:
+            source = _asset_source(best, work, "img-outro")
+            outro_raw = _still_clip(
+                source, work, len(build), lengths[-1],
+                credit=_credit_draw(best, work, len(build)),
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("outro image failed (%s); using blank card", exc)
+            outro_raw = _blank_clip(work, len(build), lengths[-1])
     else:
         outro_raw = _blank_clip(work, len(build), lengths[-1])
     clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(build)))
@@ -205,7 +219,7 @@ def render(
     # scene went black while its narration (and subs) kept playing.
     for clip_path, expected in zip(
         clips,
-        [*lengths[:-1], lengths[-1]],
+        lengths,
         strict=True,
     ):
         actual = _probe_duration(clip_path)
