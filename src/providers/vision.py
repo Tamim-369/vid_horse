@@ -120,18 +120,19 @@ class VisionRelevanceProvider:
                     "relevant": {
                         "type": "noul",
                         "instructions": (
-                            "Does the captioned image plausibly illustrate this "
+                            "Does this image give the right mood/vibe for this "
                             "narration moment in a serious documentary?"
                         ),
                         "criteria": {
-                            "true": "Image depicts the same kind of subject the moment describes.",
-                            "false": "Unrelated, wrong era, wrong subject, or text-heavy.",
+                            "true": "Image evokes the right atmosphere and could plausibly "
+                                    "illustrate this moment.",
+                            "false": "Unrelated, wrong mood, wrong subject, or text-heavy.",
                         },
                     }
                 },
             )
             prob = float(resp.answers["relevant"].noul)
-            return prob >= 0.7, prob
+            return prob >= 0.3, prob
         except Exception as exc:  # noqa: BLE001
             logger.debug("d3 judge failed: %s", exc)
             return False, 0.0

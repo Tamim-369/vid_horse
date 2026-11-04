@@ -10,6 +10,7 @@ from blocks.topic_research.prompts import build_messages, corrective_instruction
 from core.errors import BlockError, ProviderError
 from core.interfaces import ArticleFetcher, LLMProvider
 from core.models import ResearchBrief, Theory, TheorySource
+from ingestion.retriever import RAGRetriever
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class TopicResearchBlock(Block):
         temperature: float = 0.4,
         max_attempts: int = 2,
         race: int = 0,
+        retriever: RAGRetriever | None = None,
     ) -> None:
         self._llm = llm
         self._fetcher = fetcher
@@ -35,6 +37,7 @@ class TopicResearchBlock(Block):
         self._temperature = temperature
         self._max_attempts = max(1, max_attempts)
         self._race = max(0, race)
+        self._retriever = retriever
 
     def run(self, theory: Theory, *, max_chars: int | None = None) -> ResearchBrief:
         """Research ``theory`` and return a descriptive brief."""
@@ -49,6 +52,20 @@ class TopicResearchBlock(Block):
         except ProviderError as exc:
             raise BlockError(f"Could not fetch detail for '{theory.name}': {exc}") from exc
 
+        # Retrieve relevant chunks from knowledge base BEFORE generating brief
+        source_chunks = []
+        if self._retriever is not None:
+            try:
+                results = self._retriever.retrieve_for_topic(
+                    theory.name, top_k=4
+                )
+                source_chunks = [r["text"] for r in results]
+                logger.info(
+                    "RAG: retrieved %d chunks for '%s'", len(source_chunks), theory.name
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("RAG retrieval failed: %s", exc)
+
         logger.info(
             "Researching '%s' (%d chars%s)",
             theory.name,
@@ -57,7 +74,11 @@ class TopicResearchBlock(Block):
         )
         brief = generate_parsed(
             self._llm,
-            build_messages(theory.name, article, factual="space" in theory.categories),
+            build_messages(
+                theory.name, article,
+                factual="space" in theory.categories,
+                source_chunks=source_chunks,
+            ),
             lambda raw: parse_brief(raw, fallback_title=theory.name),
             attempts=self._max_attempts,
             temperature=self._temperature,
@@ -65,10 +86,12 @@ class TopicResearchBlock(Block):
             label="research brief",
             race=self._race,
         )
+
         return brief.model_copy(
             update={
                 "title": theory.name,
                 "genre": "cosmic" if "space" in theory.categories else "",
+                "source_chunks": source_chunks,
             }
         )
 

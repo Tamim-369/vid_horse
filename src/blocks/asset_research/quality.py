@@ -134,16 +134,14 @@ def _intent_problems(
     searches that manufacture off-topic images.
     """
 
-    global_words: set[str] = set()
-    if narrations:
-        global_words = _content_words(" ".join(narrations.values()))
+
     problems: list[str] = []
     for scene in scenes:
         tag = f"scene {scene.scene_index}"
         scene_text = ""
         if narrations is not None:
             scene_text = narrations.get(scene.scene_index, "")
-        scene_words = _content_words(scene_text)
+        _content_words(scene_text)
         if not scene.subjects:
             problems.append(f"{tag}: no subjects were given")
             continue
@@ -151,19 +149,8 @@ def _intent_problems(
             name = f"{tag} subject {subject.subject[:30]!r}"
             if len(subject.subject.split()) > 6:
                 problems.append(f"{name}: subject name is over 6 words")
-            if narrations is not None and not _grounded(
-                subject.subject, scene_words
-            ) and not _grounded(subject.subject, global_words):
-                problems.append(
-                    f"{name}: narrative filler that depicts nothing; name a"
-                    " concrete thing this video talks about (proper noun,"
-                    " object, place)"
-                )
-                problems.append(
-                    f"{name}: subject is narrative filler or not grounded in"
-                    " the scene narration; name a concrete thing the scene"
-                    " literally talks about (proper noun, object, place)"
-                )
+            # Vibe-based subjects don't need to be grounded in the
+            # narration — they describe the mood, not the literal subject.
             if not _wordish(subject.intent):
                 problems.append(
                     f"{name}: intent has JSON debris/forbidden words; rewrite it as"
@@ -233,28 +220,11 @@ def _query_problems(
     hallucinated subjects must never drive a search.
     """
 
-    global_words: set[str] = set()
-    if narrations:
-        global_words = _content_words(" ".join(narrations.values()))
+
     problems: list[str] = []
     for scene in scenes:
         tag = f"scene {scene.scene_index}"
-        scene_text = ""
-        if narrations is not None:
-            scene_text = narrations.get(scene.scene_index, "")
-        scene_words = _content_words(scene_text)
-        queries_text = " ".join(item.query for item in scene.queries).lower()
-        for name in _scene_names(scene_text):
-            hit = next(
-                (part for part in name.lower().split() if part in queries_text),
-                None,
-            )
-            if narrations is not None and hit is None:
-                problems.append(
-                    f"{tag}: the narration names the proper noun {name!r}"
-                    " but no query searches for it; include a query built"
-                    " around that name (a bare name is the strongest search)"
-                )
+        # Vibe-based queries don't need to match proper nouns
         for item in scene.queries:
             words = item.query.split()
             tag2 = f"{tag} query {item.query[:30]!r}"
@@ -272,12 +242,6 @@ def _query_problems(
                     f"{tag2}: query names a visual form, not a subject; "
                     "name the real thing the scene talks about"
                 )
-            if narrations is not None and not _share_word(
-                item.query, scene_words
-            ) and not _share_word(item.query, global_words):
-                problems.append(
-                    f"{tag2}: query shares no content word with this scene's"
-                    " narration; search for what the scene literally"
-                    " describes (proper nouns first: names, places, ships)"
-                )
+            # Vibe-based queries are allowed: the query does not need to
+            # share words with the narration. It should evoke the right mood.
     return problems

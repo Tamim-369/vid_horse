@@ -19,7 +19,7 @@ from core.models import (
 from utils import computing
 
 from .claims import _Claims
-from .media import _CLIP_FLOOR, content_tokens, proper_phrases
+from .media import _CLIP_FLOOR, content_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -92,18 +92,10 @@ class StagingMixin:
             self._route_shelf(query or brief.title, text_scene, chosen, target, used)
 
         if len(chosen) < target:  # fallback: mine the scene's own phrases
-            phrases = [phrase.lower() for phrase in proper_phrases(scene.narration)]
+            # Vibe-based: search for the topic title + key person.
             searches = [query] if query else []
-            for phrase in phrases:
-                if len(searches) >= 2:
-                    break
-                if phrase not in {existing.lower() for existing in searches}:
-                    searches.append(phrase)
-            if len(searches) < 2:
-                nouns = sorted(content_tokens(scene.narration), key=lambda w: -len(w))
-                fallback = f"{brief.title} {nouns[0]}".strip() if nouns else brief.title
-                if fallback.lower() not in {existing.lower() for existing in searches}:
-                    searches.append(fallback)
+            if brief.title.lower() not in {s.lower() for s in searches}:
+                searches.append(brief.title)
             for search_query in searches:
                 if len(chosen) >= target:
                     break
@@ -193,6 +185,9 @@ class StagingMixin:
                 relevant, _prob = self._vision.d3_judge(asset.caption or asset.file, text_scene)
                 if relevant:
                     kept.append(asset)
+            # Accept at least 1 image even if d3 rejects all
+            if not kept and chosen:
+                kept = [chosen[0]]
             chosen = kept[:target]
         elif self._vision is not None and chosen:
             certain = [a for a in chosen if not self._vision_policy(a.clip_score)]

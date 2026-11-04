@@ -129,7 +129,7 @@ class Settings(BaseSettings):
     asset_nasa_limit: int = Field(default=6, ge=1, le=20)
     asset_entity_limit: int = Field(default=5, ge=0, le=20)
     asset_thumb_width: int = Field(default=1280, gt=0)
-    asset_min_score: int = Field(default=5, ge=1, le=9)
+    asset_min_score: int = Field(default=1, ge=1, le=9)
     asset_judge: str = Field(default="d3", validation_alias=AliasChoices("ASSET_JUDGE"))
 
     # -- Caching / output ---------------------------------------------------

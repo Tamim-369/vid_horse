@@ -23,7 +23,6 @@ explain what is claimed and why people believe or discuss it. Describe slurs or 
 extremist rhetoric factually where relevant, but never use them in your own voice."""
 
 
-
 def corrective_instruction(error: Exception) -> str:
     """A follow-up message asking the model to fix unparseable output."""
 
@@ -52,15 +51,10 @@ lines carry the open scientific debates ("astronomers still debate", \
 
 
 def build_messages(
-    theory_name: str, article: ArticleText, *, factual: bool = False
+    theory_name: str, article: ArticleText, *, factual: bool = False,
+    source_chunks: list[str] | None = None,
 ) -> list[LLMMessage]:
-    """Build the research conversation for ``theory_name``.
-
-    ``factual`` switches the conspiracy-theory framing off: cosmic-facts
-    topics are not conspiracy theories, and asking the model for a
-    "theory claimed" shape around plain facts makes it refuse and return
-    "there is no conspiracy in this source".
-    """
+    """Build the research conversation for ``theory_name``."""
 
     wanted = (
         """Write a research brief describing this topic for a scriptwriter. Capture \
@@ -71,6 +65,16 @@ its story, and why it grips people."""
 the theory claims, where it came from, the main beats of its story, and why it \
 resonates with people."""
     )
+
+    if source_chunks:
+        source_block = (
+            "Additional source material from the knowledge base (use these for "
+            "specific details, quotes, and facts):\n"
+            + "\n---\n".join(source_chunks[:6])
+        )
+    else:
+        source_block = ""
+
     user = f"""Theory: {theory_name}
 Source: {article.url}
 
@@ -78,6 +82,8 @@ Article text:
 \"\"\"
 {article.text}
 \"\"\"
+
+{source_block}
 
 {wanted}
 

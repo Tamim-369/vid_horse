@@ -130,6 +130,10 @@ def render(
         model_size=get_settings().subtitle_whisper_model,
     )
     ass_path = write_ass(cues, work / "subs.ass")
+    # Only burn subtitles if the ASS file actually has cues
+    lines = ass_path.read_text(encoding="utf-8").splitlines()
+    if not any(line.startswith("Dialogue:") for line in lines):
+        ass_path = None
 
     clips: list[Path] = []
 

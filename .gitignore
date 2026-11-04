@@ -48,3 +48,10 @@ output/
 .DS_Store
 token.json
 client_secrets.json
+
+# Downloaded source books (large)
+assets/books/
+
+# RAG database
+assets/rag.sqlite3
+*.sqlite3

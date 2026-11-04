@@ -6,6 +6,7 @@ from blocks import ScriptGenerationBlock, TopicResearchBlock
 from blocks.asset_research import AssetOptions, AssetResearchBlock
 from config.settings import Settings, get_settings
 from core.interfaces import ArticleFetcher, LLMProvider
+from ingestion.retriever import RAGRetriever
 from pipeline.orchestrator import ContentPipeline
 from providers.llm import create_llm_provider
 from providers.sources import (
@@ -68,6 +69,11 @@ def build_content_pipeline(
 
     settings = settings or get_settings()
     llm = llm or create_llm_provider(settings)
+    try:
+        retriever = RAGRetriever()
+        retriever._connect()  # test connection
+    except Exception:
+        retriever = None
     http = build_http_client(settings)
     if fetcher is None:
         fetcher = MediaWikiArticleFetcher(
@@ -93,6 +99,7 @@ def build_content_pipeline(
             max_chars=settings.research_max_chars,
             max_attempts=settings.max_retries + 1,
             race=computing.race_attempts(),
+            retriever=retriever,
         ),
         script_generation=ScriptGenerationBlock(
             llm,
@@ -101,6 +108,7 @@ def build_content_pipeline(
             chunk_size=settings.script_long_chunk_size,
             scene_count=settings.script_long_scenes,
             hook_candidates=settings.script_hook_candidates,
+            retriever=retriever,
         ),
         asset_research=AssetResearchBlock(
             wiki,

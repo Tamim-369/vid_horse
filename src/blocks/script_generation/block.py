@@ -57,6 +57,7 @@ class ScriptGenerationBlock(Block):
         chunk_size: int = 3,
         scene_count: int = 10,
         hook_candidates: int = 1,
+        retriever=None,
     ) -> None:
         self._llm = llm
         self._temperature = temperature
@@ -66,6 +67,7 @@ class ScriptGenerationBlock(Block):
         self._chunk_size = max(1, chunk_size)
         self._scene_count = max(3, scene_count)
         self._hook_candidates = max(1, hook_candidates)
+        self._retriever = retriever
 
     def run(
         self,
@@ -77,12 +79,21 @@ class ScriptGenerationBlock(Block):
         """Write a script for ``brief`` in the requested ``format``."""
 
         seconds = target_seconds or _default_seconds(format)
+
+        source_chunks = brief.source_chunks if brief.source_chunks else []
+        if not source_chunks and self._retriever is not None:
+            try:
+                results = self._retriever.retrieve_for_topic(brief.title, top_k=8)
+                source_chunks = [r["text"] for r in results]
+            except Exception:  # noqa: BLE001
+                pass
+
         if format == "short":
-            return self._run_short(brief, seconds)
-        return self._run_long(brief, seconds)
+            return self._run_short(brief, seconds, source_chunks)
+        return self._run_long(brief, seconds, source_chunks)
 
     # -- short --------------------------------------------------------------
-    def _run_short(self, brief: ResearchBrief, seconds: int) -> VideoScript:
+    def _run_short(self, brief: ResearchBrief, seconds: int, source_chunks=None) -> VideoScript:
         hook = self._choose_hook(brief)
 
         def parse(raw: str) -> VideoScript:
@@ -94,12 +105,15 @@ class ScriptGenerationBlock(Block):
                 words_per_second=self._words_per_second,
             )
 
-        script = self._generate(build_messages(brief, "short", seconds, hook=hook), parse)
+        script = self._generate(
+            build_messages(brief, "short", seconds, hook=hook, source_chunks=source_chunks),
+            parse,
+        )
         return script.model_copy(update={"hook": hook}) if hook else script
 
     # -- long ---------------------------------------------------------------
-    def _run_long(self, brief: ResearchBrief, seconds: int) -> VideoScript:
-        plan = self._plan(brief, self._choose_hook(brief))
+    def _run_long(self, brief: ResearchBrief, seconds: int, source_chunks=None) -> VideoScript:
+        plan = self._plan(brief, self._choose_hook(brief), source_chunks)
         beats = list(plan.beats)
 
         missing = self._scene_count - len(beats)
@@ -114,7 +128,7 @@ class ScriptGenerationBlock(Block):
 
         scenes: list[ScriptScene] = []
         for start, chunk in _chunks(beats, self._chunk_size):
-            messages = build_chunk_messages(plan, chunk, start)
+            messages = build_chunk_messages(plan, chunk, start, source_chunks=source_chunks)
             scenes.extend(
                 self._generate(
                     messages,
@@ -133,7 +147,10 @@ class ScriptGenerationBlock(Block):
             outro=plan.outro,
         )
 
-    def _plan(self, brief: ResearchBrief, hook: str | None = None) -> ScriptPlan:
+    def _plan(
+        self, brief: ResearchBrief, hook: str | None = None,
+        source_chunks=None,
+    ) -> ScriptPlan:
         plan = self._generate(
             build_plan_messages(brief, self._scene_count, hook=hook),
             lambda raw: parse_plan(raw, fallback_title=brief.title),

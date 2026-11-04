@@ -14,19 +14,27 @@ _TEMPERATURE = 0.4
 
 DIRECTOR_SYSTEM = """You are the visual director of a video channel.
 
-For each scene, pick 1-2 SHORT PHRASES (2-4 words each) that appear VERBATIM or
-near-verbatim in the scene's narration. These phrases will be used as image
-search queries, so they MUST be words the narration actually says.
+For each scene, pick 1-2 SHORT PHRASES describing the VIBE or ATMOSPHERE
+that should be on screen while the narration plays. These are NOT literal
+subjects from the narration — they are the MOOD the viewer should feel.
 
-Rules:
-- Pick concrete nouns: names, places, objects, things. Not verbs or concepts.
-- The phrase must come from the narration text. Do not invent new words.
-- Do NOT pick filler phrases like "according to the", "the theory claims".
-- Do NOT pick visual-form words like "screenshot", "image", "footage".
+Think: what image would make the viewer FEEL the right emotion?
+
+GOOD subjects (vibe-based):
+- "dark vintage photograph" (for mysterious scenes)
+- "ancient manuscript page" (for forbidden-text scenes)
+- "occult symbol" (for religious/weird scenes)
+- "abandoned building" (for creepy scenes)
+- "cosmic nebula" (for space scenes)
+
+BAD subjects (too literal):
+- "grandpa smoking" (returns wrong person)
+- "screenshot" (visual form)
+- "according to the" (filler)
 
 For each subject, provide:
-- subject: the 2-4 word phrase from the narration
-- intent: 2-4 words describing what the image should show (can be different from subject)
+- subject: 2-4 word vibe phrase
+- intent: 2-4 words describing what the image should show
 - trigger: 2-4 words copied verbatim from the narration where this subject comes up
 
 Output JSON: {"scene_index": N, "subjects": [{"subject": "...", "intent": "...", "trigger": "..."}]}
@@ -61,11 +69,29 @@ THIS IS A HORROR STORY (fiction). Search for the SETTING and PROPS only:
 
 QUERY_SYSTEM = """You route image searches for a video channel.
 
-For each subject, the query is the subject itself (already a phrase from the narration).
-Just copy the subject as the query, 1-3 words. Do not change or invent words.
+For each subject, produce ONE search query that finds an image giving the
+RIGHT VIBE for this narration moment. The query does NOT need to contain
+words from the narration — it should describe the MOOD, ATMOSPHERE, or
+VISUAL FEEL that matches the scene.
 
-Source: "nasa" for space subjects (planets, stars, galaxies, spacecraft).
-"commons" for everything else (people, places, objects, buildings).
+Think: what image would make the viewer FEEL the right emotion while
+hearing this narration? Search for that.
+
+GOOD queries (vibe-based):
+- "dark vintage photograph" (for a mysterious scene)
+- "ancient manuscript page" (for a forbidden-text scene)
+- "occult symbol illustration" (for a religious/weird scene)
+- "abandoned building interior" (for a creepy scene)
+- "cosmic nebula dark" (for a space scene)
+- "old library books" (for a knowledge scene)
+
+BAD queries (too literal):
+- "grandpa smoking" (too specific, returns wrong person)
+- "screenshot" (visual form, not a subject)
+- "the theory claims" (filler, not a subject)
+
+Source: "nasa" for space/cosmic subjects.
+"commons" for everything else.
 
 Copy each subject's trigger through unchanged.
 

@@ -13,23 +13,22 @@ CHOOSER_SYSTEM = """You are the image editor who makes the final pick for
 one narration moment of a video. One image is selected from the candidates
 by reading the file titles and descriptions alone.
 
-Pick the candidate that actually shows the SUBJECT OF THE QUERY as part of
-the narration moment. Reject everything else. REJECT (empty file) when:
-- the image shows a DIFFERENT thing than the query subject — especially:
-  for a person query where the description does not clearly identify the
-  SAME person (right name AND era/profession, not just a shared name),
-  or 'no caption' portraits whose identity cannot be verified;
-- a group of people, a conference, a portrait of somebody else, when the
-  subject is a thing these people invented, used or worked on;
+Pick the candidate whose image gives the RIGHT VIBE for this narration
+moment. The query describes a mood/atmosphere, not a literal subject.
+Reject images that are clearly wrong for the mood.
+
+REJECT (empty file) when:
+- the image is clearly unrelated to the mood/vibe of the query
 - the image is mostly TEXT — poster, cover, infographic, diagram, chart,
-  comic, screenshot, map, scanned page, award banner;
+  comic, screenshot, map, scanned page, award banner
 - it is a grave, tomb or cemetery shot when the subject is a living
   contribution, or any image that would look silly or tone-breaking on
-  a serious narration channel (gags, parody, tongue-out poses);
-- the connection is only a shared word, not the same referent.
+  a serious narration channel (gags, parody, tongue-out poses)
+- the image is a random person that doesn't match the mood
 
-When several qualify, prefer the one showing the subject itself, clearly,
-in a photograph or faithful artistic depiction, with no text overlay.
+When several qualify, prefer the one that best matches the mood/atmosphere
+described in the query, in a photograph or faithful artistic depiction,
+with no text overlay.
 """
 
 class PickSchema(BaseModel):

@@ -16,7 +16,6 @@ from .media import (
     _variants,
     content_tokens,
     info_kind,
-    proper_phrases,
     score_media,
 )
 
@@ -419,13 +418,11 @@ class RoutingMixin:
     # -- helpers ---------------------------------------------------------------
 
     def _query_for(self, scene: ScriptScene, brief: ResearchBrief) -> str:
-        phrases = proper_phrases(scene.narration)
-        if phrases:
-            return phrases[0]
-        nouns = sorted(
-            content_tokens(scene.narration),
-            key=lambda w: -len(w),
-        )
-        if not nouns:
-            return brief.title
-        return f"{brief.title} {nouns[0]}".strip()
+        # Use the theory title + key person from the narration.
+        # More specific than just the title, returns better images.
+        import re
+        # Extract capitalized names from the narration
+        names = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', scene.narration)
+        if names:
+            return f"{brief.title} {names[0]}"
+        return brief.title

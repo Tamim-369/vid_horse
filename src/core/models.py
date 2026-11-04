@@ -159,6 +159,10 @@ class ResearchBrief(StrictModel):
     key_people: list[str] = Field(default_factory=list)
     key_terms: list[str] = Field(default_factory=list)
     open_questions: list[str] = Field(default_factory=list)
+    source_chunks: list[str] = Field(
+        default_factory=list,
+        description="Retrieved source chunks from the knowledge base for grounding.",
+    )
 
     _validate_prose = field_validator("one_line", "origin", "background")(_plain_prose)
 
