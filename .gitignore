@@ -55,3 +55,6 @@ assets/books/
 # RAG database
 assets/rag.sqlite3
 *.sqlite3
+
+# Generated motif images (regenerate via experiments/generate_pollinations_assets.py)
+assets/motifs_pollinations/*.png
