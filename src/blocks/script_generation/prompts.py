@@ -463,3 +463,47 @@ def corrective_instruction(error: Exception) -> str:
         "plain-text format. No JSON, no braces, no extra commentary. If the HOOK "
         "was rejected, replace it with a fresh line that follows every hook rule."
     )
+
+
+def build_critic_messages(script_text: str, brief: ResearchBrief) -> list[LLMMessage]:
+    """Ask the model to score a script and list concrete fixes."""
+    return [
+        LLMMessage(
+            role="system",
+            content=(
+                "You are a ruthless short-form retention critic. Score the script "
+                "0-100 on hook strength, escalation, reveal compression, pacing, "
+                "and payoff. List concrete issues and a single revision instruction. "
+                "Output JSON only."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Brief title: {brief.title}\n"
+                f"One-line: {brief.one_line}\n\n"
+                f"SCRIPT:\n{script_text}\n\n"
+                "Return JSON with keys: score (int), issues (list[str]), "
+                "revision (str)."
+            ),
+        ),
+    ]
+
+
+def build_revision_messages(
+    original_messages: list[LLMMessage], critique: "ScriptCritique"
+) -> list[LLMMessage]:
+    """Append the critic's instruction to the original conversation."""
+    msgs = list(original_messages)
+    msgs.append(
+        LLMMessage(
+            role="user",
+            content=(
+                "Revise the previous script following this instruction. "
+                "Keep the labelled plain-text format.\n"
+                f"Instruction: {critique.revision}\n"
+                f"Issues: {'; '.join(critique.issues)}"
+            ),
+        )
+    )
+    return msgs

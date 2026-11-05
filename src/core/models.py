@@ -255,6 +255,14 @@ class VideoScript(StrictModel):
     _validate_hook = field_validator("hook", "outro")(_plain_prose)
 
 
+class ScriptCritique(StrictModel):
+    """Critic verdict for a generated script."""
+
+    score: int = Field(ge=0, le=100, description="Overall quality 0-100.")
+    issues: list[str] = Field(default_factory=list, description="Specific problems.")
+    revision: str = Field(default="", description="Concrete instruction for the rewrite.")
+
+
 class ScriptPlan(StrictModel):
     """An outline for a long script: ordered beats, one per scene."""
 

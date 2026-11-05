@@ -27,16 +27,25 @@ from blocks.script_generation.parser import (
 )
 from blocks.script_generation.prompts import (
     build_chunk_messages,
+    build_critic_messages,
     build_extension_messages,
     build_hook_messages,
     build_hook_score_messages,
     build_messages,
     build_plan_messages,
+    build_revision_messages,
     corrective_instruction,
 )
 from core.errors import BlockError, LLMError
 from core.interfaces import LLMMessage, LLMProvider
-from core.models import ResearchBrief, ScriptFormat, ScriptPlan, ScriptScene, VideoScript
+from core.models import (
+    ResearchBrief,
+    ScriptCritique,
+    ScriptFormat,
+    ScriptPlan,
+    ScriptScene,
+    VideoScript,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +66,9 @@ class ScriptGenerationBlock(Block):
         chunk_size: int = 3,
         scene_count: int = 10,
         hook_candidates: int = 1,
+        critic: bool = True,
+        critic_threshold: int = 75,
+        max_revisions: int = 1,
         retriever=None,
     ) -> None:
         self._llm = llm
@@ -67,6 +79,9 @@ class ScriptGenerationBlock(Block):
         self._chunk_size = max(1, chunk_size)
         self._scene_count = max(3, scene_count)
         self._hook_candidates = max(1, hook_candidates)
+        self._critic = critic
+        self._critic_threshold = critic_threshold
+        self._max_revisions = max(0, max_revisions)
         self._retriever = retriever
 
     def run(
@@ -105,11 +120,41 @@ class ScriptGenerationBlock(Block):
                 words_per_second=self._words_per_second,
             )
 
-        script = self._generate(
-            build_messages(brief, "short", seconds, hook=hook, source_chunks=source_chunks),
-            parse,
-        )
+        messages = build_messages(brief, "short", seconds, hook=hook, source_chunks=source_chunks)
+        script = self._generate(messages, parse)
+
+        if self._critic:
+            for _ in range(self._max_revisions):
+                critique = self._critique(script, brief)
+                if critique.score >= self._critic_threshold:
+                    break
+                messages = build_revision_messages(messages, critique)
+                try:
+                    script = self._generate(messages, parse)
+                except (LLMError, BlockError):
+                    break
+
         return script.model_copy(update={"hook": hook}) if hook else script
+
+    def _critique(self, script: VideoScript, brief: ResearchBrief) -> ScriptCritique:
+        """Score a script and return revision instructions."""
+        script_text = (
+            f"TITLE: {script.title}\nHOOK: {script.hook}\n"
+            + "\n".join(
+                f"SCENE {i}: {sc.narration} | VISUAL: {sc.visual}"
+                for i, sc in enumerate(script.scenes)
+            )
+            + f"\nOUTRO: {script.outro}"
+        )
+        try:
+            return self._llm.complete_json(
+                build_critic_messages(script_text, brief),
+                ScriptCritique,
+                temperature=0.0,
+            )
+        except (LLMError, BlockError) as exc:
+            logger.warning("critic failed (%s); accepting script", exc)
+            return ScriptCritique(score=100, issues=[], revision="")
 
     # -- long ---------------------------------------------------------------
     def _run_long(self, brief: ResearchBrief, seconds: int, source_chunks=None) -> VideoScript:
