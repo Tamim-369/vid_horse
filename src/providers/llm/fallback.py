@@ -44,4 +44,5 @@ class FallbackLLMProvider(BaseLLMProvider):
             logging.getLogger(__name__).warning(
                 "Primary LLM failed (%s); falling back to %s", exc, self._fallback.name
             )
-            return self._fallback._generate(messages, options=options, schema=schema)
+            fallback_options = {**options, "model": self._fallback.model}
+            return self._fallback._generate(messages, options=fallback_options, schema=schema)

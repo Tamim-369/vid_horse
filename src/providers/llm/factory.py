@@ -87,10 +87,24 @@ def _build_groq_chain(settings: Settings) -> BaseLLMProvider:
     if api_key:
         cloud_models = [m.strip() for m in settings.ollama_cloud_models.split(",") if m.strip()]
         if cloud_models:
-            # local fallback for when all cloud models are exhausted
-            local_fallback = None
+            # Cloud must NOT silently delegate to local; it should raise so
+            # the outer fallback can move on to Groq, then local.
+            fallback = OllamaCloudProvider(
+                model=cloud_models[0],
+                api_key=api_key,
+                base_url=settings.ollama_cloud_host,
+                models=cloud_models,
+                temperature=settings.ollama_cloud_temperature,
+                max_tokens=settings.ollama_cloud_max_tokens,
+                timeout=settings.ollama_cloud_timeout,
+                max_retries=settings.max_retries,
+                cache=cache,
+                local_fallback=None,
+            )
+            # Groq -> local as the second tier.
+            groq_tier = primary
             if settings.ollama_cloud_fallback_to_local:
-                local_fallback = OllamaProvider(
+                local_provider = OllamaProvider(
                     model=settings.ollama_model,
                     host=settings.ollama_host,
                     num_ctx=settings.ollama_num_ctx,
@@ -103,21 +117,12 @@ def _build_groq_chain(settings: Settings) -> BaseLLMProvider:
                     max_retries=settings.max_retries,
                     cache=cache,
                 )
-            fallback = OllamaCloudProvider(
-                model=cloud_models[0],
-                api_key=api_key,
-                base_url=settings.ollama_cloud_host,
-                models=cloud_models,
-                temperature=settings.ollama_cloud_temperature,
-                max_tokens=settings.ollama_cloud_max_tokens,
-                timeout=settings.ollama_cloud_timeout,
-                max_retries=settings.max_retries,
-                cache=cache,
-                local_fallback=local_fallback,
-            )
+                groq_tier = FallbackLLMProvider(
+                    primary=primary, fallback=local_provider, cache=cache
+                )
             return FallbackLLMProvider(
                 primary=fallback,   # ollama cloud first
-                fallback=primary,   # groq key loop as fallback
+                fallback=groq_tier,  # groq, then local
                 cache=cache,
             )
     return primary
