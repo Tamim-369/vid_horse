@@ -67,6 +67,7 @@ class OllamaCloudProvider(BaseLLMProvider):
         self._local_fallback = local_fallback
         self._dead: set[int] = set()
         self._cooldown: dict[int, float] = {}
+        self._disabled_until: float = 0.0
         self._lock = threading.Lock()
         self._client = client or httpx.Client(timeout=timeout)
         self._cloud_index = 0
@@ -89,6 +90,9 @@ class OllamaCloudProvider(BaseLLMProvider):
         options: dict,
         schema: dict | None,
     ) -> str:
+        import time as _time
+        if _time.monotonic() < self._disabled_until:
+            raise LLMError("Ollama Cloud temporarily disabled (rate limited).")
         payload = self._payload(messages, options, schema)
         errors: list[str] = []
 
@@ -116,6 +120,9 @@ class OllamaCloudProvider(BaseLLMProvider):
 
         if self._local_fallback is None:
             detail = "; ".join(errors) if errors else "no usable model"
+            if all("rate limit" in e.lower() for e in errors) and errors:
+                import time as _time
+                self._disabled_until = _time.monotonic() + 300.0
             raise LLMError(
                 f"All Ollama Cloud models failed ({detail}). "
                 "No local fallback configured."
