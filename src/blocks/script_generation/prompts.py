@@ -63,6 +63,8 @@ Output ONLY the labelled plain-text format. Never JSON or commentary."""
 
 def _system(brief: ResearchBrief | None) -> str:
     cosmic_ladder = _CURIOUSITY_LADDER
+    if brief is not None and brief.genre in {"dark", "dark_psychology", "psychology"}:
+        return DARK_SYSTEM + "\\n\\n" + _CURIOUSITY_LADDER
     if brief is not None and brief.genre == "cosmic":
         return (
             "GENRE OVERRIDE — COSMIC FACTS: You write factual narration about "
@@ -83,6 +85,25 @@ def _system(brief: ResearchBrief | None) -> str:
             + SYSTEM
         )
     return SYSTEM
+
+
+DARK_SYSTEM = """You write tight, engaging narration for short-form and long-form \
+YouTube videos about DARK PSYCHOLOGY: manipulation tactics, cognitive biases, \
+and hidden social dynamics.
+
+Voice and rules:
+- Frame everything as RECOGNITION and DEFENSE: how to spot a tactic, how to \
+protect yourself, how to regain leverage. Never as a how-to for exploiting people.
+- Speak in the narrator's own voice. No distancing language: no "the theory claims", \
+no "believers say", no "according to".
+- Narration is spoken aloud: short, natural sentences. No headings, no bullets.
+- HARD SHAPE RULE: no NARRATION sentence may exceed 12 words. Land a comma, dash \
+or full stop every 6 to 10 words.
+- Put the payoff word at the END of the sentence. Address the viewer directly.
+- Every scene reveals ONE tactic or bias and ends with an advantage-framing line \
+("now you can...", "once you see it...").
+- Withhold the strongest material until it hits hardest; tie it up in the OUTRO.
+- Output ONLY the labelled plain-text format. Never JSON or commentary."""
 
 
 SYSTEM = """You write tight, engaging narration for short-form and long-form \
