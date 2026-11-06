@@ -164,7 +164,7 @@ class Settings(BaseSettings):
     voice_sentence_gap: float = Field(default=0.24, ge=0.0, le=2.0)
     voice_line_gap: float = Field(default=0.35, ge=0.0, le=2.0)
     voice_speed: float = Field(
-        default=0.92, ge=0.5, le=2.0,
+        default=0.97, ge=0.5, le=2.0,
         description="Playback speed for TTS (atempo). <1 slower, >1 faster.",
     )
 
