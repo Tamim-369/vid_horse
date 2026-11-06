@@ -34,6 +34,9 @@ class TopicGenerationBlock:
 
         msgs = [LLMMessage(role=m["role"], content=m["content"]) for m in messages]
         try:
-            return self._llm.complete_json(msgs, ResearchBrief, temperature=self._temperature)
+            brief = self._llm.complete_json(msgs, ResearchBrief, temperature=self._temperature)
+            if not brief.genre:
+                brief = brief.model_copy(update={"genre": "dark"})
+            return brief
         except (LLMError, BlockError) as exc:
             raise BlockError(f"Topic generation failed: {exc}") from exc
