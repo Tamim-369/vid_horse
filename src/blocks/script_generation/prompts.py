@@ -8,7 +8,7 @@ plain text with labelled lines, then parsed into the domain model.
 from __future__ import annotations
 
 from core.interfaces import LLMMessage
-from core.models import ResearchBrief, ScriptFormat, ScriptPlan
+from core.models import ResearchBrief, ScriptCritique, ScriptFormat, ScriptPlan
 
 COSMIC_ADDENDUM = """
 GENRE OVERRIDE — COSMIC FACTS: this is a factual video about a REAL cosmic \
@@ -96,12 +96,14 @@ Voice and rules:
 protect yourself, how to regain leverage. Never as a how-to for exploiting people.
 - Speak in the narrator's own voice. No distancing language: no "the theory claims", \
 no "believers say", no "according to".
-- Narration is spoken aloud: short, natural sentences. No headings, no bullets.
+- Narration is SPOKEN ALOUD: short, natural sentences a real person would say. \
+No headings, no bullets, no essay tone. Sound like a friend warning you, not a textbook.
 - HARD SHAPE RULE: no NARRATION sentence may exceed 12 words. Land a comma, dash \
 or full stop every 6 to 10 words.
 - Put the payoff word at the END of the sentence. Address the viewer directly.
-- Every scene reveals ONE tactic or bias and ends with an advantage-framing line \
-("now you can...", "once you see it...").
+- Every scene reveals ONE tactic or bias. End with a natural advantage line like \
+"Now you know what to watch for." or "Now you can spot it." Never force awkward commas.
+- Do NOT repeat the hook verbatim in scene 0. Move the story forward.
 - Withhold the strongest material until it hits hardest; tie it up in the OUTRO.
 - Output ONLY the labelled plain-text format. Never JSON or commentary."""
 
@@ -494,8 +496,9 @@ def build_critic_messages(script_text: str, brief: ResearchBrief) -> list[LLMMes
             content=(
                 "You are a ruthless short-form retention critic. Score the script "
                 "0-100 on hook strength, escalation, reveal compression, pacing, "
-                "and payoff. List concrete issues and a single revision instruction. "
-                "Output JSON only."
+                "and payoff. Penalize AI-sounding phrasing, comma splices, repeated "
+                "hook text, and unnatural advantage lines. List concrete issues and "
+                "a single revision instruction. Output JSON only."
             ),
         ),
         LLMMessage(
@@ -512,7 +515,7 @@ def build_critic_messages(script_text: str, brief: ResearchBrief) -> list[LLMMes
 
 
 def build_revision_messages(
-    original_messages: list[LLMMessage], critique: "ScriptCritique"
+    original_messages: list[LLMMessage], critique: ScriptCritique
 ) -> list[LLMMessage]:
     """Append the critic's instruction to the original conversation."""
     msgs = list(original_messages)
