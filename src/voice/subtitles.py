@@ -28,8 +28,8 @@ _FORMAT_LINE = (
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
 _STYLE_LINE = (
-    "Style: Cue,Lato,72,&H00FFFFFF,&H00FFFFFF,&H80000000,"
-    "&H73000000,1,0,0,0,100,100,0,0,1,3,1.4,2,60,60,450,1"
+    "Style: Cue,DejaVu Sans,76,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&HA0000000,1,0,0,0,100,100,0,0,1,4,2,2,60,60,420,1"
 )
 # fmt: on
 

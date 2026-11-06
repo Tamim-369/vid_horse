@@ -103,9 +103,10 @@ def render(
     work = out_path.parent / "render-work"
     work.mkdir(parents=True, exist_ok=True)
 
-    lines: list[str] = [script.hook, *(scene.narration for scene in script.scenes), script.outro]
+    narration_lines: list[str] = [script.hook, *(scene.narration for scene in script.scenes), script.outro]
+    lines = narration_lines  # compat
     wavs: list[Path] = []
-    for index in range(len(lines)):
+    for index in range(len(narration_lines)):
         wav = audio_dir / f"{stem}-{index:02d}.wav"
         if not wav.exists():
             raise FileNotFoundError(f"Missing narration {wav}; run 'ash_speaks voice' first.")
@@ -126,13 +127,22 @@ def render(
         start += length
     line_ends = offsets[1:] + [start]
     word_lines, cues = align_speech(
-        lines, wavs, offsets, line_ends,
+        narration_lines, wavs, offsets, line_ends,
         model_size=get_settings().subtitle_whisper_model,
     )
+    # Context-driven emphasis (deaf-viewer / no-audio test)
+    try:
+        from config.settings import get_settings as _gs
+        from providers.llm import create_llm_provider
+        from voice.emphasis import emphasize_cues
+        _llm = create_llm_provider(_gs())
+        cues = emphasize_cues(_llm, narration_lines, cues)
+    except Exception as _exc:  # noqa: BLE001
+        logger.warning("subtitle emphasis skipped: %s", _exc)
     ass_path = write_ass(cues, work / "subs.ass")
     # Only burn subtitles if the ASS file actually has cues
-    lines = ass_path.read_text(encoding="utf-8").splitlines()
-    if not any(line.startswith("Dialogue:") for line in lines):
+    _ass_lines = ass_path.read_text(encoding="utf-8").splitlines()
+    if not any(line.startswith("Dialogue:") for line in _ass_lines):
         ass_path = None
 
     clips: list[Path] = []
@@ -163,7 +173,7 @@ def render(
         if hook_visuals:
             try:
                 return _moving_still(
-                    hook_visuals, work, 0, lengths[0], line=lines[0], word_line=word_lines[0]
+                    hook_visuals, work, 0, lengths[0], line=narration_lines[0], word_line=word_lines[0]
                 )
             except (RuntimeError, OSError, ValueError):
                 logger.warning("hook card motion failed; using blank card")
@@ -173,7 +183,7 @@ def render(
     for index, visuals in enumerate(scene_visuals):
 
         def scene_card(
-            card=index + 1, vis=visuals, text=lines[index + 1], words=word_lines[index + 1]
+            card=index + 1, vis=visuals, text=narration_lines[index + 1], words=word_lines[index + 1]
         ) -> Path:
             if vis:
                 try:
