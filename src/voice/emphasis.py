@@ -1,111 +1,144 @@
-"""Context-driven subtitle emphasis: visual meaning for no-audio viewing.
+"""Context-driven subtitle emphasis: match visual vibe to sentence meaning.
 
-Max 2 colors (neutral + one accent). ALL-CAPS words in cues render as
-SHOUTED: bigger, bolder, fully capitalized. Emphasis is by communicative
-role in context, not fixed keyword lists.
+Uses LLM (complete_json) to assign communicative roles per cue in context;
+falls back to structural heuristics. 2 colors max (white base + muted accent),
+vibe expressed through size/weight by role. ALL-CAPS words always SHOUT.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 from dataclasses import replace
+
+from pydantic import BaseModel, Field
 
 from core.interfaces import LLMMessage, LLMProvider
 from voice.subtitles import Cue
 
 logger = logging.getLogger(__name__)
 
-# 2-color system: neutral (base style) + accent. Shout = accent + max size.
-ACCENT = r"{\b1\fs72\c&H005050F0&\3c&H60000000&}"   # electric yellow accent
-SHOUT = r"{\b1\fs86\c&H005050F0&\3c&H70000000&}"   # ALL-CAPS words: bigger/bolder
+# 2-color system: near-white base (style) + muted red accent. Vibe = role -> scale.
+ACCENT = "&H005050F0"  # muted red (ASS BGR)
+OUTLINE = "&H70000000"
+SHOUT_OUTLINE = "&H70000000"
+ROLE_FS = {
+    "action": 74,    # direct, protective move
+    "danger": 76,    # threat/trap exposed
+    "reveal": 80,    # tactic named / aha lands
+    "contrast": 72,  # turn/flip
+    "key": 70,       # core idea (subtle)
+}
+SHOUT_FS = 86  # ALL-CAPS: biggest/boldest
 RESET = r"{\r}"
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
-ALLCAPS_RE = re.compile(r"\b([A-Z][A-Z0-9']{1,})\b")
+# ALL-CAPS token: at least 2 letters, no lowercase. Avoid matching inside ASS tags.
+ALLCAPS_RE = re.compile(r"\b([A-Z]{2,}[A-Z0-9']*)\b")
+ASS_TAG_RE = re.compile(r"\{[^}]*\}")
+
+
+class SpanMark(BaseModel):
+    text: str = Field(description="Word(s) present in the cue to emphasize")
+    role: str = Field(default="key", description="action|danger|reveal|contrast|key")
+
+
+class CueMark(BaseModel):
+    i: int
+    spans: list[SpanMark] = Field(default_factory=list)
+
+
+class EmphasisPlan(BaseModel):
+    cues: list[CueMark] = Field(default_factory=list)
+
 
 SYSTEM = (
-    "You style short subtitle cues so a viewer with NO AUDIO can understand "
-    "the meaning. Read each cue in its sentence/lesson context and mark only "
-    "the word(s) that carry the point of THIS moment (the command, the trap, "
-    "the reveal/name, the turn). Do NOT use fixed keyword lists — decide from "
-    "context. Emphasize at most 1 span per cue; many cues get none.\n"
-    "Rules: never emphasize filler. 'text' must be words that appear in that "
-    "cue. Output JSON only: {\"cues\": [{\"i\": <index>, \"spans\": [{\"text\": \"...\"}]}]}"
+    "Style subtitle cues so a muted/deaf viewer FEELS the sentence's vibe. "
+    "For each cue read its meaning in the full lesson context and mark 0-1 span "
+    "(rarely 2) that carries that vibe. No fixed keyword lists — decide from "
+    "what the sentence DOES.\n"
+    "Roles (pick the one matching the moment's vibe):\n"
+    "- danger: a trap, pressure, manipulation, threat, or 'don't get pulled in'\n"
+    "- action: the protective move/command to take now (do this)\n"
+    "- reveal: the tactic named or the realization that clicks\n"
+    "- contrast: the turn/flip where meaning changes (the BUT/instead moment)\n"
+    "- key: the core idea to remember (sparing)\n"
+    "Calm/neutral explanatory cues get NO spans — don't over-style. "
+    "Never emphasize filler. 'text' must be word(s) that appear in that cue."
 )
 
 
+def _tag(role: str | None, *, shout: bool = False) -> str:
+    if shout:
+        fs = SHOUT_FS
+        ol = SHOUT_OUTLINE
+    else:
+        fs = ROLE_FS.get((role or "key").lower(), ROLE_FS["key"])
+        ol = OUTLINE
+    return r"{\b1\fs" + str(fs) + r"\c" + ACCENT + r"\3c" + ol + "&}"
+
+
+def _strip_tags(text: str) -> str:
+    return ASS_TAG_RE.sub("", text)
+
+
 def _style_caps(text: str) -> str:
-    """ALL-CAPS tokens render SHOUTED (big/bold/accent, kept uppercase)."""
+    """Style ALL-CAPS tokens as SHOUT, but never touch existing ASS tags."""
 
     def repl(m: re.Match[str]) -> str:
-        return SHOUT + m.group(1).upper() + RESET
+        return _tag(None, shout=True) + m.group(1).upper() + RESET
 
-    if "{\\" not in text:
+    if "{" not in text:
         return ALLCAPS_RE.sub(repl, text)
-    parts = re.split(r"(\{\\.*?\})", text)
-    out = []
-    styled_depth = 0
-    for part in parts:
-        if part.startswith("{\\"):
+    parts = ASS_TAG_RE.split(text)
+    tags = ASS_TAG_RE.findall(text)
+    out: list[str] = []
+    styled = False
+    for i, part in enumerate(parts):
+        # A segment is "inside a styled span" if the preceding tag opened
+        # styling and wasn't a reset. Track by scanning tags seen so far.
+        if styled:
             out.append(part)
-            if part == RESET or "\\r" in part:
-                styled_depth = 0
-            else:
-                styled_depth += 1
-        elif styled_depth > 0:
-            out.append(part)  # already inside a styled span
         else:
             out.append(ALLCAPS_RE.sub(repl, part))
+        if i < len(tags):
+            tag = tags[i]
+            out.append(tag)
+            if tag == RESET or r"\r" in tag:
+                styled = False
+            elif r"\fs" in tag or r"\b1" in tag or r"\c" in tag:
+                styled = True
+            # other tags (pos/karaoke etc., unlikely here) leave state as-is
     return "".join(out)
 
 
-def _apply_spans(text: str, spans: list[dict]) -> str:
-    if not spans:
-        return _style_caps(text)
-    styled = text
-    for span in sorted(spans, key=lambda s: -len((s.get("text") or ""))):
-        frag = (span.get("text") or "").strip()
-        if not frag:
-            continue
-        pat = re.compile(r"\b(" + re.escape(frag) + r")\b", re.IGNORECASE)
-        m = pat.search(styled)
-        if not m:
-            pat = re.compile(re.escape(frag), re.IGNORECASE)
-            m = pat.search(styled)
-        if m and "{\\" not in styled[max(0, m.start()-2):m.start()]:
-            inner = m.group(0)
-            # if the source span is ALL-CAPS, use SHOUT treatment
-            tag = SHOUT if inner.isupper() and len(inner) > 1 else ACCENT
-            styled = styled[:m.start()] + tag + inner.upper() if tag == SHOUT else styled[:m.start()] + tag + inner + RESET + styled[m.end():]
-            if tag == SHOUT:
-                styled = styled  # already built
-    # rebuild cleanly to avoid the ternary mess
-    return _apply_spans_clean(text, spans)
+def _already_styled_before(text: str, pos: int) -> bool:
+    window = text[max(0, pos - 40) : pos]
+    last_open = window.rfind("{")
+    last_reset = window.rfind(RESET)
+    if last_open == -1:
+        return False
+    # styled if an opening tag appeared after the last reset
+    return last_open > last_reset
 
 
-def _apply_spans_clean(text: str, spans: list[dict]) -> str:
+def _apply(text: str, spans: list[SpanMark]) -> str:
     styled = text
-    for span in sorted(spans, key=lambda s: -len((s.get("text") or ""))):
-        frag = (span.get("text") or "").strip()
+    for span in sorted(spans, key=lambda s: -len(s.text or "")):
+        frag = (span.text or "").strip()
         if not frag:
             continue
-        pat = re.compile(r"\b(" + re.escape(frag) + r")\b", re.IGNORECASE)
-        m = pat.search(styled)
+        m = re.search(r"\b(" + re.escape(frag) + r")\b", styled, re.I)
         if not m:
-            pat = re.compile(re.escape(frag), re.IGNORECASE)
-            m = pat.search(styled)
+            m = re.search(re.escape(frag), styled, re.I)
         if not m:
             continue
-        # don't double-style
-        before = styled[max(0, m.start() - 12):m.start()]
-        if "{\\" in before and r"{\r}" not in before:
+        if _already_styled_before(styled, m.start()):
             continue
         inner = m.group(0)
-        is_shout = inner.isupper() and len(re.sub(r"[^A-Z]", "", inner)) > 1
-        tag = SHOUT if is_shout else ACCENT
+        is_shout = inner.isupper() and len(re.sub(r"[^A-Z]", "", inner)) >= 2
+        tag = _tag(span.role, shout=is_shout)
         display = inner.upper() if is_shout else inner
-        styled = styled[:m.start()] + tag + display + RESET + styled[m.end():]
+        styled = styled[: m.start()] + tag + display + RESET + styled[m.end() :]
     return _style_caps(styled)
 
 
@@ -116,107 +149,108 @@ def emphasize_cues(
     *,
     beat_context: list[str] | None = None,
 ) -> list[Cue]:
-    """Return cues with ASS-styled emphasis (2 colors max)."""
-
     if not cues:
         return cues
     if llm is None:
-        return _fallback_emphasis(lines, cues, beat_context)
-    cue_payload = [{"i": i, "text": c.text} for i, c in enumerate(cues)]
-    beat_info = ""
-    if beat_context:
-        beat_info = "\nBeat roles by line index: " + ", ".join(
-            f"{i}={b}" for i, b in enumerate(beat_context)
-        )
-    user = (
-        "Script lines (hook, scenes..., outro):\n"
-        + "\n".join(f"{i}. {ln}" for i, ln in enumerate(lines))
-        + beat_info
-        + "\n\nSubtitle cues (timed, in order):\n"
-        + json.dumps(cue_payload, ensure_ascii=False)
-        + "\n\nReturn emphasis spans per cue index. JSON only."
-    )
+        return _fallback(lines, cues)
     try:
-        raw = llm.complete(
-            [LLMMessage(role="system", content=SYSTEM),
-             LLMMessage(role="user", content=user)],
-            temperature=0.2,
-            max_tokens=1200,
+        beat_info = ""
+        if beat_context:
+            beat_info = "\nBeat roles by line: " + ", ".join(
+                f"{i}={b}" for i, b in enumerate(beat_context)
+            )
+        user = (
+            "Lesson lines (hook, scenes..., outro):\n"
+            + "\n".join(f"{i}. {ln}" for i, ln in enumerate(lines))
+            + beat_info
+            + "\n\nTimed subtitle cues:\n"
+            + "\n".join(f'{i}: "{c.text}"' for i, c in enumerate(cues))
+            + "\n\nReturn vibe-matching spans per cue index as JSON."
         )
-        raw = re.sub(r"[\x00-\x1f]+", " ", raw)
-        # lenient JSON grab
-        m = re.search(r"\{.*\}", raw, re.S)
-        if not m:
-            return _fallback_emphasis(lines, cues, beat_context)
-        blob = m.group(0)
-        # fix common trailing commas
-        blob = re.sub(r",\s*([}\]])", r"\1", blob)
-        try:
-            data = json.loads(blob)
-        except json.JSONDecodeError:
-            data = json.loads(blob, strict=False)
-        by_index: dict[int, list[dict]] = {}
-        for item in data.get("cues", []):
-            idx = item.get("i")
-            if isinstance(idx, int):
-                by_index[idx] = item.get("spans") or []
-        out: list[Cue] = []
-        for i, cue in enumerate(cues):
-            out.append(replace(cue, text=_apply_spans_clean(cue.text, by_index.get(i, []))))
+        plan = llm.complete_json(
+            [
+                LLMMessage(role="system", content=SYSTEM),
+                LLMMessage(role="user", content=user),
+            ],
+            EmphasisPlan,
+            temperature=0.2,
+            max_tokens=1400,
+        )
+        by_i = {m.i: m.spans for m in plan.cues}
+        out = [
+            replace(c, text=_apply(c.text, by_i.get(i, []))) for i, c in enumerate(cues)
+        ]
         if any(a.text != b.text for a, b in zip(cues, out)):
             return out
-        return _fallback_emphasis(lines, cues, beat_context)
+        return _fallback(lines, cues)
     except Exception as exc:  # noqa: BLE001
         logger.warning("subtitle emphasis failed (%s); using fallback", exc)
-        return _fallback_emphasis(lines, cues, beat_context)
+        return _fallback(lines, cues)
 
 
-# Structural/context heuristic fallback (not a flat keyword list).
-_CONTRAST = re.compile(r"\b(but|instead|yet|though|unless)\b", re.I)
-_NEGATE = re.compile(r"\b(don't|dont|not|never|no)\b", re.I)
-_IMPERATIVE = re.compile(r"^(demand|ask|show|stop|watch|look|notice|check|wait|hold|prove|remember)\b", re.I)
-_NAMING = re.compile(r"\b(called|means|is when|that is|this is|named)\b", re.I)
+# --- structural fallback: vibe from sentence function/position ---
+_CONTRAST = re.compile(r"\b(but|instead|yet|unless|however)\b", re.I)
+_NEGATE = re.compile(r"\b(don't|doesn't|isn't|won't|can't|not|never|no)\b", re.I)
+_ACTION = re.compile(
+    r"\b(demand|ask|show|stop|watch|look|check|hold|prove|remember|test|pause|wait|step|walk|verify|question)\b",
+    re.I,
+)
+_TRAP = re.compile(
+    r"\b(trap|trick|pressure|push|force|hook|rush|panic|scare|fake|lie|lies|bait|manipulat|control)\w*\b",
+    re.I,
+)
+_NAMING = re.compile(r"\b(called|means|is when|this is|that is|named)\b", re.I)
+# cues that are plain scene-setting questions/explanations → no styling
+_CALM = re.compile(
+    r"^(it'?s easy|imagine|think about|what if|does that mean|if (most|someone|they)|like that)\b",
+    re.I,
+)
 
 
-def _cue_line_index(cue_idx: int, total_cues: int, total_lines: int) -> int:
-    if total_cues <= 0 or total_lines <= 0:
-        return 0
-    return min(int(cue_idx * total_lines / max(total_cues, 1)), total_lines - 1)
+def _li(cue_i: int, n_cues: int, n_lines: int) -> int:
+    return min(int(cue_i * n_lines / max(n_cues, 1)), n_lines - 1) if n_cues else 0
 
 
-def _fallback_emphasis(
-    lines: list[str], cues: list[Cue], beat_context: list[str] | None = None
-) -> list[Cue]:
+def _fallback(lines: list[str], cues: list[Cue]) -> list[Cue]:
+    """Restrained, vibe-aware fallback: style only moments with a clear function."""
+
     out: list[Cue] = []
+    n = len(lines)
     for i, cue in enumerate(cues):
+        li = _li(i, len(cues), n)
         text = cue.text
-        li = _cue_line_index(i, len(cues), len(lines))
-        is_hook = li == 0
-        is_outro = li == len(lines) - 1
-        span = None
-        m = _CONTRAST.search(text)
-        if m:
-            span = m.group(0)
-        if not span:
-            m = _NEGATE.search(text)
-            if m and not is_hook:
-                span = m.group(0)
-        if not span and not is_outro and li >= max(1, len(lines) // 2):
-            m = _IMPERATIVE.search(text)
+        plain = _strip_tags(text)
+        role: str | None = None
+        frag: str | None = None
+        calm = bool(_CALM.search(plain)) or li == 0
+
+        # Priority by communicative vibe (not keywords-as-style): reveal/name,
+        # explicit trap/threat, turn/contrast, protective action, firm negation.
+        m = _NAMING.search(plain)
+        if m and not calm:
+            after = plain[m.end() :].strip().split()
+            role, frag = "reveal", (
+                " ".join(after[:2]).rstrip(".,!?") if after else m.group(0)
+            )
+        if not frag:
+            m = _TRAP.search(plain)
             if m:
-                span = m.group(0)
-        if not span:
-            m = _NAMING.search(text)
+                role, frag = "danger", m.group(0)
+        if not frag:
+            m = _CONTRAST.search(plain)
             if m:
-                after = text[m.end():].strip().split()
-                if after:
-                    span = " ".join(after[:2]).rstrip(".,!?")
-                else:
-                    span = m.group(0)
-        if not span and (is_hook or li == len(lines) - 2):
-            words = [w for w in WORD_RE.findall(text) if len(w) > 3]
-            if words:
-                span = max(words, key=len)
-        spans = [{"text": span}] if span else []
-        out.append(replace(cue, text=_apply_spans_clean(text, spans)))
+                role, frag = "contrast", m.group(0)
+        if not frag and not calm:
+            m = _ACTION.search(plain)
+            if m and (li >= max(1, n // 2) or m.group(0).lower() in {"demand", "prove", "stop", "question", "verify"}):
+                role, frag = "action", m.group(0)
+        if not frag and not calm:
+            m = _NEGATE.search(plain)
+            if m and li > 0:
+                role, frag = "danger", m.group(0)
+
+        # Calm/scene-setting cues stay unstyled (vibe = neutral). Only ALL-CAPS
+        # words get SHOUT via _apply/_style_caps.
+        spans = [SpanMark(text=frag, role=role or "key")] if frag else []
+        out.append(replace(cue, text=_apply(text, spans)))
     return out
