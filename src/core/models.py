@@ -255,6 +255,25 @@ class VideoScript(StrictModel):
     _validate_hook = field_validator("hook", "outro")(_plain_prose)
 
 
+
+
+class BeatPlan(StrictModel):
+    """Six-beat plan for a short script."""
+
+    beats: list[str] = Field(min_length=6, max_length=6, description="One intent per beat: hook, situation, mechanism, turn, action, payoff.")
+
+
+class FactSheet(StrictModel):
+    """Verifiable facts about a concept for grounding scripts."""
+
+    concept: str
+    mechanism: str = Field(description="One-sentence mechanism.")
+    source: str = Field(description="Real, verifiable source or 'none'.")
+    misconception: str = Field(description="Common misconception.")
+    counter_move: str = Field(description="One concrete thing to say or do.")
+    facts: list[str] = Field(default_factory=list, description="3-5 verifiable facts.")
+
+
 class ScriptCritique(StrictModel):
     """Critic verdict for a generated script."""
 

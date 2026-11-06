@@ -27,7 +27,7 @@ ROLES = (
     "default",
 )
 
-MOOD_SYSTEM = f"""You are the music director of a documentary video channel.
+MOOD_SYSTEM = f"""You are the music director of a short-form video channel (documentary and dark-psychology teaching).
 
 You get a video script (hook, scenes, outro). Choose its BACKGROUND MUSIC
 by labelling roles. A role describes WHAT IS HAPPENING, never the channel:
@@ -47,6 +47,12 @@ by labelling roles. A role describes WHAT IS HAPPENING, never the channel:
 - dread-mission: deep-sea monsters, a new dangerous mission, a deep
   dangerous place that needs long explanation.
 - default: none of the above — the neutral pulse.
+
+For DARK PSYCHOLOGY / MANIPULATION TEACHING lessons, map by feel:
+- manipulation tactic, control, pressure, being trapped → threat or dread-mission
+- hidden mechanism, "why this works on you", the trick revealed → mystery
+- the "aha" turn, naming the tactic, learning to see it → discovery
+- calm warning / protective advice → default or investigation-calm pacing (use discovery)
 
 Valid roles: {", ".join(ROLES)}.
 

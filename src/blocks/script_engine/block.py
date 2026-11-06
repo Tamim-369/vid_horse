@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from blocks.script_engine.beats import generate_beats
 from blocks.script_engine.facts import generate_fact_sheet
@@ -14,33 +15,195 @@ from blocks.script_engine.validators import (
 from blocks.script_engine.writer import write_scene
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
+from ingestion.retriever import RAGRetriever
 
 logger = logging.getLogger(__name__)
 
 BEAT_NAMES = ["hook", "situation", "mechanism", "turn", "action", "payoff"]
 
 
+_REASONING_MARKERS = re.compile(
+    r"(?:^|\n)\s*(?:\d+\.\s|\*{1,2}[A-Za-z]|<[a-z/]|Constraints?:|Analyze|Role:|Tone:|Format:|Length"
+    r"|The user|Let me|Let's break|I'll|Here is|Here's|Okay,|Sure,|Step \d)",
+    re.I,
+)
+
+
+_PLACEHOLDER_RE = re.compile(
+    r"^\s*(?:text|query|narration|visual|scene)\b[\s/.*]*",
+    re.I,
+)
+
+
+def _is_placeholder(text: str) -> bool:
+    return bool(_PLACEHOLDER_RE.match(text)) or len(text.split()) < 3
+
+
+def _same_text(a: str, b: str) -> bool:
+    """True when two lines are the same idea (punctuation/case insensitive)."""
+
+    def norm(text: str) -> list[str]:
+        return re.findall(r"[a-z0-9']+", text.lower())
+
+    wa, wb = norm(a), norm(b)
+    if not wa or not wb:
+        return False
+    if wa == wb:
+        return True
+    overlap = len(set(wa) & set(wb)) / max(len(set(wa) | set(wb)), 1)
+    return overlap >= 0.8
+
+
+def _clean_speech(text: str) -> str:
+    """Strip markdown/prompt artifacts; keep apostrophes inside words."""
+    text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
+    text = re.sub(r"[*_`<>]", "", text)
+    # drop everything from the first reasoning marker on
+    cut = _REASONING_MARKERS.search(text)
+    if cut:
+        text = text[: cut.start()]
+    # model appends its own search-word tail to narration — strip it
+    text = re.sub(r"\s*(?:search\s*words?|keywords?)\s*:.*$", "", text, flags=re.I)
+    # straight/curly double quotes off; apostrophes between letters stay
+    text = re.sub(r'"|“|”', "", text)
+    text = text.replace("‘", "'").replace("’", "'")
+    # keep ' only between two letters (contractions); all other quotes go
+    text = re.sub(r"(?<!\w)'|'(?!\w)", "", text)
+    # stray digit the model left dangling after the final punctuation
+    text = re.sub(r"([.!?])\s*\d{1,3}\s*$", r"\1", text.strip())
+    # unlabeled keyword tail the model tacked on after the last sentence
+    # (lowercase start — a real next sentence would begin with a capital)
+    tail = re.search(
+        r"([.!?])\s+([a-z][A-Za-z']*(?:\s*[;,]?\s*[A-Za-z'][A-Za-z']*){1,3})"
+        r"\s*[.;,]?\s*$",
+        text,
+    )
+    if tail:
+        tail_words = re.findall(r"[A-Za-z']+", tail.group(2))
+        if all(w.lower() not in _VISUAL_STOPWORDS for w in tail_words):
+            text = text[: tail.start()] + tail.group(1)
+    # trailing dangling conjunction the model left before the final stop
+    text = re.sub(
+        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to)\s*[.\s]*$",
+        ".",
+        text.strip(),
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", text).strip()
+
+
 def _parse_scene(raw: str) -> tuple[str, str]:
+    import re
+
     narr = ""
     vis = ""
-    # handle inline "NARRATION: ... VISUAL: ..."
-    import re
-    m = re.search(r"NARRATION:\s*(.*?)(?:VISUAL:|$)", raw, re.I | re.S)
+    m = re.search(r"NARRATION:\s*(.*?)(?=VIS(?:UAL|ION):|$)", raw, re.I | re.S)
     if m:
         narr = m.group(1).strip()
     m2 = re.search(r"VIS(?:UAL|ION):\s*(.*)", raw, re.I | re.S)
     if m2:
-        vis = m2.group(1).strip()
+        # keep only the first line: free models echo instructions after it
+        vis = m2.group(1).strip().splitlines()[0].strip()
+        vis = re.sub(r"[*_<>`]", "", vis).strip()
     # remove any leaked VISUAL/VISION from narration
     narr = re.sub(r"\s*VIS(?:UAL|ION):.*", "", narr, flags=re.I | re.S).strip()
     if not narr:
         narr = raw.strip()
-    # clean trailing VISUAL if leaked
-    narr = re.sub(r"\s*VISUAL:.*", "", narr, flags=re.I | re.S).strip()
-    # strip quote characters for TTS safety
-    for q in ('"', "'", "“", "”", "‘", "’"):
-        narr = narr.replace(q, "")
+    narr = _clean_speech(narr)
+    vis = _clean_speech(vis)
+    # a visual is a 2-4 word image query; anything longer is leaked narration
+    if len(vis.split()) > 5:
+        vis = _visual_keywords(vis)
+    if _is_placeholder(vis):
+        vis = ""
+    # scene failure mode: model puts the same line in both fields —
+    # drop the visual so the block falls back to the beat text
+    if narr and vis and _same_text(narr, vis):
+        vis = ""
     return narr, vis
+
+
+_DANGLING_WORDS = frozenset(
+    [
+        "the", "a", "an", "of", "to", "and", "but", "or", "is", "are", "was",
+        "were", "in", "on", "at", "for", "with", "that", "which", "when",
+        "while", "means", "just", "so", "because", "their", "your", "my",
+        "our", "its", "his", "her", "even", "still", "also", "then",
+        "perhaps", "maybe", "almost", "mostly", "mainly", "about", "into",
+        "over", "under",
+    ]
+)
+
+
+def _first_sentence(text: str, max_words: int = 12, min_words: int = 0) -> str:
+    """First sentence of ``text``, hard-capped at ``max_words`` words.
+
+    With ``min_words`` set, short lead sentences pull in the next sentence
+    so the line does not end as a weak fragment. Truncation never ends on a
+    dangling function word ("...changed the rules of the.").
+    """
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    sent = parts[0] if parts else text.strip()
+    if min_words and len(sent.split()) < min_words and len(parts) > 1:
+        sent = parts[0] + " " + parts[1]
+    words = sent.split()
+    if len(words) > max_words:
+        words = words[:max_words]
+    while len(words) > 3 and words[-1].lower().strip(",;:.!?") in _DANGLING_WORDS:
+        words.pop()
+    if len(words) < len(sent.split()):
+        sent = " ".join(words).rstrip(",;:.!?") + "."
+    return sent
+
+
+_POV_SWAPS = [
+    (r"\bI\b", "you"),
+    (r"\bmy\b", "your"),
+    (r"\bmine\b", "yours"),
+    (r"\bme\b", "you"),
+    (r"\bwe\b", "you"),
+    (r"\bus\b", "you"),
+    (r"\bour\b", "your"),
+    (r"\bourselves\b", "yourselves"),
+]
+
+_VISUAL_STOPWORDS = frozenset(
+    [
+        "a", "an", "the", "this", "that", "these", "those", "you", "your",
+        "they", "their", "them", "it", "its", "is", "are", "was", "were",
+        "be", "been", "being", "have", "has", "had", "do", "does", "did",
+        "will", "would", "can", "could", "should", "just", "like", "when",
+        "what", "how", "why", "not", "no", "yes", "and", "but", "or", "so",
+        "if", "then", "than", "because", "about", "into", "over", "under",
+        "with", "from", "for", "of", "on", "at", "by", "to", "in", "out",
+        "up", "down", "next", "time", "one", "two", "thing", "things",
+        "really", "very", "much", "more", "most", "some", "every", "all",
+        "say", "says", "said", "ask", "asks", "asking", "tell", "tells",
+        "told", "where", "there", "here", "now", "always", "never",
+    ]
+)
+
+
+def _visual_keywords(text: str, limit: int = 4) -> str:
+    """Derive a short image-query from the most significant words."""
+    words = re.findall(r"[a-z][a-z-]{2,}", text.lower())
+    picked: list[str] = []
+    for word in words:
+        if word in _VISUAL_STOPWORDS or word in picked:
+            continue
+        picked.append(word)
+        if len(picked) >= limit:
+            break
+    return " ".join(picked)
+
+
+def _fix_pov(text: str) -> str:
+    """Mechanically rewrite first-person words to second person."""
+    for pattern, replacement in _POV_SWAPS:
+        text = re.sub(pattern, replacement, text, flags=re.I)
+    if text:
+        text = text[0].upper() + text[1:]
+    return text
 
 
 class ScriptEngineBlock:
@@ -52,13 +215,30 @@ class ScriptEngineBlock:
         *,
         target_seconds: int = 45,
         max_scene_retries: int = 2,
+        retriever: RAGRetriever | None = None,
     ) -> None:
         self._llm = llm
         self._target_seconds = target_seconds
         self._max_scene_retries = max_scene_retries
+        self._retriever = retriever
 
-    def run(self, topic: str, *, format: ScriptFormat = "short") -> VideoScript:
-        fs = generate_fact_sheet(self._llm, topic)
+    def run(
+        self,
+        topic: str,
+        *,
+        format: ScriptFormat = "short",
+        source_chunks: list[str] | None = None,
+    ) -> VideoScript:
+        if source_chunks is None and self._retriever is not None:
+            try:
+                results = self._retriever.retrieve_for_topic(topic, top_k=6)
+                source_chunks = [r["text"] for r in results]
+                logger.info("RAG: retrieved %d chunks for '%s'", len(source_chunks), topic)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("RAG retrieval failed: %s", exc)
+                source_chunks = None
+
+        fs = generate_fact_sheet(self._llm, topic, source_chunks=source_chunks)
         beats = generate_beats(self._llm, fs)
 
         # words per scene: distribute target seconds
@@ -70,14 +250,28 @@ class ScriptEngineBlock:
         payoff_beat = beats[5] if len(beats) >= 6 else beats[-1]
         payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12)
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
-        if not payoff_narr:
-            payoff_narr = payoff_beat
+        if not payoff_narr or _is_placeholder(payoff_narr):
+            payoff_narr = _clean_speech(payoff_beat)
+        payoff_narr = _first_sentence(payoff_narr, max_words=16, min_words=8)
 
         hook_beat = beats[0]
         hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10)
-        hook_narr, hook_vis = _parse_scene(hook_raw)
-        if not hook_narr:
-            hook_narr = hook_beat
+        hook_narr, _hook_vis = _parse_scene(hook_raw)
+        if not hook_narr or _is_placeholder(hook_narr):
+            hook_narr = _clean_speech(hook_beat)
+        # hooks must be short: one retry, then mechanical truncation
+        if len(hook_narr.split()) > 12:
+            logger.info("hook too long (%d words); retrying", len(hook_narr.split()))
+            hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10)
+            retry_narr, _retry_vis = _parse_scene(hook_raw)
+            if (
+                retry_narr
+                and not _is_placeholder(retry_narr)
+                and len(retry_narr.split()) <= 12
+            ):
+                hook_narr = retry_narr
+            else:
+                hook_narr = _first_sentence(hook_narr, max_words=12)
 
         # Generate middle scenes.
         middle_beats = beats[1:5]
@@ -96,21 +290,42 @@ class ScriptEngineBlock:
                     attempt += 1
                     continue
                 narr, vis = _parse_scene(raw)
+                if not narr or _is_placeholder(narr):
+                    attempt += 1
+                    logger.info("scene %d retry: placeholder/empty output", i)
+                    continue
                 res = validate_scene(narr, target)
-                if res.ok:
-                    break
-                attempt += 1
-                logger.info("scene %d retry: %s", i, res.issues)
-            if not narr:
-                narr = beat
+                if not res.ok:
+                    attempt += 1
+                    logger.info("scene %d retry: %s", i, res.issues)
+                    continue
+                pov = validate_pov([narr])
+                if not pov.ok:
+                    attempt += 1
+                    logger.info("scene %d retry (POV): %s", i, pov.issues)
+                    continue
+                break
+            if not narr or _is_placeholder(narr):
+                narr = _clean_speech(beat)
+                vis = ""
+            visual = vis or beat
+            if len(visual.split()) > 5:
+                visual = _visual_keywords(visual)
+            if not visual or _is_placeholder(visual) or _same_text(narr, visual):
+                visual = _visual_keywords(narr)
             secs = max(3, int(len(narr.split()) / 2.5))
-            scenes.append(ScriptScene(narration=narr, visual=vis or beat, seconds=secs))
+            scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
             narrations.append(narr)
 
-        # POV check
-        pov_res = validate_pov([hook_narr] + [s.narration for s in scenes] + [payoff_narr])
+        # POV check — repair first-person slips mechanically
+        all_narrs = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
+        pov_res = validate_pov(all_narrs)
         if not pov_res.ok:
-            logger.warning("POV issue: %s", pov_res.issues)
+            logger.info("POV drift: %s — repairing", pov_res.issues)
+            hook_narr = _fix_pov(hook_narr)
+            payoff_narr = _fix_pov(payoff_narr)
+            for scene in scenes:
+                scene.narration = _fix_pov(scene.narration)
 
         # claims check
         full_text = " ".join([hook_narr] + [s.narration for s in scenes] + [payoff_narr])

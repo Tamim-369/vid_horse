@@ -179,11 +179,11 @@ def _bed_tracks(
     """
 
     if override:
-        return [(Path("assets/music") / override, MUSIC_GAIN)]
+        return [(Path("assets/music") / override, MUSIC_GAIN)] * (len(script.scenes) + 2)
     plan = script.music
     if plan is None:
         path, gain = _pick_music(script, genre)
-        return [(path, gain)]
+        return [(path, gain)] * (len(script.scenes) + 2)
     shelf = _shelf()
     base_path, base_gain = _track_gain(shelf, _role_track(plan.base_role, shelf))
     cards: list[tuple[Path, float]] = []

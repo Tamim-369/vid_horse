@@ -89,9 +89,14 @@ def _fetch_media(url: str, work: Path, name: str) -> Path:
     stem = name.rsplit(".", 1)[0]
     path = work / f"{stem}-{digest}{Path(name).suffix or '.jpg'}"
     if not path.exists():
-        request = urllib.request.Request(url, headers=UA_HEADER)
-        with urllib.request.urlopen(request, timeout=60) as response:
-            path.write_bytes(response.read())
+        source = Path(url.removeprefix("file://"))
+        if source.is_file():
+            # local asset (motif library): copy instead of download
+            path.write_bytes(source.read_bytes())
+        else:
+            request = urllib.request.Request(url, headers=UA_HEADER)
+            with urllib.request.urlopen(request, timeout=60) as response:
+                path.write_bytes(response.read())
     return path
 
 

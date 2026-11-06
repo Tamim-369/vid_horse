@@ -123,6 +123,7 @@ class ScriptGenerationBlock(Block):
         messages = build_messages(brief, "short", seconds, hook=hook, source_chunks=source_chunks)
         script = self._generate(messages, parse)
 
+        revised = False
         if self._critic:
             for _ in range(self._max_revisions):
                 critique = self._critique(script, brief)
@@ -131,10 +132,13 @@ class ScriptGenerationBlock(Block):
                 messages = build_revision_messages(messages, critique)
                 try:
                     script = self._generate(messages, parse)
+                    revised = True
                 except (LLMError, BlockError):
                     break
 
-        return script.model_copy(update={"hook": hook}) if hook else script
+        if hook and not revised:
+            script = script.model_copy(update={"hook": hook})
+        return script
 
     def _critique(self, script: VideoScript, brief: ResearchBrief) -> ScriptCritique:
         """Score a script and return revision instructions."""

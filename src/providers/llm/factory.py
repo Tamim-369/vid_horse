@@ -15,6 +15,7 @@ from providers.llm.fallback import FallbackLLMProvider
 from providers.llm.groq import GroqProvider
 from providers.llm.ollama import OllamaProvider
 from providers.llm.ollama_cloud import OllamaCloudProvider
+from providers.llm.openrouter import OpenRouterProvider
 from utils.cache import DiskCache
 
 ProviderBuilder = Callable[[Settings], BaseLLMProvider]
@@ -120,11 +121,38 @@ def _build_groq_chain(settings: Settings) -> BaseLLMProvider:
                 groq_tier = FallbackLLMProvider(
                     primary=primary, fallback=local_provider, cache=cache
                 )
-            return FallbackLLMProvider(
-                primary=fallback,   # ollama cloud first
+            rest = FallbackLLMProvider(
+                primary=fallback,   # ollama cloud
                 fallback=groq_tier,  # groq, then local
                 cache=cache,
             )
+            # OpenRouter goes first if a key is available
+            if settings.openrouter_api_key:
+                or_models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
+                or_provider = OpenRouterProvider(
+                    api_key=settings.openrouter_api_key,
+                    models=or_models,
+                    base_url=settings.openrouter_base_url,
+                    temperature=settings.openrouter_temperature,
+                    max_tokens=settings.openrouter_max_tokens,
+                    timeout=settings.openrouter_timeout,
+                    cache=cache,
+                )
+                return FallbackLLMProvider(primary=or_provider, fallback=rest, cache=cache)
+            return rest
+    # no cloud key: groq (+local) chain, optionally fronted by OpenRouter
+    if settings.openrouter_api_key:
+        or_models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
+        or_provider = OpenRouterProvider(
+            api_key=settings.openrouter_api_key,
+            models=or_models,
+            base_url=settings.openrouter_base_url,
+            temperature=settings.openrouter_temperature,
+            max_tokens=settings.openrouter_max_tokens,
+            timeout=settings.openrouter_timeout,
+            cache=cache,
+        )
+        return FallbackLLMProvider(primary=or_provider, fallback=primary, cache=cache)
     return primary
 
 
@@ -173,4 +201,5 @@ def _build_ollama_cloud(settings: Settings) -> BaseLLMProvider:
 
 register_provider("ollama", _build_ollama)
 register_provider("groq", _build_groq_chain)
+register_provider("openrouter", _build_groq_chain)
 register_provider("ollama-cloud", _build_ollama_cloud)
