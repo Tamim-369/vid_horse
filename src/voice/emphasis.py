@@ -18,8 +18,8 @@ from voice.subtitles import Cue
 logger = logging.getLogger(__name__)
 
 # 2-color system: neutral (base style) + accent. Shout = accent + max size.
-ACCENT = r"{\b1\fs72\c&H0000F0FF&\3c&H50000000&}"   # electric yellow accent
-SHOUT = r"{\b1\fs86\c&H0000F0FF&\3c&H60000000&}"   # ALL-CAPS words: bigger/bolder
+ACCENT = r"{\b1\fs72\c&H005050F0&\3c&H60000000&}"   # electric yellow accent
+SHOUT = r"{\b1\fs86\c&H005050F0&\3c&H70000000&}"   # ALL-CAPS words: bigger/bolder
 RESET = r"{\r}"
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
 ALLCAPS_RE = re.compile(r"\b([A-Z][A-Z0-9']{1,})\b")
