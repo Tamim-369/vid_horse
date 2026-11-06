@@ -176,6 +176,13 @@ def speakable(text: str) -> str:
     text = _LV_DASH.sub(r"\1 \2", text)
     text = _RAW_FORMULA_RE.sub(_raw_formula, text)
     text = _CARDINAL.sub(_expand, text)
+    # ALL-CAPS shouting (e.g. DEMAND) makes neural TTS over-articulate;
+    # normalize to natural case for speech (visual shout is handled in subs).
+    text = re.sub(
+        r"\b([A-Z][A-Z']{2,})\b",
+        lambda m: m.group(1).capitalize() if m.group(1).isalpha() else m.group(1),
+        text,
+    )
     # word-word hyphen chains garble the voice model ("thirty‑seven" reads
     # as a single broken token); every remaining letter-hyphen-letter bond
     # becomes the space Chatterbox pronounces reliably

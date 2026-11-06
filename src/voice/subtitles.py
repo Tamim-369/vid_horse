@@ -11,7 +11,7 @@ import difflib
 import logging
 import re
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import torchaudio
@@ -31,6 +31,11 @@ _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,62,&H00C8C8C8,&H00C8C8C8,&H00000000,"
     "&HD0000000,0,0,0,0,100,100,0,0,1,2.5,1,2,60,60,420,1"
 )
+# Center pop: important words, bright white, large, same font.
+_POP_LINE = (
+    "Style: Pop,DejaVu Sans Condensed,108,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&HB0000000,0,0,0,0,100,100,0,0,1,3,0,5,60,60,60,1"
+)
 # fmt: on
 
 _ASS_HEADER = f"""[Script Info]
@@ -42,6 +47,7 @@ WrapStyle: 0
 [V4+ Styles]
 {_FORMAT_LINE}
 {_STYLE_LINE}
+{_POP_LINE}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -55,6 +61,7 @@ class Cue:
     start: float
     end: float
     text: str
+    pops: list[str] = field(default_factory=list)
 
 
 def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]:
@@ -324,27 +331,40 @@ def _ass_time(seconds: float) -> str:
     return f"{hours}:{minutes:02d}:{secs:02d}.{cents:02d}"
 
 
+def _cue_finish(cues: list[Cue], index: int, stop: float) -> float:
+    finish = stop
+    if (
+        index + 1 < len(cues)
+        and cues[index + 1].start > stop
+        and cues[index + 1].start - stop < 0.4
+    ):
+        finish = min(cues[index + 1].start - 0.08, stop)
+    return finish
+
+
 def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
-    """Serialise the cues to hand-rendered ASS for libass."""
+    """Serialise cues to ASS: bottom subtitles + centered pops for key words."""
 
     body: list[str] = []
     for index, cue in enumerate(cues):
         # whisper occasionally reports a zero-length word; keep a floor so
         # every cue is actually readable
         start, stop = cue.start, max(cue.end, cue.start + 0.25)
-        # end each cue when its words stop being spoken; only the seam
-        # between two cues of continuous speech gets glued together.
-        finish = stop
-        if (
-            index + 1 < len(cues)
-            and cues[index + 1].start > stop
-            and cues[index + 1].start - stop < 0.4
-        ):
-            finish = min(cues[index + 1].start - 0.08, stop)
+        finish = _cue_finish(cues, index, stop)
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
             f"Cue,,0,0,0,,{text}"
         )
+        pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
+        if pops:
+            ys = [760, 650, 870, 540]
+            for i, pop in enumerate(pops[:4]):
+                disp = _TIMESTAMP.sub("", str(pop).replace("\n", " ")).strip()
+                y = ys[i] if i < len(ys) else 760 - 110 * i
+                body.append(
+                    f"Dialogue: 1,{_ass_time(start)},{_ass_time(max(finish, start))},"
+                    rf"Pop,,0,0,0,,{{\an5\pos(540,{y})\fad(40,60)}}{disp}"
+                )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path

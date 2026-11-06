@@ -123,8 +123,9 @@ def _already_styled_before(text: str, pos: int) -> bool:
     return last_open > last_reset
 
 
-def _apply(text: str, spans: list[SpanMark]) -> str:
+def _apply(text: str, spans: list[SpanMark]) -> tuple[str, list[str]]:
     styled = text
+    pops: list[str] = []
     for span in sorted(spans, key=lambda s: -len(s.text or "")):
         frag = (span.text or "").strip()
         if not frag:
@@ -137,11 +138,20 @@ def _apply(text: str, spans: list[SpanMark]) -> str:
         if _already_styled_before(styled, m.start()):
             continue
         inner = m.group(0)
-        is_shout = inner.isupper() and len(re.sub(r"[^A-Z]", "", inner)) >= 2
-        tag = _tag(span.role, shout=is_shout)
-        display = inner.upper() if is_shout else inner
+        role = (span.role or "key").lower()
+        # Shout when source/ASR token is ALL-CAPS, or for strong command beats.
+        strong = role in {"action", "danger", "reveal"} and len(inner) >= 4
+        is_shout = (inner.isupper() and len(re.sub(r"[^A-Z]", "", inner)) >= 2) or (
+            inner.lower() in {"demand", "prove", "stop", "never", "don't", "dont"}
+        )
+        use_shout = is_shout
+        tag = _tag(role, shout=use_shout)
+        display = inner.upper() if (use_shout or strong) else inner
         styled = styled[: m.start()] + tag + display + RESET + styled[m.end() :]
-    return _style_caps(styled)
+        pops.append(display.upper() if len(display.strip()) <= 24 else display.upper())
+    styled = _style_caps(styled)
+    # pops for any ALL-CAPS tokens that became SHOUT in-text but weren't from spans
+    return styled, pops[:3]
 
 
 def emphasize_cues(
@@ -179,9 +189,10 @@ def emphasize_cues(
             max_tokens=1400,
         )
         by_i = {m.i: m.spans for m in plan.cues}
-        out = [
-            replace(c, text=_apply(c.text, by_i.get(i, []))) for i, c in enumerate(cues)
-        ]
+        out: list[Cue] = []
+        for i, c in enumerate(cues):
+            text, pops = _apply(c.text, by_i.get(i, []))
+            out.append(replace(c, text=text, pops=pops))
         if any(a.text != b.text for a, b in zip(cues, out)):
             return out
         return _fallback(lines, cues)
@@ -263,5 +274,6 @@ def _fallback(lines: list[str], cues: list[Cue]) -> list[Cue]:
                 m2 = _ACTION.search(plain) if role == "action" else _TRAP.search(plain)
                 if m2 and m2.group(0).lower() != frag.lower().split()[0].lower():
                     spans.append(SpanMark(text=m2.group(0), role=role))
-        out.append(replace(cue, text=_apply(plain, spans)))
+        text, pops = _apply(plain, spans)
+        out.append(replace(cue, text=text, pops=pops))
     return out
