@@ -18,10 +18,10 @@ from voice.subtitles import Cue
 
 logger = logging.getLogger(__name__)
 
-# 2-color system: near-white base (style) + muted red accent. Vibe = role -> scale.
-ACCENT = "&H005050F0"  # muted red (ASS BGR)
-OUTLINE = "&H70000000"
-SHOUT_OUTLINE = "&H70000000"
+# Bright white emphasis on dimmer white base (dark psych, high-contrast pop).
+ACCENT = "&H00FFFFFF"  # bright white for emphasized words
+OUTLINE = "&H90000000"
+SHOUT_OUTLINE = "&H90000000"
 ROLE_FS = {
     "action": 74,    # direct, protective move
     "danger": 76,    # threat/trap exposed
@@ -29,7 +29,7 @@ ROLE_FS = {
     "contrast": 72,  # turn/flip
     "key": 70,       # core idea (subtle)
 }
-SHOUT_FS = 86  # ALL-CAPS: biggest/boldest
+SHOUT_FS = 86  # ALL-CAPS: biggest
 RESET = r"{\r}"
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
 # ALL-CAPS token: at least 2 letters, no lowercase. Avoid matching inside ASS tags.
@@ -53,8 +53,9 @@ class EmphasisPlan(BaseModel):
 
 SYSTEM = (
     "Style subtitle cues so a muted/deaf viewer FEELS the sentence's vibe. "
-    "For each cue read its meaning in the full lesson context and mark 0-1 span "
-    "(rarely 2) that carries that vibe. No fixed keyword lists — decide from "
+    "For each cue read its meaning in the full lesson context and mark 1-2 spans "
+    "(the specific word(s) that carry the vibe) — can be more than one word in a "
+    "cue when they together carry the moment. No fixed keyword lists — decide from "
     "what the sentence DOES.\n"
     "Roles (pick the one matching the moment's vibe):\n"
     "- danger: a trap, pressure, manipulation, threat, or 'don't get pulled in'\n"
@@ -62,8 +63,8 @@ SYSTEM = (
     "- reveal: the tactic named or the realization that clicks\n"
     "- contrast: the turn/flip where meaning changes (the BUT/instead moment)\n"
     "- key: the core idea to remember (sparing)\n"
-    "Calm/neutral explanatory cues get NO spans — don't over-style. "
-    "Never emphasize filler. 'text' must be word(s) that appear in that cue."
+    "Calm/neutral explanatory cues get NO spans. Never emphasize filler. "
+    "'text' must be word(s) that appear in that cue."
 )
 
 
@@ -74,7 +75,8 @@ def _tag(role: str | None, *, shout: bool = False) -> str:
     else:
         fs = ROLE_FS.get((role or "key").lower(), ROLE_FS["key"])
         ol = OUTLINE
-    return r"{\b1\fs" + str(fs) + r"\c" + ACCENT + r"\3c" + ol + "&}"
+    # regular weight (\b0) overall; emphasis pops via bright white + size
+    return r"{\b0\fs" + str(fs) + r"\c" + ACCENT + r"\3c" + ol + "&}"
 
 
 def _strip_tags(text: str) -> str:
@@ -250,7 +252,16 @@ def _fallback(lines: list[str], cues: list[Cue]) -> list[Cue]:
                 role, frag = "danger", m.group(0)
 
         # Calm/scene-setting cues stay unstyled (vibe = neutral). Only ALL-CAPS
-        # words get SHOUT via _apply/_style_caps.
-        spans = [SpanMark(text=frag, role=role or "key")] if frag else []
-        out.append(replace(cue, text=_apply(text, spans)))
+        # words get SHOUT via _apply/_style_caps. Allow a 2nd vibe word when clear.
+        spans: list[SpanMark] = []
+        if frag:
+            spans.append(SpanMark(text=frag, role=role or "key"))
+            if role in {"action", "danger"} and frag.lower() not in plain.lower():
+                pass
+            elif role in {"action", "danger"}:
+                # add a supporting verb/noun if present (e.g. "DEMAND proof")
+                m2 = _ACTION.search(plain) if role == "action" else _TRAP.search(plain)
+                if m2 and m2.group(0).lower() != frag.lower().split()[0].lower():
+                    spans.append(SpanMark(text=m2.group(0), role=role))
+        out.append(replace(cue, text=_apply(plain, spans)))
     return out
