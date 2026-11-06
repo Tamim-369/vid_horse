@@ -40,6 +40,18 @@ class Settings(BaseSettings):
     ollama_keep_alive: str = Field(default="5m")
     ollama_timeout: float = Field(default=600.0, gt=0)
 
+    # -- OpenRouter -----------------------------------------------------------
+    openrouter_api_key: str | None = Field(
+        default=None, validation_alias=AliasChoices("OPENROUTER_API_KEY")
+    )
+    openrouter_models: str = Field(
+        default="openrouter/free,nvidia/nemotron-3-ultra-550b-a55b:free,nvidia/nemotron-3.5-super-vl:free,nvidia/nemotron-3.5-lightning:free,google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,recursive/flint-v1.0:free,xingchen-agi/xing4.0-29b-a4b:free"
+    )
+    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
+    openrouter_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+    openrouter_max_tokens: int | None = Field(default=None, gt=0)
+    openrouter_timeout: float = Field(default=120.0, gt=0)
+
     # -- Ollama Cloud --------------------------------------------------------
     ollama_cloud_api_key: str | None = Field(
         default=None,
