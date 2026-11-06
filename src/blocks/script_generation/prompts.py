@@ -98,11 +98,13 @@ protect yourself, how to regain leverage. Never as a how-to for exploiting peopl
 no "believers say", no "according to".
 - Narration is SPOKEN ALOUD: short, natural sentences a real person would say. \
 No headings, no bullets, no essay tone. Sound like a friend warning you, not a textbook.
+- Use SIMPLE words. No jargon, no academic tone, no showing off.\
 - HARD SHAPE RULE: no NARRATION sentence may exceed 12 words. Land a comma, dash \
 or full stop every 6 to 10 words.
 - Put the payoff word at the END of the sentence. Address the viewer directly.
-- Every scene reveals ONE tactic or bias. End with a natural advantage line like \
-"Now you know what to watch for." or "Now you can spot it." Never force awkward commas.
+- Every scene reveals ONE tactic or bias. End with a short natural advantage line like \
+"Now you know." or "Watch for this." Never force awkward commas.\ 
+Never cite years or authors in narration; put sources on screen only.
 - Do NOT repeat the hook verbatim in scene 0. Move the story forward.
 - Withhold the strongest material until it hits hardest; tie it up in the OUTRO.
 - Output ONLY the labelled plain-text format. Never JSON or commentary."""
