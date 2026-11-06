@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -26,7 +27,7 @@ VOICE_PROMPT = Path("assets/voice/voice_prompt_short.wav")
 
 # when the key of a rendered asset changes shape, older cached wavs must
 # be re-rendered, not silently shipped
-_KEY_VERSION = "s2"
+_KEY_VERSION = "s3"
 
 # sentence boundary: punctuation that ends a spoken sentence, then space.
 # speakable() has already folded colons/semicolons into commas, so these
@@ -55,7 +56,7 @@ def _sentences(text: str) -> list[str]:
     return merged
 
 
-def _text_key(text: str, voice_tag: str = "") -> str:
+def _text_key(text: str, voice_tag: str = "", speed: float = 1.0) -> str:
     """Content key for a narration line: the exact text the model sees.
 
     ``voice_tag`` distinguishes alternative reference voices so cached
@@ -63,9 +64,23 @@ def _text_key(text: str, voice_tag: str = "") -> str:
     """
 
     return hashlib.sha256(
-        f"{_KEY_VERSION}|{voice_tag}\n{speakable(text)}".encode()
+        f"{_KEY_VERSION}|{voice_tag}|{speed}\n{speakable(text)}".encode()
     ).hexdigest()[:16]
 
+
+
+
+def _atempo(path: Path, speed: float) -> None:
+    """Time-stretch in place, preserving pitch. No-op when speed is 1.0."""
+    if abs(speed - 1.0) < 0.001 or not path.exists():
+        return
+    tmp = path.with_suffix(".tempo.wav")
+    subprocess.run(
+        ["ffmpeg", "-y", "-i", str(path), "-filter:a", f"atempo={speed}",
+         "-ar", "24000", str(tmp)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    tmp.replace(path)
 
 class VoiceOver:
     """Chatterbox-Nano narration with the project's cloned voice.
@@ -109,6 +124,7 @@ class VoiceOver:
         )
         self._sentence_gap = settings.voice_sentence_gap
         self._line_gap = settings.voice_line_gap
+        self._speed = settings.voice_speed
         self._local = threading.local()
         # Don't reset torch threads if parallel work has already started
         try:
@@ -178,7 +194,7 @@ class VoiceOver:
     ) -> torch.Tensor:
         wav_path = out_dir / f"{stem}-{index:02d}.s{position:02d}.wav"
         sidecar = out_dir / f"{stem}-{index:02d}.s{position:02d}.key"
-        key = _text_key(text, self._key_tag)
+        key = _text_key(text, self._key_tag, self._speed)
         if wav_path.exists() and sidecar.exists() and sidecar.read_text(encoding="utf-8") == key:
             return ta.load(str(wav_path))[0]
         wav = self._trimmed(self._speak(text), sr)
@@ -209,6 +225,9 @@ class VoiceOver:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         wav, _sr = self._render_line(-1, text, out_path.parent, out_path.stem)
         ta.save(str(out_path), wav, self._model_for_thread().sr)
+        _atempo(out_path, self._speed)
+        if abs(self._speed - 1.0) >= 0.001:
+            wav, _sr = ta.load(str(out_path))
         return wav.shape[-1] / self._model_for_thread().sr
 
     def render_script(
@@ -225,7 +244,7 @@ class VoiceOver:
         def synthesize(index: int) -> tuple[int, torch.Tensor, int]:
             line_path = out_dir / f"{stem}-{index:02d}.wav"
             sidecar = out_dir / f"{stem}-{index:02d}.key"
-            key = _text_key(segments[index], self._key_tag)
+            key = _text_key(segments[index], self._key_tag, self._speed)
             # content-keyed cache: reuse the line only when the wav exists
             # AND it was synthesized from exactly this text; a stale wav
             # from an edited script must re-render, not silently ship
@@ -238,6 +257,9 @@ class VoiceOver:
                 return index, wav, sr
             wav, sr = self._render_line(index, segments[index], out_dir, stem)
             ta.save(str(line_path), wav, sr)
+            _atempo(line_path, self._speed)
+            if abs(self._speed - 1.0) >= 0.001:
+                wav, sr = ta.load(str(line_path))
             sidecar.write_text(key, encoding="utf-8")
             logger.info("Line %d rendered (%.1fs)", index, wav.shape[-1] / sr)
             return index, wav, sr
