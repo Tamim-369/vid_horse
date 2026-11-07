@@ -62,19 +62,29 @@ class Cue:
     end: float
     text: str
     pops: list[str] = field(default_factory=list)
+    # (display_word, abs_start, abs_end) for word-timed rendering
+    words: list[tuple[str, float, float]] = field(default_factory=list)
 
 
 def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]:
-    """Group narration words into plot-reel style cues."""
+    """Group narration words into cues, retaining per-word timings."""
 
     groups: list[Cue] = []
     chunk: list[str] = []
+    chunk_words: list[tuple[str, float, float]] = []
     chunk_start: float | None = None
     chunk_end = 0.0
 
     def flush(last: float) -> None:
         if chunk and chunk_start is not None:
-            groups.append(Cue(chunk_start, max(chunk_end, last), " ".join(chunk)))
+            groups.append(
+                Cue(
+                    chunk_start,
+                    max(chunk_end, last),
+                    " ".join(chunk),
+                    words=list(chunk_words),
+                )
+            )
 
     for index, word in enumerate(words):
         trimmed = word.strip(",")
@@ -82,9 +92,13 @@ def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]
         # keep the rendered cue looking like the number narration spoke.
         if chunk and trimmed.startswith((".", ",")) and chunk[-1][-1].isdigit():
             chunk[-1] += trimmed
+            if chunk_words:
+                w, ws, _we = chunk_words[-1]
+                chunk_words[-1] = (w + trimmed, ws, ends[index])
             chunk_end = ends[index]
             continue
         chunk.append(trimmed)
+        chunk_words.append((trimmed, starts[index], ends[index]))
         if chunk_start is None:
             chunk_start = starts[index]
         chunk_end = ends[index]
@@ -92,6 +106,7 @@ def _cues(words: list[str], starts: list[float], ends: list[float]) -> list[Cue]
         if punctuation or len(chunk) >= CUE_MAX_WORDS:
             flush(chunk_end)
             chunk.clear()
+            chunk_words.clear()
             chunk_start = None
     flush(chunk_end)
     return groups
@@ -342,29 +357,89 @@ def _cue_finish(cues: list[Cue], index: int, stop: float) -> float:
     return finish
 
 
-def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
-    """Serialise cues to ASS: bottom subtitles + centered pops for key words."""
+def _norm_tok(s: str) -> str:
+    return re.sub(r"[^a-z0-9']+", "", s.lower())
 
-    body: list[str] = []
-    for index, cue in enumerate(cues):
-        # whisper occasionally reports a zero-length word; keep a floor so
-        # every cue is actually readable
-        start, stop = cue.start, max(cue.end, cue.start + 0.25)
-        finish = _cue_finish(cues, index, stop)
+
+def _pop_word_times(cue: Cue, pop: str) -> tuple[float, float] | None:
+    words = getattr(cue, "words", None) or []
+    if not words:
+        return None
+    toks = [_norm_tok(t) for t in str(pop).split() if _norm_tok(t)]
+    if not toks:
+        return None
+    wnorm = [_norm_tok(w) for w, _s, _e in words]
+    for i in range(len(wnorm)):
+        if wnorm[i : i + len(toks)] == toks:
+            return words[i][1], words[i + len(toks) - 1][2]
+        if len(toks) == 1 and toks[0] and toks[0] in (wnorm[i] or ""):
+            return words[i][1], words[i][2]
+    return None
+
+
+def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
+    words = [
+        (w, max(start, ws), min(finish, we))
+        for (w, ws, we) in (getattr(cue, "words", None) or [])
+        if we > start and ws < finish
+    ]
+    if not words:
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
             f"Cue,,0,0,0,,{text}"
         )
+        return
+    plain = [w for w, _s, _e in words]
+    pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
+    for i, (_w, ws, we) in enumerate(words):
+        if we - ws < 0.04:
+            continue
+        parts = []
+        for j, tok in enumerate(plain):
+            disp = _TIMESTAMP.sub("", tok).strip()
+            is_pop = _norm_tok(tok) in pops_norm
+            if j == i:
+                if is_pop:
+                    parts.append(r"{\b0\fs70\c&H00FFFFFF&}" + disp + r"{\r}")
+                else:
+                    parts.append(r"{\c&H00FFFFFF&}" + disp + r"{\r}")
+            elif is_pop:
+                parts.append(r"{\c&H00FFFFFF&}" + disp + r"{\r}")
+            else:
+                parts.append(r"{\c&H00A8A8A8&}" + disp + r"{\r}")
+        line = " ".join(parts)
+        body.append(
+            f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
+            f"Cue,,0,0,0,,{line}"
+        )
+
+
+def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
+    """Serialise cues to ASS: word-synced bottom subs + centered kinetic pops."""
+
+    body: list[str] = []
+    for index, cue in enumerate(cues):
+        start, stop = cue.start, max(cue.end, cue.start + 0.25)
+        finish = _cue_finish(cues, index, stop)
+        _progressive_bottom(body, cue, start, finish)
         pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
         if pops:
             ys = [760, 650, 870, 540]
             for i, pop in enumerate(pops[:4]):
                 disp = _TIMESTAMP.sub("", str(pop).replace("\n", " ")).strip()
                 y = ys[i] if i < len(ys) else 760 - 110 * i
+                wt = _pop_word_times(cue, pop)
+                ps, pe = (wt[0], max(wt[1], wt[0] + 0.18)) if wt else (start, max(finish, start))
+                ps = max(start, ps)
+                pe = min(finish, pe)
+                if pe - ps < 0.12:
+                    pe = min(finish, ps + 0.22)
+                # kinetic punch: quick scale-up then settle, fade in/out
+                punch = rf"{{\an5\pos(540,{y})\fscx88\fscy88\blur2\fad(30,70)\t(0,90,\fscx108\fscy108\blur0)\t(90,220,\fscx100\fscy100)}}"
                 body.append(
-                    f"Dialogue: 1,{_ass_time(start)},{_ass_time(max(finish, start))},"
-                    rf"Pop,,0,0,0,,{{\an5\pos(540,{y})\fad(40,60)}}{disp}"
+                    f"Dialogue: 1,{_ass_time(ps)},{_ass_time(max(pe, ps))},"
+                    f"Pop,,0,0,0,,{punch}{disp}"
                 )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path
