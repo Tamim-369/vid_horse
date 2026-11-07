@@ -385,6 +385,15 @@ _TAKEOVER_TERMS = {
 }
 HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
+# Filler framing phrases (normalized same as _norm_tok) that should
+# never plate over the actual concept
+_PLATE_FILLER = {
+    _norm_tok(p) for p in [
+        "what we call", "what is", "what are", "we call", "is called",
+        "they call", "this is", "that is", "known as", "referred to",
+    ]
+}
+
 
 def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
     """The keyword a plate should show for this cue, and whether it is strong.
@@ -392,15 +401,25 @@ def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
     Strong terms (command/reveal vocabulary) may plate every
     ``PLATE_MIN_GAP`` seconds; ordinary emphasized words only every
     ``PLATEOrdinary_GAP`` so the big word stays an event, not a strobe.
+
+    If ALL pops for this cue are filler framing phrases, skip the cue
+    entirely — the next cue likely has the actual concept.
     """
 
     pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
     if not pops:
         return None
+    # If every pop is a filler phrase, this cue carries no concept — skip it
+    if all(any(f in _norm_tok(p) for f in _PLATE_FILLER) for p in pops):
+        return None
     ranked = sorted(
         pops,
         key=lambda p: (
             -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()),
+            # penalize filler framing phrases even when embedded in longer pops
+            # e.g. "what we call crowd mind" should not beat "crowd mind"
+            1 if any(f in _norm_tok(p) for f in _PLATE_FILLER) else 0,
+            # then prefer concise concept words (2-3 words > 1, but filler is last)
             -len(str(p).split()),
         ),
     )
@@ -413,10 +432,36 @@ def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
     return None
 
 
-PLATE_MIN_GAP = 2.0  # seconds between plate starts (calm rhythm, no strobe)
-PLATE_ORDINARY_GAP = 4.0  # non-strong keywords plate at most every 4s
-PLATE_MAX_HOLD = 2.5  # hold window agreed in design
-PLATE_MIN_HOLD = 1.2
+PLATE_MIN_GAP = 2.0  # min gap between ANY plate starts — ~8-10 plates per 40s
+PLATE_ORDINARY_GAP = 2.0  # unified
+PLATE_MAX_HOLD = 1.75  # hold window decreased ~30% from 2.5s
+PLATE_MIN_HOLD = 0.9
+PLATE_MAX_PER_VIDEO = 10  # cap
+
+
+# Concept terms that boost a plate's priority (the lesson's core ideas)
+_PLATE_CONCEPT_BOOST = {
+    "crowd mind", "group think", "social proof", "herd", "conform",
+    "manipulation", "influence", "persuasion", "compliance", "obedience",
+    "authority", "reciprocity", "scarcity", "consistency", "liking",
+    "foot in door", "door in face", "lowball", "bait", "anchoring",
+}
+
+def _plate_score(disp: str) -> int:
+    """Higher = more important concept."""
+    normed = _norm_tok(disp)
+    words = disp.split()
+    # base: longer phrases > single words
+    score = len(words)
+    # boost for known psych concepts
+    for term in _PLATE_CONCEPT_BOOST:
+        if term.replace(" ", "") in normed:
+            score += 5
+    # boost for strong command/reveal terms
+    for w in words:
+        if _norm_tok(w) in _TAKEOVER_TERMS:
+            score += 3
+    return score
 
 
 def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
@@ -426,9 +471,13 @@ def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
     early) and HOLDS — through the idea, until the next accepted keyword
     or PLATE_MAX_HOLD, whichever comes first. No motion, gentle fades;
     one word at a time.
+
+    Selection: greedy by score (not by time) — pick highest-scoring
+    candidate, remove overlapping ones, repeat. Ensures key concepts
+    (crowd mind, manipulation...) win over filler near them.
     """
 
-    candidates: list[tuple[float, str, bool]] = []
+    candidates: list[tuple[float, str, bool, int]] = []
     for cue in cues:
         picked = _plate_pick(cue)
         if not picked:
@@ -438,20 +487,30 @@ def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
         if not wt:
             continue
         ps = max(0.0, wt[0] - HIGHLIGHT_LEAD)
-        candidates.append((ps, disp, strong))
-    candidates.sort(key=lambda item: item[0])
+        score = _plate_score(disp)
+        candidates.append((ps, disp, strong, score))
+    # sort by score DESC, then time ASC
+    candidates.sort(key=lambda item: (-item[3], item[0]))
 
-    chosen: list[list] = []  # [start, display]
-    for ps, disp, strong in candidates:
-        if chosen and disp == chosen[-1][1]:
-            continue  # same word held twice back-to-back
-        gap = ps - (chosen[-1][0] if chosen else -99.0)
-        if gap < PLATE_MIN_GAP or (not strong and gap < PLATE_ORDINARY_GAP):
+    chosen: list[list] = []  # [start, display, score]
+    for ps, disp, strong, score in candidates:
+        if len(chosen) >= PLATE_MAX_PER_VIDEO:
+            break
+        # check interval overlap: [ps, ps+PLATE_MAX_HOLD] vs [cp, cp+PLATE_MAX_HOLD]
+        overlap = False
+        for cp, cd, cs in chosen:
+            if ps < cp + PLATE_MAX_HOLD and cp < ps + PLATE_MAX_HOLD:
+                overlap = True
+                break
+        if overlap:
             continue
-        chosen.append([ps, disp])
+        chosen.append([ps, disp, score])
+
+    # now sort chosen by time for plate construction
+    chosen.sort(key=lambda item: item[0])
 
     plates: list[tuple[float, float, str]] = []
-    for i, (ps, disp) in enumerate(chosen):
+    for i, (ps, disp, _score) in enumerate(chosen):
         next_start = chosen[i + 1][0] if i + 1 < len(chosen) else None
         pe = ps + PLATE_MAX_HOLD
         if next_start is not None:
