@@ -31,10 +31,10 @@ _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,62,&H00C8C8C8,&H00C8C8C8,&H00000000,"
     "&HD0000000,0,0,0,0,100,100,0,0,1,2.5,1,2,60,60,420,1"
 )
-# Center pop: important words, bright white, large, same font.
-_POP_LINE = (
-    "Style: Pop,DejaVu Sans Condensed,108,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&HB0000000,0,0,0,0,100,100,0,0,1,3,0,5,60,60,60,1"
+# Rare caption takeover (anchored low-center, feels like a magnified subtitle).
+_HIT_LINE = (
+    "Style: Hit,DejaVu Sans Condensed,96,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&HE0000000,0,0,0,0,100,100,0,0,3,3.5,0,2,60,60,380,1"
 )
 # fmt: on
 
@@ -47,7 +47,7 @@ WrapStyle: 0
 [V4+ Styles]
 {_FORMAT_LINE}
 {_STYLE_LINE}
-{_POP_LINE}
+{_HIT_LINE}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -377,23 +377,52 @@ def _pop_word_times(cue: Cue, pop: str) -> tuple[float, float] | None:
     return None
 
 
-def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
+_TAKEOVER_TERMS = {
+    "demand", "prove", "proof", "stop", "never", "lie", "lies", "trap",
+    "trick", "control", "pressure", "manipulate", "fake", "test", "verify",
+}
+
+
+def _takeover_for_cue(cue: Cue) -> str | None:
+    pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
+    if not pops:
+        return None
+    # prefer the strongest, shortest command/reveal phrase
+    ranked = sorted(pops, key=lambda p: (len(str(p).split()), -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split())))
+    for pop in ranked:
+        words = str(pop).split()
+        if len(words) > 3:
+            continue
+        normed = [_norm_tok(t) for t in words]
+        if any(t in _TAKEOVER_TERMS for t in normed) or str(pop).strip().isupper():
+            return str(pop).strip()
+    return None
+
+
+def _in_takeover(t: float, ranges: list[tuple[float, float]]) -> bool:
+    return any(s - 0.02 <= t <= e + 0.02 for s, e in ranges)
+
+
+def _progressive_bottom(
+    body: list[str], cue: Cue, start: float, finish: float, takeovers: list[tuple[float, float]]
+) -> None:
     words = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not words:
-        text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
-        body.append(
-            f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
-            f"Cue,,0,0,0,,{text}"
-        )
+        if not _in_takeover((start + finish) / 2, takeovers):
+            text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
+            body.append(
+                f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
+                f"Cue,,0,0,0,,{text}"
+            )
         return
     plain = [w for w, _s, _e in words]
     pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
     for i, (_w, ws, we) in enumerate(words):
-        if we - ws < 0.04:
+        if we - ws < 0.04 or _in_takeover((ws + we) / 2, takeovers):
             continue
         parts = []
         for j, tok in enumerate(plain):
@@ -401,13 +430,14 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
                 if is_pop:
-                    parts.append(r"{\b0\fs70\c&H00FFFFFF&}" + disp + r"{\r}")
+                    # in-line kinetic punch: lands crisp, bright, a touch larger
+                    parts.append(r"{\c&H00FFFFFF&\3c&H00000000&\bord2.2\fs68\fscx94\fscy94\t(0,80,\fscx106\fscy106)\t(80,180,\fscx100\fscy100\fs66)}" + disp + r"{\r}")
                 else:
-                    parts.append(r"{\c&H00FFFFFF&}" + disp + r"{\r}")
+                    parts.append(r"{\c&H00FFFFFF&\3c&H50000000&\bord1.8}" + disp + r"{\r}")
             elif is_pop:
-                parts.append(r"{\c&H00FFFFFF&}" + disp + r"{\r}")
+                parts.append(r"{\c&H00F0F0F0&\3c&H70000000&\bord1.5}" + disp + r"{\r}")
             else:
-                parts.append(r"{\c&H00A8A8A8&}" + disp + r"{\r}")
+                parts.append(r"{\c&H009E9E9E&\3c&H90000000&\bord1}" + disp + r"{\r}")
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
@@ -416,30 +446,41 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
 
 
 def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
-    """Serialise cues to ASS: word-synced bottom subs + centered kinetic pops."""
+    """Serialise cues to ASS: progressive bottom + rare anchored takeovers."""
 
+    # plan rare, density-capped takeovers (caption becomes the subtitle)
+    takeovers: list[tuple[float, float, str]] = []
+    last_t = -99.0
+    for cue in cues:
+        hit = _takeover_for_cue(cue)
+        if not hit:
+            continue
+        wt = _pop_word_times(cue, hit)
+        start, stop = cue.start, max(cue.end, cue.start + 0.25)
+        finish = _cue_finish(cues, cues.index(cue), stop)
+        if wt:
+            ps, pe = wt[0], max(wt[1], wt[0] + 0.22)
+        else:
+            ps, pe = start, min(finish, start + 0.55)
+        ps, pe = max(start, ps), min(finish, max(pe, ps + 0.28))
+        if ps - last_t < 9.0:
+            continue
+        takeovers.append((ps, pe, hit.upper()))
+        last_t = ps
+
+    takeover_ranges = [(s, e) for s, e, _h in takeovers]
     body: list[str] = []
     for index, cue in enumerate(cues):
         start, stop = cue.start, max(cue.end, cue.start + 0.25)
         finish = _cue_finish(cues, index, stop)
-        _progressive_bottom(body, cue, start, finish)
-        pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
-        if pops:
-            ys = [760, 650, 870, 540]
-            for i, pop in enumerate(pops[:4]):
-                disp = _TIMESTAMP.sub("", str(pop).replace("\n", " ")).strip()
-                y = ys[i] if i < len(ys) else 760 - 110 * i
-                wt = _pop_word_times(cue, pop)
-                ps, pe = (wt[0], max(wt[1], wt[0] + 0.18)) if wt else (start, max(finish, start))
-                ps = max(start, ps)
-                pe = min(finish, pe)
-                if pe - ps < 0.12:
-                    pe = min(finish, ps + 0.22)
-                # kinetic punch: quick scale-up then settle, fade in/out
-                punch = rf"{{\an5\pos(540,{y})\fscx88\fscy88\blur2\fad(30,70)\t(0,90,\fscx108\fscy108\blur0)\t(90,220,\fscx100\fscy100)}}"
-                body.append(
-                    f"Dialogue: 1,{_ass_time(ps)},{_ass_time(max(pe, ps))},"
-                    f"Pop,,0,0,0,,{punch}{disp}"
-                )
+        _progressive_bottom(body, cue, start, finish, takeover_ranges)
+
+    for ps, pe, disp in takeovers:
+        # anchored low-center: reads as the subtitle taking focus, not a sticker
+        fx = r"{\an2\pos(540,1465)\fscx96\fscy96\fad(40,90)\t(0,90,\fscx103\fscy103)\t(90,200,\fscx100\fscy100)}"
+        body.append(
+            f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
+            f"Hit,,0,0,0,,{fx}{disp}"
+        )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path
