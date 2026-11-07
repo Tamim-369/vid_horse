@@ -28,13 +28,13 @@ _FORMAT_LINE = (
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
 _STYLE_LINE = (
-    "Style: Cue,DejaVu Sans Condensed,62,&H00C8C8C8,&H00C8C8C8,&H00000000,"
-    "&HD0000000,0,0,0,0,100,100,0,0,1,2.5,1,2,60,60,420,1"
+    "Style: Cue,DejaVu Sans Condensed,60,&H00B8B8B8,&H00B8B8B8,&H00000000,"
+    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,440,1"
 )
-# Rare caption takeover (anchored low-center, feels like a magnified subtitle).
+# Rare takeover: subtitle takes focus (clean, anchored, no bounce/box).
 _HIT_LINE = (
-    "Style: Hit,DejaVu Sans Condensed,96,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&HE0000000,0,0,0,0,100,100,0,0,3,3.5,0,2,60,60,380,1"
+    "Style: Hit,DejaVu Sans Condensed,92,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,0,0,0,0,100,100,0,0,1,3.2,0,2,70,70,400,1"
 )
 # fmt: on
 
@@ -387,15 +387,18 @@ def _takeover_for_cue(cue: Cue) -> str | None:
     pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
     if not pops:
         return None
-    # prefer the strongest, shortest command/reveal phrase
-    ranked = sorted(pops, key=lambda p: (len(str(p).split()), -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split())))
+    # only the strongest command/reveal terms; rare and deliberate
+    ranked = sorted(
+        pops,
+        key=lambda p: (-sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()), len(str(p).split())),
+    )
     for pop in ranked:
         words = str(pop).split()
         if len(words) > 3:
             continue
         normed = [_norm_tok(t) for t in words]
-        if any(t in _TAKEOVER_TERMS for t in normed) or str(pop).strip().isupper():
-            return str(pop).strip()
+        if any(t in _TAKEOVER_TERMS for t in normed):
+            return " ".join(words).strip().upper()
     return None
 
 
@@ -429,15 +432,16 @@ def _progressive_bottom(
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
+                # active: bright white, clean edge (no bounce)
                 if is_pop:
-                    # in-line kinetic punch: lands crisp, bright, a touch larger
-                    parts.append(r"{\c&H00FFFFFF&\3c&H00000000&\bord2.2\fs68\fscx94\fscy94\t(0,80,\fscx106\fscy106)\t(80,180,\fscx100\fscy100\fs66)}" + disp + r"{\r}")
+                    parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&\fs64}" + disp + r"{\r}")
                 else:
-                    parts.append(r"{\c&H00FFFFFF&\3c&H50000000&\bord1.8}" + disp + r"{\r}")
+                    parts.append(r"{\c&H00FFFFFF&\bord2.6\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
-                parts.append(r"{\c&H00F0F0F0&\3c&H70000000&\bord1.5}" + disp + r"{\r}")
+                # important, not yet/just spoken: clear but calm
+                parts.append(r"{\c&H00E6E6E6&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
             else:
-                parts.append(r"{\c&H009E9E9E&\3c&H90000000&\bord1}" + disp + r"{\r}")
+                parts.append(r"{\c&H00909090&\bord2\3c&H00000000&}" + disp + r"{\r}")
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
@@ -446,9 +450,9 @@ def _progressive_bottom(
 
 
 def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
-    """Serialise cues to ASS: progressive bottom + rare anchored takeovers."""
+    """Serialise cues to ASS: progressive word-synced subs + rare clean takeovers."""
 
-    # plan rare, density-capped takeovers (caption becomes the subtitle)
+    # plan rare, density-capped takeovers (caption takes focus, clean)
     takeovers: list[tuple[float, float, str]] = []
     last_t = -99.0
     for cue in cues:
@@ -463,7 +467,7 @@ def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
         else:
             ps, pe = start, min(finish, start + 0.55)
         ps, pe = max(start, ps), min(finish, max(pe, ps + 0.28))
-        if ps - last_t < 9.0:
+        if ps - last_t < 10.0:
             continue
         takeovers.append((ps, pe, hit.upper()))
         last_t = ps
@@ -476,8 +480,8 @@ def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
         _progressive_bottom(body, cue, start, finish, takeover_ranges)
 
     for ps, pe, disp in takeovers:
-        # anchored low-center: reads as the subtitle taking focus, not a sticker
-        fx = r"{\an2\pos(540,1465)\fscx96\fscy96\fad(40,90)\t(0,90,\fscx103\fscy103)\t(90,200,\fscx100\fscy100)}"
+        # anchored low-center: subtitle takes focus (still, clear)
+        fx = r"{\an2\pos(540,1465)\fad(60,80)}"
         body.append(
             f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
             f"Hit,,0,0,0,,{fx}{disp}"
