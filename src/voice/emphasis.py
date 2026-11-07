@@ -32,6 +32,9 @@ ROLE_FS = {
 SHOUT_FS = 86  # ALL-CAPS: biggest
 RESET = r"{\r}"
 WORD_RE = re.compile(r"[A-Za-z0-9']+")
+
+def _norm(s: str) -> str:
+    return re.sub(r"[^a-z0-9']+", "", (s or "").lower())
 # ALL-CAPS token: at least 2 letters, no lowercase. Avoid matching inside ASS tags.
 ALLCAPS_RE = re.compile(r"\b([A-Z]{2,}[A-Z0-9']*)\b")
 ASS_TAG_RE = re.compile(r"\{[^}]*\}")
@@ -202,18 +205,22 @@ def emphasize_cues(
 
 
 # --- structural fallback: vibe from sentence function/position ---
-_CONTRAST = re.compile(r"\b(but|instead|yet|unless|however)\b", re.I)
+_CONTRAST = re.compile(r"\b(but|instead|yet|unless|however|still)\b", re.I)
 _NEGATE = re.compile(r"\b(don't|doesn't|isn't|won't|can't|not|never|no)\b", re.I)
 _ACTION = re.compile(
-    r"\b(demand|ask|show|stop|watch|look|check|hold|prove|remember|test|pause|wait|step|walk|verify|question)\b",
+    r"\b(demand|ask|show|stop|watch|look|check|hold|prove|proof|remember|test|pause|wait|step|walk|verify|question|notice|choose|decide|think|compare|refuse|resist)\b",
     re.I,
 )
 _TRAP = re.compile(
-    r"\b(trap|trick|pressure|push|force|hook|rush|panic|scare|fake|lie|lies|bait|manipulat|control)\w*\b",
+    r"\b(trap|trick|tricks|pressure|push|force|forced|hook|rush|panic|scare|scared|fake|lie|lies|lying|bait|manipulat\w*|control\w*|guilt\w*|shame\w*|fear\w*|doubt\w*|blame\w*|threat\w*|obey\w*|fool\w*|cheat\w*)\b",
+    re.I,
+)
+_KEY = re.compile(
+    r"\b(truth|real|really|fact|facts|proof|evidence|reason|choice|power|right|wrong|believe|agree|everyone|always|nothing)\b",
     re.I,
 )
 _NAMING = re.compile(r"\b(called|means|is when|this is|that is|named)\b", re.I)
-# cues that are plain scene-setting questions/explanations → no styling
+# cues that are plain scene-setting questions/explanations → calm (style lightly)
 _CALM = re.compile(
     r"^(it'?s easy|imagine|think about|what if|does that mean|if (most|someone|they)|like that)\b",
     re.I,
@@ -262,18 +269,31 @@ def _fallback(lines: list[str], cues: list[Cue]) -> list[Cue]:
             if m and li > 0:
                 role, frag = "danger", m.group(0)
 
-        # Calm/scene-setting cues stay unstyled (vibe = neutral). Only ALL-CAPS
-        # words get SHOUT via _apply/_style_caps. Allow a 2nd vibe word when clear.
+        # highlight meaningful psych/action words; keep scene-setting calm-ish
         spans: list[SpanMark] = []
         if frag:
             spans.append(SpanMark(text=frag, role=role or "key"))
-            if role in {"action", "danger"} and frag.lower() not in plain.lower():
-                pass
-            elif role in {"action", "danger"}:
-                # add a supporting verb/noun if present (e.g. "DEMAND proof")
-                m2 = _ACTION.search(plain) if role == "action" else _TRAP.search(plain)
-                if m2 and m2.group(0).lower() != frag.lower().split()[0].lower():
-                    spans.append(SpanMark(text=m2.group(0), role=role))
+        # add other strong terms present (more words highlighted, like demand/proof/trap/etc.)
+        seen = {_norm(frag) if frag else ""}
+        for rx, rname in ((_TRAP, "danger"), (_ACTION, "action"), (_CONTRAST, "contrast"), (_KEY, "key")):
+            for m2 in rx.finditer(plain):
+                t = m2.group(0)
+                nt = _norm(t)
+                if not nt or nt in seen:
+                    continue
+                if calm and rname in {"key", "contrast"} and not frag:
+                    continue
+                seen.add(nt)
+                spans.append(SpanMark(text=t, role=rname))
+                if len(spans) >= 3:
+                    break
+            if len(spans) >= 3:
+                break
+        # if still empty and calm, allow a single key term
+        if not spans and not calm:
+            m2 = _KEY.search(plain)
+            if m2:
+                spans.append(SpanMark(text=m2.group(0), role="key"))
         text, pops = _apply(plain, spans)
         out.append(replace(cue, text=text, pops=pops))
     return out

@@ -28,7 +28,7 @@ _FORMAT_LINE = (
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
 _STYLE_LINE = (
-    "Style: Cue,DejaVu Sans Condensed,60,&H00B8B8B8,&H00B8B8B8,&H00000000,"
+    "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,440,1"
 )
 # Rare takeover: subtitle takes focus (clean, anchored, no bounce/box).
@@ -379,8 +379,11 @@ def _pop_word_times(cue: Cue, pop: str) -> tuple[float, float] | None:
 
 _TAKEOVER_TERMS = {
     "demand", "prove", "proof", "stop", "never", "lie", "lies", "trap",
-    "trick", "control", "pressure", "manipulate", "fake", "test", "verify",
+    "trick", "tricks", "control", "pressure", "manipulate", "manipulation",
+    "fake", "test", "verify", "guilt", "shame", "fear", "doubt", "obey",
+    "rush", "force", "blame", "bait", "threat", "power",
 }
+HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
 
 def _takeover_for_cue(cue: Cue) -> str | None:
@@ -409,12 +412,12 @@ def _in_takeover(t: float, ranges: list[tuple[float, float]]) -> bool:
 def _progressive_bottom(
     body: list[str], cue: Cue, start: float, finish: float, takeovers: list[tuple[float, float]]
 ) -> None:
-    words = [
+    raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
-    if not words:
+    if not raw:
         if not _in_takeover((start + finish) / 2, takeovers):
             text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
             body.append(
@@ -422,9 +425,17 @@ def _progressive_bottom(
                 f"Cue,,0,0,0,,{text}"
             )
         return
-    plain = [w for w, _s, _e in words]
+    # lead highlight slightly before speech for snappier reading
+    lead = HIGHLIGHT_LEAD
+    bounds = [max(start, raw[i][1] - lead) for i in range(len(raw))]
+    bounds.append(min(finish, raw[-1][2]))
+    for k in range(1, len(bounds)):
+        if bounds[k] <= bounds[k - 1]:
+            bounds[k] = bounds[k - 1] + 0.02
+    plain = [w for w, _s, _e in raw]
     pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
-    for i, (_w, ws, we) in enumerate(words):
+    for i in range(len(raw)):
+        ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04 or _in_takeover((ws + we) / 2, takeovers):
             continue
         parts = []
@@ -432,16 +443,15 @@ def _progressive_bottom(
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                # active: bright white, clean edge (no bounce)
+                # active: bright white, clean (no gray, no bounce)
                 if is_pop:
                     parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&\fs64}" + disp + r"{\r}")
                 else:
                     parts.append(r"{\c&H00FFFFFF&\bord2.6\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
-                # important, not yet/just spoken: clear but calm
-                parts.append(r"{\c&H00E6E6E6&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
+                parts.append(r"{\c&H00FFFFFF&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
             else:
-                parts.append(r"{\c&H00909090&\bord2\3c&H00000000&}" + disp + r"{\r}")
+                parts.append(r"{\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
