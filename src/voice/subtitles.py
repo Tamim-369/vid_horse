@@ -32,10 +32,11 @@ _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,350,1"
 )
-# Keyword takeover — REPLACES subtitle at SAME position, bigger/bolder,
-# centered, same margin. Gentle fade only.
-_TAKEOVER_LINE = (
-    "Style: Takeover,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+# Keyword emphasis — SAME position, layers on top, smooth crossfade.
+# Layer 1 (above Cue layer 0). Bigger, bolder, pure white.
+# Fades in 300ms, holds, fades out 300ms — eye never moves.
+_EMPHASIS_LINE = (
+    "Style: Emphasis,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
     "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,350,1"
 )
 # fmt: on
@@ -49,7 +50,7 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {_STYLE_LINE}
-{_TAKEOVER_LINE}
+{_EMPHASIS_LINE}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -463,10 +464,10 @@ def _plate_score(disp: str) -> int:
     return score
 
 
-PLATE_MIN_GAP = 2.0  # min gap between ANY plate starts
-PLATE_ORDINARY_GAP = 2.0  # unified
-PLATE_HOLD = 1.20  # exact hold: 1s 20ms (user spec)
-PLATE_MAX_PER_VIDEO = 10  # cap
+EMPHASIS_MIN_GAP = 2.5  # min gap between emphasis starts (calm rhythm)
+EMPHASIS_HOLD = 2.5  # hold: 2.5s — long enough to read, not strobe
+EMPHASIS_MAX_PER_VIDEO = 10  # cap
+EMPHASIS_FADE = 0.3  # crossfade duration (seconds)
 
 
 def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
@@ -499,13 +500,13 @@ def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
     return None
 
 
-def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
-    """Keyword takeovers: (start, end, DISPLAY).
+def build_emphasis(cues: list[Cue]) -> list[tuple[float, float, str]]:
+    """Keyword emphasis events: (start, end, DISPLAY).
 
-    A takeover appears when its word starts being spoken (HIGHLIGHT_LEAD
-    early) and holds for EXACTLY PLATE_HOLD (1.20s). It REPLACES the
-    subtitle at the same screen position for that window. No overlap
-    between takeovers — higher-scoring concepts win.
+    An emphasis appears when its word starts being spoken (HIGHLIGHT_LEAD
+    early) and holds for EMPHASIS_HOLD (2.5s). It layers ON TOP of the
+    continuous subtitle at the SAME position — smooth crossfade via
+    \\fad(in,out). No gaps, eye never moves. Higher-scoring concepts win.
     """
 
     candidates: list[tuple[float, str, bool, int]] = []
@@ -525,12 +526,12 @@ def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
 
     chosen: list[list] = []  # [start, display, score]
     for ps, disp, strong, score in candidates:
-        if len(chosen) >= PLATE_MAX_PER_VIDEO:
+        if len(chosen) >= EMPHASIS_MAX_PER_VIDEO:
             break
-        # check interval overlap: [ps, ps+PLATE_HOLD] vs [cp, cp+PLATE_HOLD]
+        # check interval overlap: [ps, ps+EMPHASIS_HOLD] vs [cp, cp+EMPHASIS_HOLD]
         overlap = False
         for cp, cd, cs in chosen:
-            if ps < cp + PLATE_HOLD and cp < ps + PLATE_HOLD:
+            if ps < cp + EMPHASIS_HOLD and cp < ps + EMPHASIS_HOLD:
                 overlap = True
                 break
         if overlap:
@@ -540,31 +541,20 @@ def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
     # sort chosen by time for output
     chosen.sort(key=lambda item: item[0])
 
-    plates: list[tuple[float, float, str]] = []
+    emphasis: list[tuple[float, float, str]] = []
     for ps, disp, _score in chosen:
-        pe = ps + PLATE_HOLD
-        plates.append((ps, pe, disp))
-    return plates
+        pe = ps + EMPHASIS_HOLD
+        emphasis.append((ps, pe, disp))
+    return emphasis
 
 
-def _progressive_bottom(
-    body: list[str],
-    cue: Cue,
-    start: float,
-    finish: float,
-    takeover_ranges: list[tuple[float, float]] | None = None,
-) -> None:
+def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not raw:
-        # check if this whole cue falls in a takeover window
-        if takeover_ranges:
-            mid = (start + finish) / 2
-            if any(ps <= mid <= pe for ps, pe in takeover_ranges):
-                return  # skip — takeover covers this
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
@@ -584,11 +574,6 @@ def _progressive_bottom(
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
             continue
-        # skip this word event if it falls in a takeover window
-        if takeover_ranges:
-            mid = (ws + we) / 2
-            if any(ps <= mid <= pe for ps, pe in takeover_ranges):
-                continue
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
@@ -612,35 +597,33 @@ def write_ass(
     *,
     end: float | None = None,
     mode: str = "all",
-    plates: list[tuple[float, float, str]] | None = None,
+    emphasis: list[tuple[float, float, str]] | None = None,
 ) -> Path:
     """Serialise cues to ASS.
 
-    mode: 'all' = word-synced subtitles WITH TAKEOVER GAPS + keyword takeovers
-          (takeover REPLACES subtitle at same position for 1.20s),
-          'highlights' = takeovers only, 'none' = nothing.
+    mode: 'all' = continuous word-synced subtitles + keyword emphasis
+          (emphasis layers ON TOP at same position, smooth crossfade),
+          'highlights' = emphasis only, 'none' = nothing.
     """
 
-    if plates is None:
-        plates = build_plates(cues)
-
-    # takeover time ranges for skipping subtitle generation
-    takeover_ranges = [(ps, pe) for ps, pe, _d in plates]
+    if emphasis is None:
+        emphasis = build_emphasis(cues)
 
     body: list[str] = []
     if mode == "all":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            _progressive_bottom(body, cue, start, finish, takeover_ranges)
+            _progressive_bottom(body, cue, start, finish)
 
     if mode != "none":
-        for ps, pe, disp in plates:
-            # REPLACES subtitle at SAME position (MarginV 350), bigger/bolder
-            fx = r"{\an2\pos(540,1180)\fad(150,250)}"
+        fade_cs = int(EMPHASIS_FADE * 100)  # centiseconds for ASS \fad
+        for ps, pe, disp in emphasis:
+            # Layer 1 (above Cue layer 0), SAME position, smooth crossfade
+            fx = r"{\an2\pos(540,1180)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
             body.append(
-                f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
-                f"Takeover,,0,0,0,,{fx}{disp}"
+                f"Dialogue: 1,{_ass_time(ps)},{_ass_time(pe)},"
+                f"Emphasis,,0,0,0,,{fx}{disp}"
             )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path

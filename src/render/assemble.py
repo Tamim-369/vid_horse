@@ -13,7 +13,7 @@ from config.settings import get_settings
 from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript, VisualAsset
 from utils import computing
-from voice.subtitles import align_speech, build_plates, write_ass
+from voice.subtitles import align_speech, build_emphasis, write_ass
 
 from .audio_mix import (
     _apply_sfx,
@@ -186,16 +186,16 @@ def render(
         cues = emphasize_cues(_llm, narration_lines, cues)
     except Exception as _exc:  # noqa: BLE001
         logger.warning("subtitle emphasis skipped: %s", _exc)
-    # Persistent keyword plates (agreed design): each main word appears once,
-    # holds 2-2.5s (or until the next keyword), gentle fade, no motion. The
-    # same timeline dims the frame while a plate is up (keyword dimming).
-    plates = build_plates(cues)
-    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode, plates=plates)
+    # Keyword emphasis (agreed design): each main word appears on top of
+    # continuous subtitles at the SAME position, smooth crossfade, 2.5s hold.
+    # The same timeline dims the frame while emphasis is up (keyword dimming).
+    emphasis = build_emphasis(cues)
+    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode, emphasis=emphasis)
     # Only burn subtitles if the ASS file actually has cues
     _ass_lines = ass_path.read_text(encoding="utf-8").splitlines()
     if not any(line.startswith("Dialogue:") for line in _ass_lines):
         ass_path = None
-    logger.info("Keyword plates: %d", len(plates))
+    logger.info("Keyword emphasis: %d", len(emphasis))
 
     clips: list[Path] = []
 
@@ -306,7 +306,7 @@ def render(
         graded=any(
             "original horror story" in note.lower() for note in script.source_notes
         ),
-        dim_spans=[(ps, pe) for ps, pe, _word in plates] if ass_path else None,
+        dim_spans=[(ps, pe) for ps, pe, _word in emphasis] if ass_path else None,
     )
     voice = _voice_track(wavs, lengths, work)
     total = sum(lengths)
