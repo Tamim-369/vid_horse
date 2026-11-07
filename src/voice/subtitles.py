@@ -29,7 +29,7 @@ _FORMAT_LINE = (
 )
 _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,440,1"
+    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,350,1"
 )
 # Rare takeover: subtitle takes focus (clean, anchored above captions).
 _HIT_LINE = (
