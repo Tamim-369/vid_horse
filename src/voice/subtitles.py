@@ -31,10 +31,10 @@ _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,440,1"
 )
-# Rare takeover: subtitle takes focus (clean, anchored, no bounce/box).
+# Rare takeover: subtitle takes focus (clean, anchored above captions).
 _HIT_LINE = (
-    "Style: Hit,DejaVu Sans Condensed,92,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,3.2,0,2,70,70,400,1"
+    "Style: Hit,DejaVu Sans Condensed,88,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,0,0,0,0,100,100,0,0,1,3.2,0,2,70,70,620,1"
 )
 # fmt: on
 
@@ -490,8 +490,8 @@ def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
         _progressive_bottom(body, cue, start, finish, takeover_ranges)
 
     for ps, pe, disp in takeovers:
-        # anchored low-center: subtitle takes focus (still, clear)
-        fx = r"{\an2\pos(540,1465)\fad(60,80)}"
+        # anchored above subtitles: takes focus but never crowds the caption
+        fx = r"{\an2\pos(540,1180)\fad(60,80)}"
         body.append(
             f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
             f"Hit,,0,0,0,,{fx}{disp}"
