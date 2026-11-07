@@ -13,7 +13,7 @@ from config.settings import get_settings
 from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript, VisualAsset
 from utils import computing
-from voice.subtitles import align_speech, write_ass
+from voice.subtitles import align_speech, build_plates, write_ass
 
 from .audio_mix import (
     _apply_sfx,
@@ -40,19 +40,65 @@ from .media import (
 
 logger = logging.getLogger(__name__)
 
+# Crossfade between CARDS (subject dissolves inside a card already exist).
+# The transition runs over the incoming card's first FADE seconds while the
+# outgoing card's silent padding tail blends out — so speech, card and
+# subtitle hand over at exactly the same audio boundary, no drift.
+CARD_FADE = 0.3
 
-def _join_cards(clips: list[Path], work: Path, *, graded: bool = False) -> Path:
-    concat_list = work / "cards.txt"
-    concat_list.write_text(
-        "\n".join(f"file '{clip.resolve()}'" for clip in clips),
-        encoding="utf-8",
-    )
+# Keyword-dim: while a keyword plate is on screen the frame dips slightly
+# darker so the eye lands on the word (agreed design: keyword dimming).
+DIM_OPACITY = 0.20
+
+
+def _join_cards(
+    clips: list[Path],
+    lengths: list[float],
+    work: Path,
+    *,
+    graded: bool = False,
+    dim_spans: list[tuple[float, float]] | None = None,
+) -> Path:
+    """Concatenate cards with a CARD_FADE crossfade at each boundary.
+
+    Every non-final card is built CARD_FADE seconds longer than its slot;
+    each xfade offset is the AUDIO boundary of the next line, so the blend
+    consumes the outgoing card's padding tail and the incoming card's
+    content still starts exactly on its narration.
+    """
+
     silent = work / "cards.mp4"
-    filters = HORROR_GRADE if graded else None
-    args = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list)]
-    if filters:
-        args += ["-vf", filters]
+    n = len(clips)
+    args = ["ffmpeg", "-y"]
+    for clip in clips:
+        args += ["-i", str(clip)]
+    chain: list[str] = []
+    previous = "[0:v]"
+    if n > 1:
+        boundary = 0.0
+        for j, length in enumerate(lengths[:-1]):
+            boundary += length
+            label = f"[xc{j}]"
+            chain.append(
+                f"{previous}[{j + 1}:v]xfade=transition=fade"
+                f":duration={CARD_FADE:.2f}:offset={boundary:.3f}{label}"
+            )
+            previous = label
+    filters: list[str] = []
+    for ps, pe in dim_spans or []:
+        filters.append(
+            f"drawbox=c=black@{DIM_OPACITY:.2f}:t=fill"
+            f":enable='between(t,{ps:.2f},{pe:.2f})'"
+        )
+    if graded:
+        filters.append(HORROR_GRADE)
+    tail = (
+        f"{previous}{','.join(filters)}[vout]" if filters
+        else f"{previous}null[vout]"
+    )
+    graph = ";".join([*chain, tail])
     args += [
+        "-filter_complex", graph, "-map", "[vout]",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", str(silent),
     ]
@@ -140,11 +186,16 @@ def render(
         cues = emphasize_cues(_llm, narration_lines, cues)
     except Exception as _exc:  # noqa: BLE001
         logger.warning("subtitle emphasis skipped: %s", _exc)
-    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode)
+    # Persistent keyword plates (agreed design): each main word appears once,
+    # holds 2-2.5s (or until the next keyword), gentle fade, no motion. The
+    # same timeline dims the frame while a plate is up (keyword dimming).
+    plates = build_plates(cues)
+    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode, plates=plates)
     # Only burn subtitles if the ASS file actually has cues
     _ass_lines = ass_path.read_text(encoding="utf-8").splitlines()
     if not any(line.startswith("Dialogue:") for line in _ass_lines):
         ass_path = None
+    logger.info("Keyword plates: %d", len(plates))
 
     clips: list[Path] = []
 
@@ -170,15 +221,21 @@ def render(
         scene_visuals.append([a for a in scene_entry.assets if a.kind in ("image", "video")])
     _no_back_to_back([hook_visuals, *scene_visuals])
 
+    # Every card except the outro runs CARD_FADE longer than its slot: the
+    # crossfade at the next boundary consumes that tail, so each card's
+    # content still starts exactly when its narration starts.
+    def card_length(slot: int) -> float:
+        return lengths[slot] + (CARD_FADE if slot < len(lengths) - 1 else 0.0)
+
     def hook_card() -> Path:
         if hook_visuals:
             try:
                 return _moving_still(
-                    hook_visuals, work, 0, lengths[0], line=narration_lines[0], word_line=word_lines[0]
+                    hook_visuals, work, 0, card_length(0), line=narration_lines[0], word_line=word_lines[0]
                 )
             except (RuntimeError, OSError, ValueError):
                 logger.warning("hook card motion failed; using blank card")
-        return _blank_clip(work, 0, lengths[0])
+        return _blank_clip(work, 0, card_length(0))
 
     build: list[tuple[int, Callable[..., Path]]] = [(0, hook_card)]
     for index, visuals in enumerate(scene_visuals):
@@ -188,10 +245,10 @@ def render(
         ) -> Path:
             if vis:
                 try:
-                    return _moving_still(vis, work, card, lengths[card], line=text, word_line=words)
+                    return _moving_still(vis, work, card, card_length(card), line=text, word_line=words)
                 except (RuntimeError, OSError, ValueError):
                     logger.warning("scene %d card motion failed; using blank card", card)
-            return _blank_clip(work, card, lengths[card])
+            return _blank_clip(work, card, card_length(card))
 
         build.append((index + 1, scene_card))
     # the per-card ffmpeg jobs are independent; three at a time roughly
@@ -229,14 +286,12 @@ def render(
         outro_raw = _blank_clip(work, len(build), lengths[-1])
     clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(build)))
 
-    # Each card must actually exist for its line's length: the parallel
-    # builders once let an off-by-one overwrite the hook clip, the missing
-    # scene went black while its narration (and subs) kept playing.
-    for clip_path, expected in zip(
-        clips,
-        lengths,
-        strict=True,
-    ):
+    # Each card must actually exist for its line's length (plus the
+    # crossfade tail on non-final cards): the parallel builders once let
+    # an off-by-one overwrite the hook clip, the missing scene went black
+    # while its narration (and subs) kept playing.
+    for index, (clip_path, expected) in enumerate(zip(clips, lengths, strict=True)):
+        expected = expected + (CARD_FADE if index < len(lengths) - 1 else 0.0)
         actual = _probe_duration(clip_path)
         if abs(actual - expected) > 0.3:
             raise BlockError(
@@ -246,10 +301,12 @@ def render(
 
     silent = _join_cards(
         clips,
+        lengths,
         work,
         graded=any(
             "original horror story" in note.lower() for note in script.source_notes
         ),
+        dim_spans=[(ps, pe) for ps, pe, _word in plates] if ass_path else None,
     )
     voice = _voice_track(wavs, lengths, work)
     total = sum(lengths)

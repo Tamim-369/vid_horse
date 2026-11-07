@@ -386,44 +386,93 @@ _TAKEOVER_TERMS = {
 HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
 
-def _takeover_for_cue(cue: Cue) -> str | None:
+def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
+    """The keyword a plate should show for this cue, and whether it is strong.
+
+    Strong terms (command/reveal vocabulary) may plate every
+    ``PLATE_MIN_GAP`` seconds; ordinary emphasized words only every
+    ``PLATEOrdinary_GAP`` so the big word stays an event, not a strobe.
+    """
+
     pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
     if not pops:
         return None
-    # only the strongest command/reveal terms; rare and deliberate
     ranked = sorted(
         pops,
-        key=lambda p: (-sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()), len(str(p).split())),
+        key=lambda p: (
+            -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()),
+            -len(str(p).split()),
+        ),
     )
     for pop in ranked:
         words = str(pop).split()
-        if len(words) > 3:
+        if not 0 < len(words) <= 3:
             continue
-        normed = [_norm_tok(t) for t in words]
-        if any(t in _TAKEOVER_TERMS for t in normed):
-            return " ".join(words).strip().upper()
+        strong = any(_norm_tok(t) in _TAKEOVER_TERMS for t in words)
+        return " ".join(words).strip().upper(), strong
     return None
 
 
-def _in_takeover(t: float, ranges: list[tuple[float, float]]) -> bool:
-    return any(s - 0.02 <= t <= e + 0.02 for s, e in ranges)
+PLATE_MIN_GAP = 2.0  # seconds between plate starts (calm rhythm, no strobe)
+PLATE_ORDINARY_GAP = 4.0  # non-strong keywords plate at most every 4s
+PLATE_MAX_HOLD = 2.5  # hold window agreed in design
+PLATE_MIN_HOLD = 1.2
 
 
-def _progressive_bottom(
-    body: list[str], cue: Cue, start: float, finish: float, takeovers: list[tuple[float, float]]
-) -> None:
+def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
+    """Persistent keyword plates: (start, end, DISPLAY).
+
+    A plate appears when its word starts being spoken (HIGHLIGHT_LEAD
+    early) and HOLDS — through the idea, until the next accepted keyword
+    or PLATE_MAX_HOLD, whichever comes first. No motion, gentle fades;
+    one word at a time.
+    """
+
+    candidates: list[tuple[float, str, bool]] = []
+    for cue in cues:
+        picked = _plate_pick(cue)
+        if not picked:
+            continue
+        disp, strong = picked
+        wt = _pop_word_times(cue, disp)
+        if not wt:
+            continue
+        ps = max(0.0, wt[0] - HIGHLIGHT_LEAD)
+        candidates.append((ps, disp, strong))
+    candidates.sort(key=lambda item: item[0])
+
+    chosen: list[list] = []  # [start, display]
+    for ps, disp, strong in candidates:
+        if chosen and disp == chosen[-1][1]:
+            continue  # same word held twice back-to-back
+        gap = ps - (chosen[-1][0] if chosen else -99.0)
+        if gap < PLATE_MIN_GAP or (not strong and gap < PLATE_ORDINARY_GAP):
+            continue
+        chosen.append([ps, disp])
+
+    plates: list[tuple[float, float, str]] = []
+    for i, (ps, disp) in enumerate(chosen):
+        next_start = chosen[i + 1][0] if i + 1 < len(chosen) else None
+        pe = ps + PLATE_MAX_HOLD
+        if next_start is not None:
+            pe = min(pe, next_start - 0.05)
+        pe = max(pe, ps + PLATE_MIN_HOLD)
+        plates.append((ps, pe, disp))
+    return plates
+
+
+def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not raw:
-        if not _in_takeover((start + finish) / 2, takeovers):
-            text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
-            body.append(
-                f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
-                f"Cue,,0,0,0,,{text}"
-            )
+        text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
+        body.append(
+            f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
+            f"Cue,,0,0,0,,{text}"
+        )
         return
     # lead highlight slightly before speech for snappier reading
     lead = HIGHLIGHT_LEAD
@@ -436,18 +485,16 @@ def _progressive_bottom(
     pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
     for i in range(len(raw)):
         ws, we = bounds[i], bounds[i + 1]
-        if we - ws < 0.04 or _in_takeover((ws + we) / 2, takeovers):
+        if we - ws < 0.04:
             continue
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                # active: bright white, clean (no gray, no bounce)
-                if is_pop:
-                    parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&\fs64}" + disp + r"{\r}")
-                else:
-                    parts.append(r"{\c&H00FFFFFF&\bord2.6\3c&H00000000&}" + disp + r"{\r}")
+                # active: bright white, clean (no gray, no bounce, no resize —
+                # a size change reflows the line and reads as jitter)
+                parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
                 parts.append(r"{\c&H00FFFFFF&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
             else:
@@ -460,70 +507,34 @@ def _progressive_bottom(
 
 
 def write_ass(
-    cues: list[Cue], path: Path, *, end: float | None = None, mode: str = "all"
+    cues: list[Cue],
+    path: Path,
+    *,
+    end: float | None = None,
+    mode: str = "all",
+    plates: list[tuple[float, float, str]] | None = None,
 ) -> Path:
     """Serialise cues to ASS.
 
-    mode: 'all' = word-synced subtitles + takeovers, 'highlights' = takeovers only,
-          'none' = no subtitles.
+    mode: 'all' = word-synced subtitles + keyword plates, 'highlights' =
+    plates only, 'none' = nothing. Plates are persistent: each keyword
+    holds ~2-2.5s (or until the next keyword), fading gently — never
+    bouncing.
     """
 
-    # plan rare, density-capped takeovers (caption takes focus, clean)
-    takeovers: list[tuple[float, float, str]] = []
-    last_t = -99.0
-    for cue in cues:
-        hit = _takeover_for_cue(cue)
-        if not hit:
-            continue
-        wt = _pop_word_times(cue, hit)
-        start, stop = cue.start, max(cue.end, cue.start + 0.25)
-        finish = _cue_finish(cues, cues.index(cue), stop)
-        if wt:
-            ps, pe = wt[0], max(wt[1], wt[0] + 0.22)
-        else:
-            ps, pe = start, min(finish, start + 0.55)
-        ps, pe = max(start, ps), min(finish, max(pe, ps + 0.28))
-        if ps - last_t < 10.0:
-            continue
-        takeovers.append((ps, pe, hit.upper()))
-        last_t = ps
-
-    # in highlights-only mode, ensure key words still appear
-    if mode == "highlights" and not takeovers:
-        last_t = -99.0
-        for cue in cues:
-            pops = [pp for pp in getattr(cue, "pops", []) or [] if str(pp).strip()]
-            if not pops:
-                continue
-            pick = max(pops, key=lambda x: len(str(x)))
-            wt = _pop_word_times(cue, pick)
-            start, stop = cue.start, max(cue.end, cue.start + 0.25)
-            finish = _cue_finish(cues, cues.index(cue), stop)
-            if wt:
-                ps, pe = wt[0], max(wt[1], wt[0] + 0.22)
-            else:
-                ps, pe = start, min(finish, start + 0.55)
-            ps, pe = max(start, ps), min(finish, max(pe, ps + 0.28))
-            if ps - last_t < 4.0:
-                continue
-            takeovers.append((ps, pe, str(pick).strip().upper()))
-            last_t = ps
-            if len(takeovers) >= 10:
-                break
-
-    takeover_ranges = [(s, e) for s, e, _h in takeovers]
+    if plates is None:
+        plates = build_plates(cues)
     body: list[str] = []
-    if mode != "none":
+    if mode == "all":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            if mode == "all":
-                _progressive_bottom(body, cue, start, finish, takeover_ranges)
+            _progressive_bottom(body, cue, start, finish)
 
     if mode != "none":
-        for ps, pe, disp in takeovers:
-            # anchored above subtitles: takes focus but never crowds the caption
-            fx = r"{\an2\pos(540,1180)\fad(60,80)}"
+        for ps, pe, disp in plates:
+            # anchored low-center above the captions: persistent, still, clear
+            fx = r"{\an2\pos(540,1180)\fad(150,250)}"
             body.append(
                 f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
                 f"Hit,,0,0,0,,{fx}{disp}"
