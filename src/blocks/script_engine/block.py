@@ -110,6 +110,7 @@ def _parse_scene(raw: str) -> tuple[str, str]:
     if not narr:
         narr = raw.strip()
     narr = _clean_speech(narr)
+    narr = _ensure_complete(narr)
     vis = _clean_speech(vis)
     # a visual is a 2-4 word image query; anything longer is leaked narration
     if len(vis.split()) > 5:
@@ -135,6 +136,58 @@ _DANGLING_WORDS = frozenset(
 )
 
 
+
+_INCOMPLETE_TAIL = re.compile(
+    r"\b(when|if|as|while|before|after|because|since|though|although|unless|until|"
+    r"that|which|who|whom|where|and|or|but|so|than|to|for|with|about|into|"
+    r"like|from)\s+(everyone|everybody|someone|somebody|anyone|anybody|people|"
+    r"they|you|we|he|she|it|things|something|anything|nothing|a\s+\w+|the\s+\w+|your\s+\w+|their\s+\w+)\s*[.!?]?\s*$",
+    re.I,
+)
+_TRAILING_OPEN = re.compile(
+    r"\b(when|if|because|before|after|while|that|which|who|to|and|but|or|so|than|as)\s*[.!?]?\s*$",
+    re.I,
+)
+
+
+def _is_incomplete(text: str) -> bool:
+    """True when narration looks cut off / not a complete thought."""
+    t = (text or "").strip()
+    if not t or len(t.split()) < 4:
+        return True
+    if _INCOMPLETE_TAIL.search(t):
+        return True
+    if _TRAILING_OPEN.search(t):
+        return True
+    # ends without sentence-final punctuation and smells fragmentary
+    if t[-1] not in ".!?":
+        if len(t.split()) < 6:
+            return True
+    return False
+
+
+def _ensure_complete(text: str) -> str:
+    """If clearly cut off, trim the dangling tail to the last clean boundary."""
+    t = (text or "").strip()
+    if not _is_incomplete(t):
+        return t
+    # try trimming the dangling tail (drop last 1-3 words) and re-close
+    words = re.findall(r"\S+", t.rstrip(".!?"))
+    for drop in (2, 3, 1):
+        if len(words) <= drop + 3:
+            continue
+        cand = " ".join(words[:-drop]).rstrip(",;: ")
+        # don't end on a dangling word
+        cw = cand.split()
+        while cw and cw[-1].lower().strip(",;:") in _DANGLING_WORDS:
+            cw.pop()
+        if len(cw) >= 4 and not _TRAILING_OPEN.search(" ".join(cw)):
+            return " ".join(cw).rstrip(",;: ") + "."
+    # fallback: return as-is but ensure terminal punct
+    if t and t[-1] not in ".!?":
+        t += "."
+    return t
+
 def _first_sentence(text: str, max_words: int = 12, min_words: int = 0) -> str:
     """First sentence of ``text``, hard-capped at ``max_words`` words.
 
@@ -153,7 +206,7 @@ def _first_sentence(text: str, max_words: int = 12, min_words: int = 0) -> str:
         words.pop()
     if len(words) < len(sent.split()):
         sent = " ".join(words).rstrip(",;:.!?") + "."
-    return sent
+    return _ensure_complete(sent)
 
 
 _POV_SWAPS = [
@@ -252,26 +305,22 @@ class ScriptEngineBlock:
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
         if not payoff_narr or _is_placeholder(payoff_narr):
             payoff_narr = _clean_speech(payoff_beat)
-        payoff_narr = _first_sentence(payoff_narr, max_words=16, min_words=8)
+        payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
 
         hook_beat = beats[0]
         hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10)
         hook_narr, _hook_vis = _parse_scene(hook_raw)
         if not hook_narr or _is_placeholder(hook_narr):
             hook_narr = _clean_speech(hook_beat)
-        # hooks must be short: one retry, then mechanical truncation
-        if len(hook_narr.split()) > 12:
-            logger.info("hook too long (%d words); retrying", len(hook_narr.split()))
-            hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10)
+        # hooks must be short and COMPLETE
+        if len(hook_narr.split()) > 12 or _is_incomplete(hook_narr):
+            logger.info("hook needs fix (len=%d incomplete=%s); retrying", len(hook_narr.split()), _is_incomplete(hook_narr))
+            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off)", fs, [payoff_narr], 10)
             retry_narr, _retry_vis = _parse_scene(hook_raw)
-            if (
-                retry_narr
-                and not _is_placeholder(retry_narr)
-                and len(retry_narr.split()) <= 12
-            ):
+            if retry_narr and not _is_placeholder(retry_narr) and len(retry_narr.split()) <= 14 and not _is_incomplete(retry_narr):
                 hook_narr = retry_narr
             else:
-                hook_narr = _first_sentence(hook_narr, max_words=12)
+                hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
 
         # Generate middle scenes.
         middle_beats = beats[1:5]
@@ -295,6 +344,9 @@ class ScriptEngineBlock:
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
                 res = validate_scene(narr, target)
+                if _is_incomplete(narr):
+                    res.ok = False
+                    res.issues.append("incomplete/cut-off narration")
                 if not res.ok:
                     attempt += 1
                     logger.info("scene %d retry: %s", i, res.issues)

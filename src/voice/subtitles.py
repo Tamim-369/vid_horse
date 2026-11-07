@@ -488,6 +488,29 @@ def write_ass(
         takeovers.append((ps, pe, hit.upper()))
         last_t = ps
 
+    # in highlights-only mode, ensure key words still appear
+    if mode == "highlights" and not takeovers:
+        last_t = -99.0
+        for cue in cues:
+            pops = [pp for pp in getattr(cue, "pops", []) or [] if str(pp).strip()]
+            if not pops:
+                continue
+            pick = max(pops, key=lambda x: len(str(x)))
+            wt = _pop_word_times(cue, pick)
+            start, stop = cue.start, max(cue.end, cue.start + 0.25)
+            finish = _cue_finish(cues, cues.index(cue), stop)
+            if wt:
+                ps, pe = wt[0], max(wt[1], wt[0] + 0.22)
+            else:
+                ps, pe = start, min(finish, start + 0.55)
+            ps, pe = max(start, ps), min(finish, max(pe, ps + 0.28))
+            if ps - last_t < 4.0:
+                continue
+            takeovers.append((ps, pe, str(pick).strip().upper()))
+            last_t = ps
+            if len(takeovers) >= 10:
+                break
+
     takeover_ranges = [(s, e) for s, e, _h in takeovers]
     body: list[str] = []
     if mode != "none":
