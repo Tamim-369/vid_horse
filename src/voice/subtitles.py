@@ -33,8 +33,8 @@ _STYLE_LINE = (
 )
 # Rare takeover: subtitle takes focus (clean, anchored above captions).
 _HIT_LINE = (
-    "Style: Hit,DejaVu Sans Condensed,88,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,3.2,0,2,70,70,620,1"
+    "Style: Hit,DejaVu Sans Condensed,90,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,-1,0,0,0,100,100,0,0,1,3.6,0,2,70,70,620,1"
 )
 # fmt: on
 
@@ -459,8 +459,14 @@ def _progressive_bottom(
         )
 
 
-def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
-    """Serialise cues to ASS: progressive word-synced subs + rare clean takeovers."""
+def write_ass(
+    cues: list[Cue], path: Path, *, end: float | None = None, mode: str = "all"
+) -> Path:
+    """Serialise cues to ASS.
+
+    mode: 'all' = word-synced subtitles + takeovers, 'highlights' = takeovers only,
+          'none' = no subtitles.
+    """
 
     # plan rare, density-capped takeovers (caption takes focus, clean)
     takeovers: list[tuple[float, float, str]] = []
@@ -484,17 +490,20 @@ def write_ass(cues: list[Cue], path: Path, *, end: float | None = None) -> Path:
 
     takeover_ranges = [(s, e) for s, e, _h in takeovers]
     body: list[str] = []
-    for index, cue in enumerate(cues):
-        start, stop = cue.start, max(cue.end, cue.start + 0.25)
-        finish = _cue_finish(cues, index, stop)
-        _progressive_bottom(body, cue, start, finish, takeover_ranges)
+    if mode != "none":
+        for index, cue in enumerate(cues):
+            start, stop = cue.start, max(cue.end, cue.start + 0.25)
+            finish = _cue_finish(cues, index, stop)
+            if mode == "all":
+                _progressive_bottom(body, cue, start, finish, takeover_ranges)
 
-    for ps, pe, disp in takeovers:
-        # anchored above subtitles: takes focus but never crowds the caption
-        fx = r"{\an2\pos(540,1180)\fad(60,80)}"
-        body.append(
-            f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
-            f"Hit,,0,0,0,,{fx}{disp}"
-        )
+    if mode != "none":
+        for ps, pe, disp in takeovers:
+            # anchored above subtitles: takes focus but never crowds the caption
+            fx = r"{\an2\pos(540,1180)\fad(60,80)}"
+            body.append(
+                f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
+                f"Hit,,0,0,0,,{fx}{disp}"
+            )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path

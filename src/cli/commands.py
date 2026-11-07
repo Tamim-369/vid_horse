@@ -519,6 +519,9 @@ def render_cmd(
     music: str = typer.Option(
         "", "--music", help="Bed override, e.g. 'swell-tension.mp3'."
     ),
+    subtitle_mode: str = typer.Option(
+        "all", "--subtitle-mode", help="all (subs+highlights), highlights (only highlighted words), none"
+    ),
 ) -> None:
     """Assemble the final vertical mp4 from script, assets and voice tracks."""
 
@@ -527,6 +530,8 @@ def render_cmd(
     settings = get_settings()
     if format not in _FORMATS:
         _fail(f"Unknown format '{format}'. Choose short or long.")
+    if subtitle_mode not in {"all", "highlights", "none"}:
+        _fail("subtitle_mode must be all, highlights, or none.")
     directory = Path(settings.output_dir) / slug
     assets_path = directory / f"assets-{format}.json"
     script_path = directory / f"{format}.json"
@@ -544,12 +549,13 @@ def render_cmd(
         ).genre
 
     stem = "voice" if format == "short" else f"voice-{format}"
-    out_path = directory / f"{slug}-{format}.mp4"
-    with console.status(f"Assembling the {format} video..."):
+    suffix = f"-{subtitle_mode}" if subtitle_mode != "all" else ""
+    out_path = directory / f"{slug}-{format}{suffix}.mp4"
+    with console.status(f"Assembling the {format} video ({subtitle_mode})..."):
         try:
             render(
                 script, pack, directory / "audio", out_path,
-                stem=stem, genre=genre, music=music,
+                stem=stem, genre=genre, music=music, subtitle_mode=subtitle_mode,
             )
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])

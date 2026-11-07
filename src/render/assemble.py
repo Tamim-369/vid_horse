@@ -97,6 +97,7 @@ def render(
     stem: str = "voice",
     genre: str | None = None,
     music: str = "",
+    subtitle_mode: str = "all",
 ) -> Path:
     """Assemble a vertical feed video: card per line, topical still per scene."""
 
@@ -139,7 +140,7 @@ def render(
         cues = emphasize_cues(_llm, narration_lines, cues)
     except Exception as _exc:  # noqa: BLE001
         logger.warning("subtitle emphasis skipped: %s", _exc)
-    ass_path = write_ass(cues, work / "subs.ass")
+    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode)
     # Only burn subtitles if the ASS file actually has cues
     _ass_lines = ass_path.read_text(encoding="utf-8").splitlines()
     if not any(line.startswith("Dialogue:") for line in _ass_lines):
