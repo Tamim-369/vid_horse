@@ -27,14 +27,16 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
+# Normal progressive subtitles — bottom, white, no bounce, no gray
 _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,350,1"
 )
-# Rare takeover: subtitle takes focus (clean, anchored above captions).
-_HIT_LINE = (
-    "Style: Hit,DejaVu Sans Condensed,90,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,-1,0,0,0,100,100,0,0,1,3.6,0,2,70,70,620,1"
+# Keyword takeover — REPLACES subtitle at SAME position, bigger/bolder,
+# centered, same margin. Gentle fade only.
+_TAKEOVER_LINE = (
+    "Style: Takeover,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,350,1"
 )
 # fmt: on
 
@@ -45,9 +47,9 @@ PlayResY: 1920
 WrapStyle: 0
 
 [V4+ Styles]
-{_FORMAT_LINE}
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {_STYLE_LINE}
-{_HIT_LINE}
+{_TAKEOVER_LINE}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -451,30 +453,59 @@ def _plate_score(disp: str) -> int:
     """Higher = more important concept."""
     normed = _norm_tok(disp)
     words = disp.split()
-    # base: longer phrases > single words
     score = len(words)
-    # boost for known psych concepts
     for term in _PLATE_CONCEPT_BOOST:
         if term.replace(" ", "") in normed:
             score += 5
-    # boost for strong command/reveal terms
     for w in words:
         if _norm_tok(w) in _TAKEOVER_TERMS:
             score += 3
     return score
 
 
+PLATE_MIN_GAP = 2.0  # min gap between ANY plate starts
+PLATE_ORDINARY_GAP = 2.0  # unified
+PLATE_HOLD = 1.20  # exact hold: 1s 20ms (user spec)
+PLATE_MAX_PER_VIDEO = 10  # cap
+
+
+def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
+    """The keyword a takeover should show for this cue, and whether it is strong.
+
+    If ALL pops for this cue are filler framing phrases, skip the cue
+    entirely — the next cue likely has the actual concept.
+    """
+
+    pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
+    if not pops:
+        return None
+    # If every pop is a filler phrase, this cue carries no concept — skip it
+    if all(any(f in _norm_tok(p) for f in _PLATE_FILLER) for p in pops):
+        return None
+    ranked = sorted(
+        pops,
+        key=lambda p: (
+            -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()),
+            1 if any(f in _norm_tok(p) for f in _PLATE_FILLER) else 0,
+            -len(str(p).split()),
+        ),
+    )
+    for pop in ranked:
+        words = str(pop).split()
+        if not 0 < len(words) <= 3:
+            continue
+        strong = any(_norm_tok(t) in _TAKEOVER_TERMS for t in words)
+        return " ".join(words).strip().upper(), strong
+    return None
+
+
 def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
-    """Persistent keyword plates: (start, end, DISPLAY).
+    """Keyword takeovers: (start, end, DISPLAY).
 
-    A plate appears when its word starts being spoken (HIGHLIGHT_LEAD
-    early) and HOLDS — through the idea, until the next accepted keyword
-    or PLATE_MAX_HOLD, whichever comes first. No motion, gentle fades;
-    one word at a time.
-
-    Selection: greedy by score (not by time) — pick highest-scoring
-    candidate, remove overlapping ones, repeat. Ensures key concepts
-    (crowd mind, manipulation...) win over filler near them.
+    A takeover appears when its word starts being spoken (HIGHLIGHT_LEAD
+    early) and holds for EXACTLY PLATE_HOLD (1.20s). It REPLACES the
+    subtitle at the same screen position for that window. No overlap
+    between takeovers — higher-scoring concepts win.
     """
 
     candidates: list[tuple[float, str, bool, int]] = []
@@ -496,37 +527,44 @@ def build_plates(cues: list[Cue]) -> list[tuple[float, float, str]]:
     for ps, disp, strong, score in candidates:
         if len(chosen) >= PLATE_MAX_PER_VIDEO:
             break
-        # check interval overlap: [ps, ps+PLATE_MAX_HOLD] vs [cp, cp+PLATE_MAX_HOLD]
+        # check interval overlap: [ps, ps+PLATE_HOLD] vs [cp, cp+PLATE_HOLD]
         overlap = False
         for cp, cd, cs in chosen:
-            if ps < cp + PLATE_MAX_HOLD and cp < ps + PLATE_MAX_HOLD:
+            if ps < cp + PLATE_HOLD and cp < ps + PLATE_HOLD:
                 overlap = True
                 break
         if overlap:
             continue
         chosen.append([ps, disp, score])
 
-    # now sort chosen by time for plate construction
+    # sort chosen by time for output
     chosen.sort(key=lambda item: item[0])
 
     plates: list[tuple[float, float, str]] = []
-    for i, (ps, disp, _score) in enumerate(chosen):
-        next_start = chosen[i + 1][0] if i + 1 < len(chosen) else None
-        pe = ps + PLATE_MAX_HOLD
-        if next_start is not None:
-            pe = min(pe, next_start - 0.05)
-        pe = max(pe, ps + PLATE_MIN_HOLD)
+    for ps, disp, _score in chosen:
+        pe = ps + PLATE_HOLD
         plates.append((ps, pe, disp))
     return plates
 
 
-def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
+def _progressive_bottom(
+    body: list[str],
+    cue: Cue,
+    start: float,
+    finish: float,
+    takeover_ranges: list[tuple[float, float]] | None = None,
+) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not raw:
+        # check if this whole cue falls in a takeover window
+        if takeover_ranges:
+            mid = (start + finish) / 2
+            if any(ps <= mid <= pe for ps, pe in takeover_ranges):
+                return  # skip — takeover covers this
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
@@ -546,13 +584,16 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
             continue
+        # skip this word event if it falls in a takeover window
+        if takeover_ranges:
+            mid = (ws + we) / 2
+            if any(ps <= mid <= pe for ps, pe in takeover_ranges):
+                continue
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                # active: bright white, clean (no gray, no bounce, no resize —
-                # a size change reflows the line and reads as jitter)
                 parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
                 parts.append(r"{\c&H00FFFFFF&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
@@ -575,28 +616,31 @@ def write_ass(
 ) -> Path:
     """Serialise cues to ASS.
 
-    mode: 'all' = word-synced subtitles + keyword plates, 'highlights' =
-    plates only, 'none' = nothing. Plates are persistent: each keyword
-    holds ~2-2.5s (or until the next keyword), fading gently — never
-    bouncing.
+    mode: 'all' = word-synced subtitles WITH TAKEOVER GAPS + keyword takeovers
+          (takeover REPLACES subtitle at same position for 1.20s),
+          'highlights' = takeovers only, 'none' = nothing.
     """
 
     if plates is None:
         plates = build_plates(cues)
+
+    # takeover time ranges for skipping subtitle generation
+    takeover_ranges = [(ps, pe) for ps, pe, _d in plates]
+
     body: list[str] = []
     if mode == "all":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            _progressive_bottom(body, cue, start, finish)
+            _progressive_bottom(body, cue, start, finish, takeover_ranges)
 
     if mode != "none":
         for ps, pe, disp in plates:
-            # anchored low-center above the captions: persistent, still, clear
+            # REPLACES subtitle at SAME position (MarginV 350), bigger/bolder
             fx = r"{\an2\pos(540,1180)\fad(150,250)}"
             body.append(
                 f"Dialogue: 2,{_ass_time(ps)},{_ass_time(max(pe, ps + 0.2))},"
-                f"Hit,,0,0,0,,{fx}{disp}"
+                f"Takeover,,0,0,0,,{fx}{disp}"
             )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path
