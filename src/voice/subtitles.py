@@ -27,17 +27,17 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
-# Normal progressive subtitles — bottom, white, no bounce, no gray
+# Normal progressive subtitles — SLIGHTLY HIGHER (MarginV 280) so emphasis
+# takes the EXACT same spot. White, no bounce, no gray.
 _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,350,1"
+    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,280,1"
 )
-# Keyword emphasis — SAME position, layers on top, smooth crossfade.
-# Layer 1 (above Cue layer 0). Bigger, bolder, pure white.
-# Fades in 300ms, holds, fades out 300ms — eye never moves.
+# Keyword emphasis — SAME position as Cue (MarginV 280), REPLACES it.
+# Layer 1, bigger/bolder, pure white. Smooth crossfade via \fad.
 _EMPHASIS_LINE = (
     "Style: Emphasis,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,350,1"
+    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,280,1"
 )
 # fmt: on
 
@@ -548,13 +548,18 @@ def build_emphasis(cues: list[Cue]) -> list[tuple[float, float, str]]:
     return emphasis
 
 
-def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
+def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float, emphasis_ranges: list[tuple[float, float]] | None = None) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not raw:
+        # check if this whole cue falls in an emphasis window
+        if emphasis_ranges:
+            mid = (start + finish) / 2
+            if any(ps <= mid <= pe for ps, pe in emphasis_ranges):
+                return  # skip — emphasis covers this
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
@@ -574,6 +579,11 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
             continue
+        # skip this word event if it falls in an emphasis window
+        if emphasis_ranges:
+            mid = (ws + we) / 2
+            if any(ps <= mid <= pe for ps, pe in emphasis_ranges):
+                continue
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
@@ -602,24 +612,26 @@ def write_ass(
     """Serialise cues to ASS.
 
     mode: 'all' = continuous word-synced subtitles + keyword emphasis
-          (emphasis layers ON TOP at same position, smooth crossfade),
+          (emphasis REPLACES subtitle at same position, smooth crossfade),
           'highlights' = emphasis only, 'none' = nothing.
     """
 
     if emphasis is None:
         emphasis = build_emphasis(cues)
 
+    emphasis_ranges = [(ps, pe) for ps, pe, _d in emphasis]
+
     body: list[str] = []
     if mode == "all":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            _progressive_bottom(body, cue, start, finish)
+            _progressive_bottom(body, cue, start, finish, emphasis_ranges)
 
     if mode != "none":
         fade_cs = int(EMPHASIS_FADE * 100)  # centiseconds for ASS \fad
         for ps, pe, disp in emphasis:
-            # Layer 1 (above Cue layer 0), SAME position, smooth crossfade
+            # Layer 1 (above Cue layer 0), SAME position (MarginV 280), smooth crossfade
             fx = r"{\an2\pos(540,1180)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
             body.append(
                 f"Dialogue: 1,{_ass_time(ps)},{_ass_time(pe)},"
