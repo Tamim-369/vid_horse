@@ -83,6 +83,9 @@ def _trigger(sentence: str) -> str:
 # -- candidates ----------------------------------------------------------------
 
 _MOTIF_DIR = Path(__file__).resolve().parents[2] / "assets" / "motifs_pollinations"
+_SENTENCES_DIR = Path(__file__).resolve().parents[2] / "assets" / "motifs_sentences"
+_on_demand_generated = 0
+_ON_DEMAND_CAP = 8
 MotifIndexState = dict | None
 _motif_state: MotifIndexState = None
 
@@ -150,7 +153,7 @@ def _motif_state_ready() -> dict | None:
         from render.motifs import MOTIFS
 
         scorer = _clip_scorer()
-        if scorer is None or not _MOTIF_DIR.exists():
+        if scorer is None or (not _MOTIF_DIR.exists() and not _SENTENCES_DIR.exists()):
             _motif_state = {}
             return None
         import numpy as np
@@ -158,23 +161,48 @@ def _motif_state_ready() -> dict | None:
         import PIL.Image
 
         entries: dict[str, dict] = {}
-        for motif in MOTIFS:
-            img_path = _MOTIF_DIR / f"{motif.id}.png"
-            if not img_path.exists():
-                continue
-            with PIL.Image.open(img_path) as im:
-                prepared = scorer._preprocess(im.convert("RGB"))
-            with torch.no_grad():
-                feat = scorer._model.encode_image(prepared.unsqueeze(0))
-            feat = feat / feat.norm(dim=-1, keepdim=True)
-            entries[motif.id] = {
-                "path": img_path,
-                "name": motif.name,
-                "category": motif.category,
-                "description": motif.description,
-                "terms": motif.search_terms,
-                "embed": feat,
-            }
+        # 1. curated motif library (taxonomy from render.motifs)
+        if _MOTIF_DIR.exists():
+            for motif in MOTIFS:
+                img_path = _MOTIF_DIR / f"{motif.id}.png"
+                if not img_path.exists():
+                    continue
+                with PIL.Image.open(img_path) as im:
+                    prepared = scorer._preprocess(im.convert("RGB"))
+                with torch.no_grad():
+                    feat = scorer._model.encode_image(prepared.unsqueeze(0))
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+                entries[motif.id] = {
+                    "path": img_path,
+                    "name": motif.name,
+                    "category": motif.category,
+                    "description": motif.description,
+                    "terms": motif.search_terms,
+                    "embed": feat,
+                }
+        # 2. generated sentence images (phrase-as-description)
+        if _SENTENCES_DIR.exists():
+            for img_path in sorted(_SENTENCES_DIR.glob("*.png")):
+                slug = img_path.stem
+                if slug in entries:
+                    continue
+                try:
+                    with PIL.Image.open(img_path) as im:
+                        prepared = scorer._preprocess(im.convert("RGB"))
+                    with torch.no_grad():
+                        feat = scorer._model.encode_image(prepared.unsqueeze(0))
+                except Exception:  # noqa: BLE001
+                    continue
+                feat = feat / feat.norm(dim=-1, keepdim=True)
+                phrase = slug.replace("_", " ")
+                entries[slug] = {
+                    "path": img_path,
+                    "name": phrase,
+                    "category": "sentence",
+                    "description": phrase,
+                    "terms": (phrase,),
+                    "embed": feat,
+                }
         if not entries:
             _motif_state = {}
             return None
@@ -190,6 +218,92 @@ def _motif_state_ready() -> dict | None:
         logger.debug("motif index build failed: %s", exc)
         _motif_state = {}
         return None
+
+
+def _slugify(phrase: str) -> str:
+    import re as _re
+
+    slug = _re.sub(r"[^a-z0-9]+", "_", phrase.lower().strip()).strip("_")[:60]
+    return slug or hashlib.sha1(phrase.encode()).hexdigest()[:10]
+
+
+def _generate_on_demand(subject: str) -> str | None:
+    """Generate a Pollinations image for ``subject`` into the sentences dir.
+
+    Returns the motif slug on success (registered into the live CLIP index
+    so later sentences can reuse it) or None. Capped per process.
+    """
+
+    global _on_demand_generated, _motif_state
+    if _on_demand_generated >= _ON_DEMAND_CAP:
+        return None
+    key = os.getenv("POLLINATIONS_API_KEY")
+    if not key:
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+            key = os.getenv("POLLINATIONS_API_KEY")
+        except ImportError:
+            pass
+    if not key:
+        return None
+    import time
+    import urllib.parse
+
+    _SENTENCES_DIR.mkdir(parents=True, exist_ok=True)
+    slug = _slugify(subject)
+    out = _SENTENCES_DIR / f"{slug}.png"
+    if not out.exists():
+        seed = random.randint(1, 10_000_000)
+        style = (
+            "dark cinematic noir psychological, 9:16 vertical, near-black "
+            "gradient, heavy vignette, film grain, centered subject, high "
+            "contrast, shallow depth, colored accent rim light, "
+            "photorealistic scene, no text, no watermark, original"
+        )
+        prompt = urllib.parse.quote(f"{subject}. {style}. seed {seed}.")
+        url = (
+            f"https://image.pollinations.ai/prompt/{prompt}"
+            f"?width=1080&height=1920&model=flux&nologo=true&seed={seed}&key={key}"
+        )
+        try:
+            r = httpx.get(url, timeout=120, follow_redirects=True)
+            r.raise_for_status()
+            out.write_bytes(r.content)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("on-demand generation failed for %r: %s", subject, exc)
+            return None
+    try:
+        scorer = _clip_scorer()
+        state = _motif_state_ready()
+        if scorer is not None and state is not None:
+            import torch
+            import PIL.Image
+
+            with PIL.Image.open(out) as im:
+                prepared = scorer._preprocess(im.convert("RGB"))
+            with torch.no_grad():
+                feat = scorer._model.encode_image(prepared.unsqueeze(0))
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+            if slug not in state["entries"]:
+                state["entries"][slug] = {
+                    "path": out,
+                    "name": subject,
+                    "category": "sentence",
+                    "description": subject,
+                    "terms": (subject,),
+                    "embed": feat,
+                }
+                state["ids"] = sorted(state["entries"])
+                state["matrix"] = torch.cat(
+                    [state["entries"][i]["embed"] for i in state["ids"]]
+                ).float()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("on-demand index register failed: %s", exc)
+    _on_demand_generated += 1
+    print(f"[gen] on-demand motif '{slug}' from: {subject}", flush=True)
+    return slug
 
 
 def _best_motifs(subject: str, top: int = 3) -> list[tuple[str, float]]:
@@ -331,6 +445,12 @@ def _build_asset_from_concept(
     ranked = _best_motifs(subject_base, top=6)
     motif_state = _motif_state_ready() or {}
     entries = motif_state.get("entries", {})
+    if (not ranked or (ranked[0][1] if ranked else 0.0) < CLIP_WEAK) and _on_demand_generated < _ON_DEMAND_CAP:
+        phrase = " ".join(concept_visuals.primary_queries[:2] or []) or subject_base
+        if _generate_on_demand(phrase):
+            ranked = _best_motifs(subject_base, top=6)
+            motif_state = _motif_state_ready() or {}
+            entries = motif_state.get("entries", {})
     for motif_id, score in ranked:
         entry = entries.get(motif_id)
         if entry is None:
