@@ -105,6 +105,22 @@ video about edition/printing dates built from the imprint page. Rebuilt:
       reasoning_effort=low (they were burning the whole token budget on
       hidden reasoning and returning EMPTY JSON); Pexels key now loads
       `.env` when experiments import providers without the CLI entrypoint.
+- [x] S5 motif library (user complaint: "uses no assets from the asset
+      motif pollination directory") — `sentence_assets.py` now CLIP-indexes
+      all 100 `assets/motifs_pollinations` PNGs once per process; every
+      sentence picks the best of the motif pool vs stock (Pexels+Openverse),
+      ties favor the signed motif art, no immediate motif repeats. Extras
+      carry `source=motif|stock`, `motif`, `motif_name`, `category`.
+      Verified e2e: 4 motif + 1 stock visuals, CLIP 0.24–0.28, no
+      placeholders. QA report lists every visual.
+- [x] S6 narration coherence (user complaint: "sounds like a human acting
+      like a robot") — new `script_engine/polish.py`: after per-scene
+      writing, ONE LLM pass rewrites hook + all scenes + outro as natural
+      spoken prose (contractions, bridges between lines, telegraph
+      fragments fixed into complete sentences). Failure-safe: original
+      lines returned on any count/length/validation problem.
+- [x] S7 re-render — all first-chapter chunks re-unmarked and regenerated
+      with the new visual + narration code.
 
 ## Phase 2: connect book scripts to the video pipeline
 

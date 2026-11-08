@@ -331,6 +331,7 @@ class ScriptEngineBlock:
         # Generate middle scenes.
         middle_beats = beats[1:5]
         scenes: list[ScriptScene] = []
+        scene_beats: list[str] = []
         narrations: list[str] = [hook_narr]
         for i, beat in enumerate(middle_beats):
             target = per_scene
@@ -373,6 +374,7 @@ class ScriptEngineBlock:
                 visual = _visual_keywords(narr)
             secs = max(3, int(len(narr.split()) / 2.5))
             scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
+            scene_beats.append(beat)
             narrations.append(narr)
 
         # POV check — repair first-person slips mechanically
@@ -391,11 +393,33 @@ class ScriptEngineBlock:
         raw_lines = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
         polished = polish_script_lines(self._llm, raw_lines, context_note=context_note)
         if polished != raw_lines:
-            hook_narr = polished[0]
-            for scene, narr in zip(scenes, polished[1:-1]):
-                scene.narration = narr
-            payoff_narr = polished[-1]
-            logger.info("polish pass rewrote %d/%d lines", sum(1 for a, b in zip(raw_lines, polished) if a != b), len(raw_lines))
+            logger.info(
+                "polish pass rewrote %d/%d lines",
+                sum(1 for a, b in zip(raw_lines, polished) if a != b),
+                len(raw_lines),
+            )
+        hook_narr, *polished_scenes, payoff_narr = polished
+        for scene, beat, narr in zip(scenes, scene_beats, polished_scenes):
+            # a line that is STILL a fragment or placeholder after polish
+            # gets replaced by its beat text (a complete planned thought)
+            # rather than shipped as cut-off narration
+            if _is_placeholder(narr) or _is_incomplete(narr) or len(narr.split()) < 5:
+                fixed = _clean_speech(beat)
+                if fixed and not _is_placeholder(fixed):
+                    logger.info("polish left garbage %r -> beat text", narr)
+                    narr = fixed
+            scene.narration = narr
+        # same guard for hook and outro
+        if _is_placeholder(hook_narr) or len(hook_narr.split()) < 5:
+            fixed = _clean_speech(hook_beat)
+            if fixed and not _is_placeholder(fixed):
+                logger.info("polish left hook garbage -> beat text")
+                hook_narr = fixed
+        if _is_placeholder(payoff_narr) or len(payoff_narr.split()) < 5:
+            fixed = _clean_speech(payoff_beat)
+            if fixed and not _is_placeholder(fixed):
+                logger.info("polish left outro garbage -> beat text")
+                payoff_narr = fixed
 
         # claims check
         full_text = " ".join([hook_narr] + [s.narration for s in scenes] + [payoff_narr])
