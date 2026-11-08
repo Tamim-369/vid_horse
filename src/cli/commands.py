@@ -556,6 +556,7 @@ def render_cmd(
             render(
                 script, pack, directory / "audio", out_path,
                 stem=stem, genre=genre, music=music, subtitle_mode=subtitle_mode,
+                slug=slug,
             )
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])

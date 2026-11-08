@@ -7,6 +7,8 @@ import re
 import textwrap
 from pathlib import Path
 
+from config.video_style import VideoStyle
+
 logger = logging.getLogger(__name__)
 
 
@@ -64,7 +66,9 @@ def _title_card(text: str, work: Path, index: int) -> Path:
 # Motion runs on a 4x canvas (4320x7680): zoompan quantizes its window to
 # whole pixels, so on a 4x source one rounding step is a quarter pixel at
 # output — smooth instead of the shiver a 1x or 2x source shows.
-def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0.5) -> str:
+from config.video_style import MotionStyle
+
+def _motion_filter(frames: int, style: int, motion: MotionStyle | None = None) -> str:
     """One of multiple window motions over the still.
 
     Styles 0-5: classic Ken Burns (zoom/pan/drift)
@@ -72,7 +76,14 @@ def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0
     Styles 12-17: slow diagonal sweeps
     Styles 18-23: gentle parallax-style moves
     All keep zoom/drift gentle so it reads as cinematic, not AI-slides.
+
+    If `motion` is provided (from style config), its zoom/drift/custom
+    expressions override the defaults for this style index.
     """
+    if motion is None:
+        motion = MotionStyle(name=f"style_{style}")
+    zoom = motion.zoom
+    drift = motion.drift
 
     end = 1.0 + zoom
     on_rate = frames
@@ -81,129 +92,111 @@ def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0
     travel = f"(iw-iw/zoom)*{drift:.2f}"
     v_travel = f"(ih-ih/zoom)*{drift:.2f}"
 
-    # --- Classic Ken Burns (0-5) ---
-    if style == 0:
-        # slow zoom-in
-        z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
-        x, y = center_x, center_y
-    elif style == 1:
-        # pan L->R
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*on/{on_rate}"
-        y = center_y
-    elif style == 2:
-        # pan R->L
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*(1-on/{on_rate})"
-        y = center_y
-    elif style == 3:
-        # zoom-out: start close and settle back
-        z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
-        x, y = center_x, center_y
-    elif style == 4:
-        # horizontal drift with slow vertical sink
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*(1-on/{on_rate})"
-        y = f"{center_y}+{v_travel}*on/{on_rate}"
-    elif style == 5:
-        # vertical drift down (crane shot)
-        z_expr = f"{end:.3f}"
-        x = center_x
-        y = f"{center_y}+{v_travel}*(1-on/{on_rate})"
-
-    # --- Subtle rotation + zoom (6-11) ---
-    elif style == 6:
-        # slow zoom-in + tiny clockwise rotation (0.3° total)
-        z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
-        x = f"{center_x}+(iw/zoom)*sin(0.005*on/{on_rate})"
-        y = f"{center_y}-(ih/zoom)*cos(0.005*on/{on_rate})"
-    elif style == 7:
-        # slow zoom-out + tiny counter-clockwise rotation
-        z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
-        x = f"{center_x}-(iw/zoom)*sin(0.005*on/{on_rate})"
-        y = f"{center_y}+(ih/zoom)*cos(0.005*on/{on_rate})"
-    elif style == 8:
-        # pan L->R with slight rotation
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*on/{on_rate}"
-        y = f"{center_y}+(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
-    elif style == 9:
-        # pan R->L with slight rotation
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*(1-on/{on_rate})"
-        y = f"{center_y}-(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
-    elif style == 10:
-        # diagonal sweep TL->BR
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*on/{on_rate}"
-        y = f"{center_y}+{v_travel}*on/{on_rate}"
-    elif style == 11:
-        # diagonal sweep TR->BL
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*(1-on/{on_rate})"
-        y = f"{center_y}+{v_travel}*on/{on_rate}"
-
-    # --- Slow diagonal sweeps (12-17) ---
-    elif style == 12:
-        # gentle diagonal TL->BR, minimal zoom
-        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
-        x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
-        y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
-    elif style == 13:
-        # gentle diagonal TR->BL
-        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
-        x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
-        y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
-    elif style == 14:
-        # gentle diagonal BL->TR
-        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
-        x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
-        y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
-    elif style == 15:
-        # gentle diagonal BR->TL
-        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
-        x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
-        y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
-    elif style == 16:
-        # vertical slow zoom (portrait feel)
-        z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
-        x = center_x
-        y = f"{center_y}+(ih/zoom)*0.1*on/{on_rate}"
-    elif style == 17:
-        # horizontal slow zoom (landscape feel)
-        z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
-        x = f"{center_x}+(iw/zoom)*0.1*on/{on_rate}"
-        y = center_y
-
-    # --- Parallax-style subtle moves (18-23) ---
-    elif style == 18:
-        # slow arc: pan with gentle curve
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}+{travel}*sin(1.57*on/{on_rate})"
-        y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
-    elif style == 19:
-        # slow arc reverse
-        z_expr = f"{end:.3f}"
-        x = f"{center_x}-{travel}*sin(1.57*on/{on_rate})"
-        y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
-    elif style == 20:
-        # very slow zoom, almost static (breathing room)
-        z_expr = f"1+{zoom*0.3:.4f}*sin(3.14*on/{on_rate})"
-        x, y = center_x, center_y
-    elif style == 21:
-        # micro-pan: barely perceptible drift
-        z_expr = f"1+{zoom*0.2:.4f}"
-        x = f"{center_x}+(iw/zoom)*0.05*on/{on_rate}"
-        y = center_y
-    elif style == 22:
-        # micro-vertical drift
-        z_expr = f"1+{zoom*0.2:.4f}"
-        x = center_x
-        y = f"{center_y}+(ih/zoom)*0.05*on/{on_rate}"
+    # Custom expressions override built-in logic for this style
+    if motion.z_expr is not None:
+        z_expr = motion.z_expr
+        x = motion.x_expr or center_x
+        y = motion.y_expr or center_y
     else:
-        # style 23: almost static, just breathing zoom
-        z_expr = f"1+{zoom*0.15:.4f}*sin(6.28*on/{on_rate})"
-        x, y = center_x, center_y
+        # --- Classic Ken Burns (0-5) ---
+        if style == 0:
+            z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
+            x, y = center_x, center_y
+        elif style == 1:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*on/{on_rate}"
+            y = center_y
+        elif style == 2:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*(1-on/{on_rate})"
+            y = center_y
+        elif style == 3:
+            z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
+            x, y = center_x, center_y
+        elif style == 4:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*(1-on/{on_rate})"
+            y = f"{center_y}+{v_travel}*on/{on_rate}"
+        elif style == 5:
+            z_expr = f"{end:.3f}"
+            x = center_x
+            y = f"{center_y}+{v_travel}*(1-on/{on_rate})"
+
+        # --- Subtle rotation + zoom (6-11) ---
+        elif style == 6:
+            z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
+            x = f"{center_x}+(iw/zoom)*sin(0.005*on/{on_rate})"
+            y = f"{center_y}-(ih/zoom)*cos(0.005*on/{on_rate})"
+        elif style == 7:
+            z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
+            x = f"{center_x}-(iw/zoom)*sin(0.005*on/{on_rate})"
+            y = f"{center_y}+(ih/zoom)*cos(0.005*on/{on_rate})"
+        elif style == 8:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*on/{on_rate}"
+            y = f"{center_y}+(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
+        elif style == 9:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*(1-on/{on_rate})"
+            y = f"{center_y}-(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
+        elif style == 10:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*on/{on_rate}"
+            y = f"{center_y}+{v_travel}*on/{on_rate}"
+        elif style == 11:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*(1-on/{on_rate})"
+            y = f"{center_y}+{v_travel}*on/{on_rate}"
+
+        # --- Slow diagonal sweeps (12-17) ---
+        elif style == 12:
+            z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+            x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
+            y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
+        elif style == 13:
+            z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+            x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
+            y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
+        elif style == 14:
+            z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+            x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
+            y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
+        elif style == 15:
+            z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+            x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
+            y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
+        elif style == 16:
+            z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
+            x = center_x
+            y = f"{center_y}+(ih/zoom)*0.1*on/{on_rate}"
+        elif style == 17:
+            z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
+            x = f"{center_x}+(iw/zoom)*0.1*on/{on_rate}"
+            y = center_y
+
+        # --- Parallax-style subtle moves (18-23) ---
+        elif style == 18:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}+{travel}*sin(1.57*on/{on_rate})"
+            y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
+        elif style == 19:
+            z_expr = f"{end:.3f}"
+            x = f"{center_x}-{travel}*sin(1.57*on/{on_rate})"
+            y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
+        elif style == 20:
+            z_expr = f"1+{zoom*0.3:.4f}*sin(3.14*on/{on_rate})"
+            x, y = center_x, center_y
+        elif style == 21:
+            z_expr = f"1+{zoom*0.2:.4f}"
+            x = f"{center_x}+(iw/zoom)*0.05*on/{on_rate}"
+            y = center_y
+        elif style == 22:
+            z_expr = f"1+{zoom*0.2:.4f}"
+            x = center_x
+            y = f"{center_y}+(ih/zoom)*0.05*on/{on_rate}"
+        else:
+            z_expr = f"1+{zoom*0.15:.4f}*sin(6.28*on/{on_rate})"
+            x, y = center_x, center_y
 
     return (
         f"zoompan=z='{z_expr}':x='{x}':y='{y}':"
@@ -240,24 +233,20 @@ def _video_clip(source: Path, work: Path, tag: str | int, length: float) -> Path
     return clip
 
 
-_MOTION_POOL = list(range(24))  # 0-23: varied Ken Burns + rotation + diagonal + parallax
-
-
-def _style_for(tag: str | int) -> int:
+def _style_for(tag: str | int, motion_pool: list[int] | None = None) -> int:
     """Deterministic but non-repeating motion pick for a card.
 
     The tag carries the card index (and the subject slot after it); we
     walk the motion pool one step per card and offset again per subject,
     so no two adjacent cards and no two subject switches inside a card
-    ever use the same window motion. The old digit-sum hash let
-    consecutive cards repeat the same zoom for whole videos, which is
-    exactly the AI-slides look.
+    ever use the same window motion.
     """
-
+    if motion_pool is None:
+        motion_pool = list(range(24))
     parts = [part for part in re.split(r"[-_]", str(tag)) if part.isdigit()]
     card = int(parts[0]) if parts else 0
     slot = int(parts[1]) if len(parts) > 1 else 0
-    return _MOTION_POOL[(card + slot) % len(_MOTION_POOL)]
+    return motion_pool[(card + slot) % len(motion_pool)]
 
 
 def _attribution(asset) -> tuple[str, int] | None:
@@ -299,13 +288,7 @@ def _attribution(asset) -> tuple[str, int] | None:
     return "\n".join(lines), size
 
 
-def _credit_draw(asset, work: Path, tag: str | int) -> str | None:
-    """The corner-credit drawtext filter piece, or None for self-free media.
-
-    Writes the escaped text file so the card's own encode carries it —
-    one ffmpeg pass total instead of an extra re-encode per credit.
-    """
-
+def _credit_draw(asset, work: Path, tag: str | int, style: VideoStyle | None = None) -> str | None:
     credited = _attribution(asset)
     if not credited:
         return None
@@ -313,10 +296,16 @@ def _credit_draw(asset, work: Path, tag: str | int) -> str | None:
     text_file = work / f"credit-{tag}.txt"
     text_file.write_text(credit, encoding="utf-8")
     font = _font()
+    credit_font = style.image.credit_font if style else "DejaVu Sans Condensed"
+    credit_color = style.image.credit_color if style else "white@0.35"
+    credit_min = style.image.credit_fontsize_min if style else 12
+    credit_max = style.image.credit_fontsize_max if style else 22
+    # Recalculate size with custom bounds
+    size = max(credit_min, min(credit_max, int(840 / (0.55 * len(credit)))))
     draw = [
         f"textfile={text_file}",
-        "fontcolor=white@0.35",
-        f"fontsize={fontsize}",
+        f"fontcolor={credit_color}",
+        f"fontsize={size}",
         "x=w-text_w-28",
         "y=h-text_h-56",
     ]
@@ -331,23 +320,27 @@ def _still_clip(
     tag: str | int,
     length: float,
     credit: str | None = None,
+    style: VideoStyle | None = None,
 ) -> Path:
-    """One animated clip from a still: cover-crop prep + moving window.
+    motion_pool = style.image.motion_pool if style else None
+    canvas_mult = style.image.canvas_multiplier if style else 4
+    motion_cfg = None
+    if style and tag in style.image.motions:
+        motion_cfg = style.image.motions[tag]
+    elif style and isinstance(tag, str):
+        # tag format: "card-slot" -> get style for slot
+        parts = [p for p in tag.split("-") if p.isdigit()]
+        if len(parts) >= 2:
+            slot = int(parts[1])
+            if slot in style.image.motions:
+                motion_cfg = style.image.motions[slot]
 
-    The photo always fills the whole vertical frame (scaled to cover,
-    sides cropped) so wallpaper-ratio shots show real detail instead of
-    floating small on a blur bed. ``tag`` names the intermediate file
-    (``clip-{tag}.mp4``); subject sub-clips pass ``{card}-{subject}`` so
-    one card's subjects never collide. ``credit`` is the corner drawtext
-    baked into this same pass (saves a full re-encode per CC-BY card).
-    """
-
-    style = _style_for(tag)
     clip = work / f"clip-{tag}.mp4"
     if _is_video_file(source):
         return _video_clip(source, work, tag, length)
     frames = max(1, round(length * FPS))
-    tail = f"{_motion_filter(frames, style)}"
+    motion_style = _style_for(tag, motion_pool)
+    tail = f"{_motion_filter(frames, motion_style, motion_cfg)}"
     vf = f"{_cover_prep()},{tail}"
     if credit:
         vf = f"{vf},{credit}"
@@ -360,10 +353,8 @@ def _still_clip(
     return clip
 
 
-def _blank_clip(work: Path, index: int, length: float) -> Path:
-    """Plain dark card (hook before any subject image exists to show)."""
-
-    return _still_clip(_title_card("", work, index), work, index, length)
+def _blank_clip(work: Path, index: int, length: float, style: VideoStyle | None = None) -> Path:
+    return _still_clip(_title_card("", work, index), work, index, length, style=style)
 
 
 def _fade_out_clip(clip: Path, length: float, work: Path, index: int) -> Path:
@@ -642,6 +633,7 @@ def _moving_still(
     length: float,
     line: str = "",
     word_line=None,
+    style: VideoStyle | None = None,
 ) -> Path:
     """One scene slot: crossfade each subject image in at its narration word.
 
@@ -653,13 +645,16 @@ def _moving_still(
     """
 
     if not visuals:
-        return _blank_clip(work, index, length)
+        return _blank_clip(work, index, length, style=style)
 
     pairs: list[tuple[float, object]] | None = None
     if line and word_line:
         pairs = _sentence_schedule(line, word_line, visuals, length)
     if pairs is not None and len(pairs) < 2:
         pairs = None
+
+    motion_pool = style.image.motion_pool if style else None
+    subject_crossfade = style.image.subject_crossfade if style else _CROSSFADE
 
     if pairs is None:
         scored = [asset for asset in visuals if asset.clip_score is not None]
@@ -669,17 +664,15 @@ def _moving_still(
             else min(visuals, key=lambda asset: asset.position)
         )
         source = _asset_source(primary, work, f"img-{index:02d}-0")
-        credit = _credit_draw(primary, work, index)
-        return _still_clip(source, work, index, length, credit=credit)
+        credit = _credit_draw(primary, work, index, style=style)
+        return _still_clip(source, work, index, length, credit=credit, style=style)
 
     arrivals = [moment for moment, _asset in pairs]
     subject_assets = [asset for _moment, asset in pairs]
     switches = arrivals[1:]
-    # xfade algebra: output total = sum(subject lengths) - k*_CROSSFADE;
-    # each transition starts exactly at the arriving subject's word.
-    subject_lengths = [switches[0] + _CROSSFADE]
+    subject_lengths = [switches[0] + subject_crossfade]
     subject_lengths += [
-        switches[j] + _CROSSFADE - switches[j - 1] for j in range(1, len(switches))
+        switches[j] + subject_crossfade - switches[j - 1] for j in range(1, len(switches))
     ]
     subject_lengths.append(length - switches[-1])
 
@@ -690,9 +683,12 @@ def _moving_still(
         subpaths.append(
             _still_clip(
                 source, work, tag, subject_lengths[slot],
-                credit=_credit_draw(asset, work, tag),
+                credit=_credit_draw(asset, work, tag, style=style),
+                style=style,
             )
         )
+
+    card_crossfade = style.image.card_crossfade if style else _CROSSFADE
 
     args: list[str] = ["ffmpeg", "-y"]
     for path in subpaths:
@@ -703,7 +699,7 @@ def _moving_still(
         label = f"[vx{j}]"
         chain.append(
             f"{previous}[{j + 1}:v]xfade=transition=fade"
-            f":duration={_CROSSFADE:.2f}:offset={moment:.3f}{label}"
+            f":duration={card_crossfade:.2f}:offset={moment:.3f}{label}"
         )
         previous = label
     out = work / f"clip-{index:02d}.mp4"

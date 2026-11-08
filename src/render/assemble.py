@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from config.settings import get_settings
+from config.video_style import load_style_config, VideoStyle
 from core.errors import BlockError
 from core.models import AssetPack, SfxPlan, VideoScript, VisualAsset
 from utils import computing
@@ -144,6 +145,7 @@ def render(
     genre: str | None = None,
     music: str = "",
     subtitle_mode: str = "all",
+    slug: str | None = None,
 ) -> Path:
     """Assemble a vertical feed video: card per line, topical still per scene."""
 
@@ -187,7 +189,9 @@ def render(
     except Exception as _exc:  # noqa: BLE001
         logger.warning("subtitle emphasis skipped: %s", _exc)
 
-    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode)
+    # Load style config (per-video override + global defaults)
+    style_cfg = load_style_config(slug)
+    ass_path = write_ass(cues, work / "subs.ass", mode=subtitle_mode, style=style_cfg)
     # Only burn subtitles if the ASS file actually has cues
     _ass_lines = ass_path.read_text(encoding="utf-8").splitlines()
     if not any(line.startswith("Dialogue:") for line in _ass_lines):
@@ -227,11 +231,11 @@ def render(
         if hook_visuals:
             try:
                 return _moving_still(
-                    hook_visuals, work, 0, card_length(0), line=narration_lines[0], word_line=word_lines[0]
+                    hook_visuals, work, 0, card_length(0), line=narration_lines[0], word_line=word_lines[0], style=style_cfg
                 )
             except (RuntimeError, OSError, ValueError):
                 logger.warning("hook card motion failed; using blank card")
-        return _blank_clip(work, 0, card_length(0))
+        return _blank_clip(work, 0, card_length(0), style=style_cfg)
 
     build: list[tuple[int, Callable[..., Path]]] = [(0, hook_card)]
     for index, visuals in enumerate(scene_visuals):
@@ -241,10 +245,10 @@ def render(
         ) -> Path:
             if vis:
                 try:
-                    return _moving_still(vis, work, card, card_length(card), line=text, word_line=words)
+                    return _moving_still(vis, work, card, card_length(card), line=text, word_line=words, style=style_cfg)
                 except (RuntimeError, OSError, ValueError):
                     logger.warning("scene %d card motion failed; using blank card", card)
-            return _blank_clip(work, card, card_length(card))
+            return _blank_clip(work, card, card_length(card), style=style_cfg)
 
         build.append((index + 1, scene_card))
     # the per-card ffmpeg jobs are independent; three at a time roughly
@@ -273,13 +277,14 @@ def render(
             source = _asset_source(best, work, "img-outro")
             outro_raw = _still_clip(
                 source, work, len(build), lengths[-1],
-                credit=_credit_draw(best, work, len(build)),
+                credit=_credit_draw(best, work, len(build), style=style_cfg),
+                style=style_cfg,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("outro image failed (%s); using blank card", exc)
-            outro_raw = _blank_clip(work, len(build), lengths[-1])
+            outro_raw = _blank_clip(work, len(build), lengths[-1], style=style_cfg)
     else:
-        outro_raw = _blank_clip(work, len(build), lengths[-1])
+        outro_raw = _blank_clip(work, len(build), lengths[-1], style=style_cfg)
     clips.append(_fade_out_clip(outro_raw, lengths[-1], work, len(build)))
 
     # Each card must actually exist for its line's length (plus the

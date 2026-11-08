@@ -16,6 +16,8 @@ from pathlib import Path
 
 import torchaudio
 
+from config.video_style import load_style_config, VideoStyle
+
 logger = logging.getLogger(__name__)
 
 CUE_MAX_WORDS = 4
@@ -27,22 +29,30 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
-# Single style: progressive subtitles. Clean, no size jumps.
-_STYLE_LINE = (
-    "Style: Cue,DejaVu Sans Condensed,76,&H00F2F2F2,&H00F2F2F2,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,310,1"
-)
 # fmt: on
 
-_ASS_HEADER = f"""[Script Info]
+_TIMESTAMP = re.compile(r"[@,.!?;:']+$")
+
+
+def _build_ass_header(style: VideoStyle) -> str:
+    """Build ASS header from style config."""
+    s = style.subtitle
+    style_line = (
+        f"Style: Cue,{s.font},{s.fontsize},{s.primary_color},{s.primary_color},"
+        f"{s.outline_color},{s.back_color},{s.bold},{s.italic},{s.underline},"
+        f"{s.strikeout},{s.scale_x},{s.scale_y},{s.spacing},{s.angle},"
+        f"{s.border_style},{s.outline},{s.shadow},{s.alignment},"
+        f"{s.margin_l},{s.margin_r},{s.margin_v},{s.encoding}"
+    )
+    return f"""[Script Info]
 ScriptType: v4.00+
-PlayResX: 1080
-PlayResY: 1920
+PlayResX: {style.width}
+PlayResY: {style.height}
 WrapStyle: 0
 
 [V4+ Styles]
-Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-{_STYLE_LINE}
+{_FORMAT_LINE}
+{style_line}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -380,7 +390,13 @@ _TAKEOVER_TERMS = {
 }
 HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
-def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
+def _progressive_bottom(
+    body: list[str],
+    cue: Cue,
+    start: float,
+    finish: float,
+    style: VideoStyle,
+) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
@@ -393,7 +409,6 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
             f"Cue,,0,0,0,,{text}"
         )
         return
-    # lead highlight slightly before speech for snappier reading
     lead = HIGHLIGHT_LEAD
     bounds = [max(start, raw[i][1] - lead) for i in range(len(raw))]
     bounds.append(min(finish, raw[-1][2]))
@@ -402,6 +417,13 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
             bounds[k] = bounds[k - 1] + 0.02
     plain = [w for w, _s, _e in raw]
     pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
+    s = style.subtitle
+    base_color = s.primary_color
+    base_outline = s.outline
+    active_color = s.active_color
+    active_outline = s.active_outline
+    key_color = s.key_color
+    key_outline = s.key_outline
     for i in range(len(raw)):
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
@@ -411,14 +433,17 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                # Active word: brighter white, slightly thicker outline (no size jump)
-                parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
+                parts.append(
+                    r"{\c" + active_color + r"&\bord" + str(active_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
+                )
             elif is_pop:
-                # Key word: brighter white
-                parts.append(r"{\c&H00FFFFFF&\bord2.5\3c&H00000000&}" + disp + r"{\r}")
+                parts.append(
+                    r"{\c" + key_color + r"&\bord" + str(key_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
+                )
             else:
-                # Regular word: base style
-                parts.append(r"{\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
+                parts.append(
+                    r"{\c" + base_color + r"&\bord" + str(base_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
+                )
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
@@ -432,20 +457,25 @@ def write_ass(
     *,
     end: float | None = None,
     mode: str = "all",
+    style: VideoStyle | None = None,
 ) -> Path:
     """Serialise cues to ASS.
 
-    mode: 'all' = word-synced progressive subtitles with inline emphasis
-          (active word bigger+bold, key words bigger+bold),
-          'highlights' = same as all (kept for compat), 'none' = nothing.
+    mode: 'all' = word-synced progressive subtitles with inline emphasis,
+          'highlights' = same as all (compat), 'none' = nothing.
+    style: VideoStyle config (loads defaults if not provided).
     """
+
+    if style is None:
+        style = VideoStyle.defaults()
 
     body: list[str] = []
     if mode != "none":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            _progressive_bottom(body, cue, start, finish)
+            _progressive_bottom(body, cue, start, finish, style)
 
-    path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
+    header = _build_ass_header(style)
+    path.write_text(header + "\n".join(body) + "\n", encoding="utf-8")
     return path
