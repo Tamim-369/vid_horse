@@ -24,13 +24,16 @@ MAX_CONTEXT_CHARS = 4000
 MAX_LESSON_CHARS = 12000
 
 SYSTEM = (
-    "You are a teacher preparing one short video mini-lesson from a book "
-    "excerpt. Read the TARGET LESSON text and pick the single most teachable "
-    "idea in it: something a viewer aged 10 to 40 can understand and use. "
-    "Neighbouring excerpts are CONTEXT ONLY — use them to understand "
-    "continuity, but the idea MUST come from the target text. Give the idea a "
-    "short spoken-friendly topic name and quote 2-3 short passages from the "
-    "target text that support it. Output JSON only."
+    "You are a teacher preparing one short video mini-lesson from a real "
+    "BOOK excerpt (the video then teaches that book). Read the TARGET "
+    "LESSON text and pick the single most teachable idea in it: something a "
+    "smart general viewer can understand and use. Neighbouring excerpts are "
+    "CONTEXT ONLY — use them to understand continuity, but the idea MUST "
+    "come from the target text. Give the idea a short spoken-friendly topic "
+    "name and quote 2-3 short passages from the target text that support it. "
+    "If the excerpt is too fragmentary to teach from (a printer's imprint, a "
+    "table of contents, pure OCR noise of under ~40 words), return topic and "
+    "lesson empty strings so the runner can skip it. Output JSON only."
 )
 
 
@@ -90,6 +93,8 @@ def pick_lesson(
         idea = llm.complete_json(msgs, LessonIdea, temperature=0.4)
     except (LLMError, BlockError) as exc:
         raise BlockError(f"lesson picking failed: {exc}") from exc
+    if not idea.topic.strip() or not idea.lesson.strip():
+        raise BlockError(f"no teachable idea in: {lesson_path.name}")
     logger.info("picked lesson idea '%s' from %s", idea.topic, lesson_path.name)
     return idea
 
@@ -150,3 +155,25 @@ def load_manifest(book_dir: str | Path) -> dict:
     if manifest.exists():
         return json.loads(manifest.read_text(encoding="utf-8"))
     return {}
+
+
+def chapter_of(lesson_path: str | Path) -> str:
+    """Chapter/title of one chunk from the book manifest (empty if unknown)."""
+
+    path = Path(lesson_path)
+    manifest_path = path.parent.parent / "manifest.json"
+    if not manifest_path.exists():
+        return ""
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return ""
+    try:
+        rel = str(path.relative_to(manifest_path.parent))
+    except ValueError:
+        rel = path.name
+    for part in manifest.get("parts", []):
+        for chunk in part.get("chunks", []):
+            if chunk.get("file") == rel:
+                return str(chunk.get("chapter", ""))
+    return ""

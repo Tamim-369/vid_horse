@@ -17,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from blocks.lesson_picker import neighbours, next_untaken, pick_lesson
+from blocks.lesson_picker import chapter_of, neighbours, next_untaken, pick_lesson
 from blocks.script_engine.block import ScriptEngineBlock
 from blocks.script_generation import render_markdown
 from config.settings import get_settings
@@ -56,7 +56,11 @@ def main() -> None:
             context = neighbours(lesson, count=1)
             try:
                 idea = pick_lesson(llm, lesson, context_paths=context, ledger=ledger)
-                script = engine.run(idea.topic, source_chunks=idea.source_chunks or None)
+                script = engine.run(
+                    idea.topic,
+                    source_chunks=idea.source_chunks or None,
+                    context_note=chapter_of(lesson),
+                )
             except Exception as exc:  # noqa: BLE001
                 abandoned = ledger.fail(lesson, note=f"failed: {exc}")
                 state = "abandoned" if abandoned else "failed (will retry next run)"

@@ -82,3 +82,35 @@ def check_claims(script_text: str, fact_sheet: str) -> list[str]:
         if n not in fact_sheet:
             issues.append(f"unsourced number: {n}")
     return issues
+
+
+_STOPWORDS = frozenset(
+    [
+        "a", "an", "the", "and", "or", "but", "of", "to", "in", "on", "at",
+        "for", "with", "is", "are", "was", "were", "be", "been", "will",
+        "that", "this", "it", "its", "as", "by", "so", "not", "no", "from",
+        "you", "your", "they", "their", "we", "i", "my", "me", "he", "she",
+        "his", "her", "them", "then", "than", "there", "here", "when",
+        "what", "how", "why", "who", "which", "would", "can", "could",
+        "should", "do", "does", "did", "have", "has", "had", "into", "if",
+        "one", "all", "more", "most", "very", "just", "now", "even", "out",
+    ]
+)
+
+
+def grounding_score(script_text: str, source_text: str) -> float:
+    """Fraction of the script's content words that trace back to the source.
+
+    Rough lexical grounding: 0.0 means the script shares nothing with the
+    book chunk (invented wallpaper), ~0.5+ means the script is strongly
+    rooted in the source text. Stopwords excluded; both texts lowercased.
+    """
+
+    sw = re.findall(r"[a-z']+", (script_text or "").lower())
+    src = re.findall(r"[a-z']+", (source_text or "").lower())
+    src_set = {w for w in src if w not in _STOPWORDS}
+    content = [w for w in sw if w not in _STOPWORDS]
+    if not content:
+        return 0.0
+    hit = sum(1 for w in content if w in src_set)
+    return hit / len(content)

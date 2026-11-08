@@ -236,10 +236,13 @@ def render_black_style(
     # Build concept-driven edit
     narration_lines_full = [script.hook, *(s.narration for s in script.scenes), script.outro]
 
-    # Build asset lookup by concept
+    # Build asset lookup by concept (assets without a real url — fetch
+    # failed — render as black cards instead of crashing the encode)
     asset_by_concept = {}
     for scene in pack.scenes:
         for asset in scene.assets:
+            if not asset.url or not asset.file:
+                continue  # placeholder (fetch failed) -> black card fallback
             if asset.extra and asset.extra.get("concept"):
                 concept = asset.extra["concept"]
                 if concept not in asset_by_concept:

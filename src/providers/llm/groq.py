@@ -149,6 +149,11 @@ class GroqProvider(BaseLLMProvider):
         if "seed" in options:
             payload["seed"] = options["seed"]
         effort = options.get("reasoning_effort", self._reasoning_effort)
+        if effort is None and "gpt-oss" in str(payload.get("model", self.model)):
+            # gpt-oss reasoning models default to medium on Groq and can burn
+            # the whole token budget on hidden reasoning before emitting any
+            # JSON, returning finish_reason=length with empty content.
+            effort = "low"
         if effort:
             payload["reasoning_effort"] = effort
         if schema is not None:

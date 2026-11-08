@@ -18,6 +18,16 @@ API_URL = "https://api.pexels.com/v1/search"
 
 def _api_key() -> str | None:
     key = os.getenv("PEXELS_API_KEY") or os.getenv("PIXELS_API_KEY")
+    if not key:
+        # experiments import providers directly without the CLI entrypoint,
+        # which is the only place that loads .env today — do it here once
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv()
+        except ImportError:
+            return None
+        key = os.getenv("PEXELS_API_KEY") or os.getenv("PIXELS_API_KEY")
     return key.strip() if key else None
 
 

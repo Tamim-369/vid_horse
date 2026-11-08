@@ -82,6 +82,30 @@ video about edition/printing dates built from the imprint page. Rebuilt:
 - Old outputs archived under `output/_archive/pre-rechunk/`; ledger
   reset (backup: `taken.json.pre-rechunk`).
 
+### Phase S (2026-11): grounded scripts + scored visuals + batch runner
+- [x] S1 grounding (Phase 3) — prompt rewrite across `facts.py` /
+      `beats.py` / `writer.py`: the script teaches THE BOOK ("never quote
+      the source" directive removed; chunk text is now authoritative —
+      2400 chars per chunk instead of 600), chapter title passed as
+      context, lesson-picker allowed to return "no teachable idea" for
+      imprint/TOC/OCR-noise pages, and a `grounding_score` metric warns
+      when narration drifts off the book text.
+- [x] S2 scored visuals (Phase 4) — `sentence_assets.py` no longer takes
+      the first Pexels hit: per sentence it gathers keyword + concept
+      candidates from Pexels (Openverse fallback, no key needed) and CLIP
+      scores each against the narration; the best-scoring candidate wins.
+      Weak matches are logged and reported. Render treats placeholder
+      assets (fetch failed) as black cards instead of crashing.
+- [x] S3 batch runner (Phase 5) — `experiments/generate_book_batch.py`:
+      chunk -> lesson -> script -> assets -> voice -> black-style render in
+      one command; resumable (existing MP4 skips), failures retryable, and
+      a per-run markdown QA report (durations, grounding scores, weak
+      visuals, full scripts).
+- [x] S4 provider fixes — Groq reasoning models (`gpt-oss-*`) pinned to
+      reasoning_effort=low (they were burning the whole token budget on
+      hidden reasoning and returning EMPTY JSON); Pexels key now loads
+      `.env` when experiments import providers without the CLI entrypoint.
+
 ## Phase 2: connect book scripts to the video pipeline
 
 Goal: lesson script → motif images → voice → rendered MP4, reusing the

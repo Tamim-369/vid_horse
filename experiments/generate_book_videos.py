@@ -19,7 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from blocks.lesson_picker import neighbours, next_untaken, pick_lesson
+from blocks.lesson_picker import chapter_of, neighbours, next_untaken, pick_lesson
 from blocks.motif_assets import build_asset_pack
 from blocks.script_engine.block import ScriptEngineBlock
 from blocks.music import annotate_music
@@ -77,7 +77,11 @@ def main() -> None:
             context = neighbours(lesson, count=1)
             try:
                 idea = pick_lesson(llm, lesson, context_paths=context, ledger=ledger)
-                script = engine.run(idea.topic, source_chunks=idea.source_chunks or None)
+                script = engine.run(
+                    idea.topic,
+                    source_chunks=idea.source_chunks or None,
+                    context_note=chapter_of(lesson),
+                )
                 try:
                     script = annotate_music(llm, script)
                 except Exception:

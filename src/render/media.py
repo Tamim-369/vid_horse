@@ -107,6 +107,8 @@ def _asset_source(asset, work: Path, name: str) -> Path:
     if not suffix:
         suffix = ".webm" if asset.kind == "video" else ".jpg"
     url = asset.url if asset.kind == "video" else asset.thumb_url or asset.url
+    if not url:
+        raise ValueError(f"asset {name} has no usable url (placeholder)")
     return _fetch_media(url, work, f"{name}{suffix}")
 
 

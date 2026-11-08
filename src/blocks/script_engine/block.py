@@ -9,6 +9,7 @@ from blocks.script_engine.beats import generate_beats
 from blocks.script_engine.facts import generate_fact_sheet
 from blocks.script_engine.validators import (
     check_claims,
+    grounding_score,
     validate_pov,
     validate_scene,
 )
@@ -281,6 +282,7 @@ class ScriptEngineBlock:
         *,
         format: ScriptFormat = "short",
         source_chunks: list[str] | None = None,
+        context_note: str = "",
     ) -> VideoScript:
         if source_chunks is None and self._retriever is not None:
             try:
@@ -291,7 +293,9 @@ class ScriptEngineBlock:
                 logger.warning("RAG retrieval failed: %s", exc)
                 source_chunks = None
 
-        fs = generate_fact_sheet(self._llm, topic, source_chunks=source_chunks)
+        fs = generate_fact_sheet(
+            self._llm, topic, source_chunks=source_chunks, context_note=context_note
+        )
         beats = generate_beats(self._llm, fs)
 
         # words per scene: distribute target seconds
@@ -384,6 +388,13 @@ class ScriptEngineBlock:
         claim_issues = check_claims(full_text, "\n".join(fs.facts) + " " + fs.source)
         if claim_issues:
             logger.warning("claims: %s", claim_issues)
+        if source_chunks:
+            score = grounding_score(full_text, " ".join(source_chunks))
+            logger.info("grounding score: %.2f (content words traced to source)", score)
+            if score < 0.3:
+                logger.warning(
+                    "weak grounding (%.2f): script may drift off the book text", score
+                )
 
         return VideoScript(
             title=fs.concept,
