@@ -59,19 +59,18 @@ def _qa_lines(rows: list[dict]) -> list[str]:
     lines = ["# Batch QA report", "", f"run: {datetime.now().isoformat(timespec='seconds')}", "", ""]
     lines.append("| # | chunk | idea | chapter | dur s | grounding | weak visuals |")
     lines.append("|---|-------|------|---------|-------|-----------|--------------|")
-    for row in rows:
+    for i, row in enumerate(rows, 1):
         lines.append(
-            "| {i} | {chunk} | {idea} | {chapter} | {dur} | {grounding} | {weak}/{clipd} |".format(
-                **row
-            )
+            f"| {i} | {row.get('chunk','')} | {row.get('idea','')} | {row.get('chapter','')} "
+            f"| {row.get('dur','')} | {row.get('grounding','')} | {row.get('weak','')}/{row.get('clipd','')} |"
         )
     lines.append("")
     for row in rows:
-        lines.append(f"## {row['chunk']} — {row['idea']}")
-        lines.append(f"- chapter: `{row['chapter']}`")
-        lines.append(f"- narration grounding: {row['grounding']}")
+        lines.append(f"## {row.get('chunk','')} — {row.get('idea','')}")
+        lines.append(f"- chapter: `{row.get('chapter','')}`")
+        lines.append(f"- narration grounding: {row.get('grounding','')}")
         lines.append("```")
-        lines.append(row["script_text"])
+        lines.append(row.get("script_text", ""))
         lines.append("```")
         if row.get("weak_detail"):
             lines.append(f"- weak visuals: {row['weak_detail']}")
