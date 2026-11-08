@@ -27,17 +27,17 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
-# Normal progressive subtitles — SLIGHTLY HIGHER (MarginV 280) so emphasis
-# takes the EXACT same spot. White, no bounce, no gray.
+# Normal progressive subtitles — SLIGHTLY UP (MarginV 310), SLIGHTLY BIGGER (68pt).
+# White, no bounce, no gray.
 _STYLE_LINE = (
-    "Style: Cue,DejaVu Sans Condensed,60,&H00F2F2F2,&H00F2F2F2,&H00000000,"
-    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,280,1"
+    "Style: Cue,DejaVu Sans Condensed,68,&H00F2F2F2,&H00F2F2F2,&H00000000,"
+    "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,310,1"
 )
-# Keyword emphasis — SAME position as Cue (MarginV 280), REPLACES it.
-# Layer 1, bigger/bolder, pure white. Smooth crossfade via \fad.
+# Keyword emphasis — ORIGINAL subtitle position (MarginV 350), BIGGER/BOLDER (90pt).
+# Layer 1, pure white. Smooth crossfade via \fad. REPLACES subtitle entirely.
 _EMPHASIS_LINE = (
-    "Style: Emphasis,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,280,1"
+    "Style: Emphasis,DejaVu Sans Condensed,90,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,-1,0,0,0,100,100,0,0,1,3.6,0,2,70,70,350,1"
 )
 # fmt: on
 
@@ -631,8 +631,9 @@ def write_ass(
     if mode != "none":
         fade_cs = int(EMPHASIS_FADE * 100)  # centiseconds for ASS \fad
         for ps, pe, disp in emphasis:
-            # Layer 1 (above Cue layer 0), SAME position (MarginV 280), smooth crossfade
-            fx = r"{\an2\pos(540,1180)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
+            # Layer 1, ORIGINAL subtitle position (MarginV 350) -> y = 1920 - 350 = 1570
+            # \an2 = bottom center, so pos y = screen_h - MarginV
+            fx = r"{\an2\pos(540,1570)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
             body.append(
                 f"Dialogue: 1,{_ass_time(ps)},{_ass_time(pe)},"
                 f"Emphasis,,0,0,0,,{fx}{disp}"
