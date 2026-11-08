@@ -45,9 +45,10 @@ def main() -> None:
 
     dirs = [Path(args.book_dir)] if args.book_dir else book_dirs()
     made = 0
+    skip_run: set[str] = set()  # failed this run; don't retry within the same run
     for book_dir in dirs:
         while made < args.limit:
-            lesson = next_untaken(book_dir, ledger)
+            lesson = next_untaken(book_dir, ledger, skip=skip_run)
             if lesson is None:
                 print(f"[done] {book_dir.name}: every lesson taken")
                 break
@@ -57,11 +58,15 @@ def main() -> None:
                 idea = pick_lesson(llm, lesson, context_paths=context, ledger=ledger)
                 script = engine.run(idea.topic, source_chunks=idea.source_chunks or None)
             except Exception as exc:  # noqa: BLE001
-                print(f"[skip] {lesson.name}: {exc}")
-                ledger.mark(str(lesson), script_dir="", note=f"failed: {exc}")
+                abandoned = ledger.fail(lesson, note=f"failed: {exc}")
+                state = "abandoned" if abandoned else "failed (will retry next run)"
+                print(f"[skip] {lesson.name}: {exc} [{state}]")
+                skip_run.add(str(lesson))
                 continue
 
-            out_dir = Path("output") / book_dir.name / lesson.stem
+            rel = lesson.relative_to(book_dir)
+            part_dir = rel.parts[1] if len(rel.parts) > 2 else "part_00"
+            out_dir = Path("output") / book_dir.name / part_dir / lesson.stem
             out_dir.mkdir(parents=True, exist_ok=True)
             (out_dir / "script.json").write_text(
                 script.model_dump_json(indent=2), encoding="utf-8"

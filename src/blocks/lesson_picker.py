@@ -95,15 +95,44 @@ def pick_lesson(
 
 
 def lesson_files(book_dir: str | Path) -> list[Path]:
-    """All lesson .txt files of one book, in sorted order."""
+    """Teachable lesson .txt files of one book, in book order.
+
+    Prefers manifest.json: only parts marked ``teachable`` contribute files,
+    so front matter / imprint chunks are never picked. Falls back to a plain
+    recursive scan when no manifest exists.
+    """
+
     root = Path(book_dir)
-    files = sorted(p for p in root.rglob("*.txt") if p.is_file())
-    return files
+    manifest_path = root / "manifest.json"
+    if manifest_path.exists():
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            files = []
+            for part in manifest.get("parts", []):
+                if not part.get("teachable"):
+                    continue
+                for chunk in part.get("chunks", []):
+                    p = root / chunk.get("file", "")
+                    if p.is_file():
+                        files.append(p)
+            if files:
+                return files
+        except (json.JSONDecodeError, OSError):
+            logger.warning("bad manifest in %s; falling back to file scan", root)
+    return sorted(p for p in root.rglob("*.txt") if p.is_file())
 
 
-def next_untaken(book_dir: str | Path, ledger: TakenLedger) -> Path | None:
-    """First not-yet-taken lesson file of a book."""
+def next_untaken(
+    book_dir: str | Path,
+    ledger: TakenLedger,
+    skip: set[str] | None = None,
+) -> Path | None:
+    """First not-yet-taken lesson file of a book, honoring a per-run skip set."""
+
+    banned = skip or set()
     for path in lesson_files(book_dir):
+        if str(path) in banned:
+            continue
         if not ledger.is_taken(path):
             return path
     return None

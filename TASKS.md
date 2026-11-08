@@ -45,19 +45,42 @@ Source material lives in `content/psychology_books/` (one file per lesson,
 
 ## Status
 
+### Original plan (scripts from chunks; superseded chunk format below)
 - [x] 1 taken-parts ledger
 - [x] 2 agentic RAG hook
 - [x] 3 teacher persona
 - [x] 4 lesson-picker agent
 - [x] 5 runner
 - [x] 6 ingestion + e2e validation
-- [x] 7 output hardening (validated over 10 consecutive Schopenhauer lessons):
-      hook ≤12 words w/ retry + dangling-word truncation · placeholder-echo
-      rejection ("Text /", "query") · reasoning-echo stripping · narration/
-      visual dedup · unlabeled keyword-tail stripping · visual keyword
-      rebuild (>5 words) · POV retry loop + mechanical first→second-person
-      repair · contraction-safe quote cleanup · dangling conjunction/digit
-      cleanup
+- [x] 7 output hardening
+
+### Phase R (2026-11): re-extraction & ledger integrity (fix of broken chunking)
+The original chunker split books per PDF PAGE with a fuzzy-UPPERCASE
+heading regex, so running page headers ("THE CROWD") and printer's imprints
+became "lesson titles" and each page became a "lesson" — including a full
+video about edition/printing dates built from the imprint page. Rebuilt:
+
+- [x] R1 ledger integrity — `src/utils/ledger.py`: failed chunks are
+      recorded with `status: failed` + retry counter and stay pickable; only
+      successful runs become `done`; after 3 retries a chunk is abandoned
+      (marked done with failure note). Runners use per-run skip sets so a
+      failing chunk doesn't loop within one run.
+- [x] R2 re-extraction — `experiments/build_psychology_book_content.py`
+      rebuilt: fuzzy clustering of running headers into furniture (and
+      header-run chapter spans for scanned books, spread-majority across
+      facing pages), printed-TOC parsing fallback for books with TOC,
+      heading-lines fallback, paragraph reconstruction + dehyphenation,
+      sentence-bounded idea chunks (~260 words), `teachable` flags in
+      manifest, page OCR cache under `.cache/book_pages/`.
+      Result: real chapter structure per book (e.g. The Crowd: 6 parts /
+      188 teachable idea-chunks vs. the old 239 page-fragments; Delusions:
+      16 chapters incl. Mississippi Scheme, Tulipomania, Crusades...).
+- [x] R3 collision-safe slugs — `output/<book>--<part>xNNN/` (chunk
+      numbering restarts per chapter; old `<book>--<NNN>` collided).
+- [x] R4 front matter (title/imprint/publisher pages) excluded from
+      lesson picking via manifest `teachable` flag.
+- Old outputs archived under `output/_archive/pre-rechunk/`; ledger
+  reset (backup: `taken.json.pre-rechunk`).
 
 ## Phase 2: connect book scripts to the video pipeline
 

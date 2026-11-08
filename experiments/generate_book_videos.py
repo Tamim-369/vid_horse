@@ -33,12 +33,19 @@ OUTPUT_ROOT = Path("output")
 
 
 def lesson_slug(lesson_path: Path) -> str:
-    """Flat, filesystem-safe slug: <book>--<NNN>. """
+    """Flat, filesystem-safe slug: <book>--<part><chunk>, e.g. X--04x012.
 
-    book = lesson_path.relative_to(BOOKS_ROOT).parts[0]
+    Chunk numbering restarts within each chapter part directory, so the
+    part number is part of the slug to keep every output dir unique.
+    """
+
+    rel = lesson_path.relative_to(BOOKS_ROOT)
+    book = rel.parts[0]
+    part_match = re.match(r"part_(\d+)", rel.parts[1]) if len(rel.parts) > 2 else None
+    part = part_match.group(1) if part_match else "00"
     match = re.match(r"(\d+)", lesson_path.name)
     index = match.group(1) if match else lesson_path.stem[:6]
-    return f"{book[:40]}--{index}"
+    return f"{book[:40]}--{part}x{index}"
 
 
 def book_dirs() -> list[Path]:
@@ -59,9 +66,10 @@ def main() -> None:
 
     dirs = [Path(args.book_dir)] if args.book_dir else book_dirs()
     made = 0
+    skip_run: set[str] = set()  # failed this run; don't retry within the same run
     for book_dir in dirs:
         while made < args.limit:
-            lesson = next_untaken(book_dir, ledger)
+            lesson = next_untaken(book_dir, ledger, skip=skip_run)
             if lesson is None:
                 print(f"[done] {book_dir.name}: every lesson taken")
                 break
@@ -90,8 +98,10 @@ def main() -> None:
                     idea.model_dump_json(indent=2), encoding="utf-8"
                 )
             except Exception as exc:  # noqa: BLE001
-                print(f"[skip] {lesson.name}: {exc}")
-                ledger.mark(str(lesson), script_dir="", note=f"failed: {exc}")
+                abandoned = ledger.fail(lesson, note=f"failed: {exc}")
+                state = "abandoned" if abandoned else "failed (will retry next run)"
+                print(f"[skip] {lesson.name}: {exc} [{state}]")
+                skip_run.add(str(lesson))
                 continue
 
             ledger.mark(str(lesson), script_dir=str(out_dir), note=idea.lesson)
