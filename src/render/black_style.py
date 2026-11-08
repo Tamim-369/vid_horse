@@ -293,6 +293,12 @@ def render_black_style(
             if a.url and a.file and a.file not in _used_asset_files:
                 _used_asset_files.add(a.file)
                 return a
+        # all used in this line's pool: search the whole pack for any unused image
+        for sc in pack.scenes:
+            for a in (sc.assets or []):
+                if a.url and a.file and a.file not in _used_asset_files:
+                    _used_asset_files.add(a.file)
+                    return a
         for a in pool:
             if a.url:
                 return a
