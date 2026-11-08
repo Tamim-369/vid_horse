@@ -306,8 +306,12 @@ def _generate_on_demand(subject: str) -> str | None:
     return slug
 
 
-def _best_motifs(subject: str, top: int = 3) -> list[tuple[str, float]]:
-    """Motif ids ranked by CLIP similarity between the sentence and the image."""
+def _best_motifs(subject: str, top: int = 3, exclude: set[str] | None = None) -> list[tuple[str, float]]:
+    """Motif ids ranked by CLIP similarity between the sentence and the image.
+
+    ``exclude`` (already-used motif ids) gets a penalty so a single video
+    never repeats the same image when any alternative exists.
+    """
     state = _motif_state_ready()
     if not state:
         return []
@@ -320,7 +324,11 @@ def _best_motifs(subject: str, top: int = 3) -> list[tuple[str, float]]:
         text = scorer.text_embed(subject[:180])
         if text is None:
             return []
-        sims = (state["matrix"] @ text.t()).squeeze(-1)
+        sims = (state["matrix"] @ text.t()).squeeze(-1).clone()
+        if exclude:
+            for i, mid in enumerate(state["ids"]):
+                if mid in exclude:
+                    sims[i] = sims[i] - 0.15
         order = sims.argsort(descending=True)[:top]
         ids = state["ids"]
         return [(ids[i], float(sims[i])) for i in order]
@@ -426,7 +434,7 @@ def _build_asset_from_concept(
     concept_visuals: ConceptVisuals,
     fetch_dir: Path,
     position: float,
-    recent_motifs: list[str] | None = None,
+    used_motifs: set[str] | None = None,
 ) -> VisualAsset:
     """Create a VisualAsset: best-matching image for this sentence.
 
@@ -437,17 +445,19 @@ def _build_asset_from_concept(
     sentence gets an image even when every external source fails.
     """
 
-    recent_motifs = list(recent_motifs or [])
+    used_motifs = set(used_motifs or [])
     chosen: tuple[str, Path, float | None, dict] | None = None  # (source, path, clip, meta)
     subject_base = sent[:180]
 
     # 1. motif library
-    ranked = _best_motifs(subject_base, top=6)
+    ranked = _best_motifs(subject_base, top=6, exclude=used_motifs)
     motif_state = _motif_state_ready() or {}
     entries = motif_state.get("entries", {})
     if (not ranked or (ranked[0][1] if ranked else 0.0) < CLIP_WEAK) and _on_demand_generated < _ON_DEMAND_CAP:
         phrase = " ".join(concept_visuals.primary_queries[:2] or []) or subject_base
-        if _generate_on_demand(phrase):
+        new_slug = _generate_on_demand(phrase)
+        if new_slug:
+            used_motifs.discard(new_slug)  # allow immediate use of freshly made image
             ranked = _best_motifs(subject_base, top=6)
             motif_state = _motif_state_ready() or {}
             entries = motif_state.get("entries", {})
@@ -502,6 +512,10 @@ def _build_asset_from_concept(
 
     if winner:
         source, path, clip, meta = winner
+        if source == "motif":
+            mid = meta.get("motif")
+            if mid:
+                used_motifs.add(mid)
         url = f"file://{path.resolve()}"
         page_url = f"{source}:{path.name}"
         caption = f"{concept_visuals.concept}: {meta.get('motif_name') or meta.get('query', '')}"
@@ -557,19 +571,15 @@ def assign_sentence_assets(
     if not all_sents:
         return []
 
-    recent_motifs: list[str] = []
+    used_motifs: set[str] = set()
     assets: list[VisualAsset] = []
     for idx, (_ti, _si, sent) in enumerate(all_sents):
         concept_visuals = _select_concept_for_sentence(sent, used_concepts)
 
         position = idx / max(len(all_sents) - 1, 1) if len(all_sents) > 1 else 0.0
         asset = _build_asset_from_concept(
-            sent, concept_visuals, fetch_dir, position, recent_motifs=recent_motifs
+            sent, concept_visuals, fetch_dir, position, used_motifs=used_motifs
         )
-        motif_id = (asset.extra or {}).get("motif")
-        if motif_id:
-            recent_motifs.append(motif_id)
-            del recent_motifs[:-3]  # remember only the immediate history
         assets.append(asset)
 
     return assets

@@ -275,6 +275,29 @@ def render_black_style(
         if wav_path.exists():
             lengths[i] = _duration(wav_path)
 
+    # Track which asset files we've already shown so a video never
+    # repeats the same image twice.
+    _used_asset_files: set[str] = set()
+
+    def _pick_asset_for_line(line_idx: int) -> VisualAsset | None:
+        pool: list[VisualAsset] = []
+        if line_idx == 0 and pack.scenes:
+            pool.extend(pack.scenes[0].assets or [])
+        elif 0 < line_idx < len(narration_lines_full) - 1 and line_idx < len(pack.scenes):
+            pool.extend(pack.scenes[line_idx].assets or [])
+        else:
+            for sc in pack.scenes:
+                pool.extend(sc.assets or [])
+        # prefer unused
+        for a in pool:
+            if a.url and a.file and a.file not in _used_asset_files:
+                _used_asset_files.add(a.file)
+                return a
+        for a in pool:
+            if a.url:
+                return a
+        return None
+
     for line_idx, (line, line_dur) in enumerate(zip(narration_lines_full, lengths)):
         if line_dur <= 0:
             continue
@@ -290,26 +313,24 @@ def render_black_style(
                 for pop in cue.pops:
                     line_key_words.append(pop.upper())
 
-        # Build segments for this line
-        if line_key_words:
-            # Black + key word flashes
+        asset = _pick_asset_for_line(line_idx)
+
+        # Build the visual clip for this line: the per-sentence image,
+        # with the (up to 2) key words burned in as a centered subtitle.
+        if asset is not None and asset.url:
+            asset_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 6.0), style_cfg)
+            if line_key_words:
+                kw_text = " ".join(line_key_words[:2])
+                asset_clip = _overlay_subtitle(asset_clip, out_path.parent / "render-work", len(clips), kw_text, min(line_dur, 6.0), style_cfg.subtitle.fontsize)
+            clips.append(asset_clip)
+        elif line_key_words:
+            # No image available: flash the key words on black
             fontsize = style_cfg.subtitle.fontsize
-            for kw in line_key_words:
-                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, 1.5, fontsize)
+            for kw in line_key_words[:2]:
+                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, min(1.5, line_dur), fontsize)
                 clips.append(flash)
         else:
-            # Show concept visual if available
-            shown_concept = False
-            for concept in line_concepts:
-                if concept in asset_by_concept and asset_by_concept[concept]:
-                    asset = asset_by_concept[concept][0]
-                    asset_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 5.0), style_cfg)
-                    clips.append(asset_clip)
-                    shown_concept = True
-                    break
-            if not shown_concept:
-                # Black screen
-                clips.append(_black_frame(out_path.parent / "render-work", len(clips), line_dur))
+            clips.append(_black_frame(out_path.parent / "render-work", len(clips), line_dur))
 
     # Build final video
     silent = _join_cards(clips, work)
@@ -329,7 +350,32 @@ def render_black_style(
     return out_path
 
 
-def _black_frame(work, index, length):
+def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 60) -> Path:
+    """Burn a centered subtitle (up to 2 words) over an existing clip."""
+
+    out = work / f"sub-{index:02d}.mp4"
+    safe = text.replace("'", "\\'").replace('"', '\\"')
+    draw = (
+        f"text='{safe}':fontcolor=white:fontsize={fontsize}:"
+        f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:"
+        f"x=(w-text_w)/2:y=h*0.78,"
+        f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill"
+    )
+    # ffmpeg drawtext + box; use -vf with both filters
+    vf = (
+        f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill,"
+        f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
+        f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:"
+        f"x=(w-text_w)/2:y=h*0.76"
+    )
+    _run([
+        "ffmpeg", "-y", "-i", str(src),
+        "-vf", vf,
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
+    return out
     out = work / f"black-{index:02d}.mp4"
     _run([
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
