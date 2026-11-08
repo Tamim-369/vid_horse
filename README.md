@@ -2,6 +2,9 @@
 
 AI-powered vertical video factory. Feed it a niche, get back polished conspiracy-theory shorts — script, assets, voice, music, render — fully automated.
 
+Also: **book-video factory** — feed it a public-domain psychology book and it
+produces a teaching video per real book idea.
+
 ```
 ash_speaks discover     # populate catalog from Wikipedia + fandom
 ash_speaks theories     # browse catalogued topics
@@ -28,6 +31,26 @@ ash_speaks theories -l 10 -o popularity
 ash_speaks run-all lost-cosmonauts montauk-project philadelphia-experiment \
   flat-earth mkultra denver-airport haarp roswell incident-1947 titanic-switch -f short
 ```
+
+## Book → Video pipeline
+
+```bash
+# 1. Re-extract books into real chapters/idea chunks (OCR-cached after first run)
+uv run python experiments/build_psychology_book_content.py [--force]
+
+# 2. Batch: chunk -> script -> visuals -> voice -> rendered MP4 + QA report
+uv run python experiments/generate_book_batch.py \
+    content/psychology_books/2015_223078_the-crowd --limit 10
+
+# Resume anytime; already-rendered chunks skip automatically. Failed chunks
+# (e.g. rate limits) stay retryable in the ledger and never get consumed.
+```
+
+Each book lives at `content/psychology_books/<slug>/` with `manifest.json`
+mapping real chapters -> ~260-word idea chunks (front matter/imprint pages
+are marked non-teachable and never picked). Output: `output/<book>--<part>xNNN/`
+with `short.json`, `assets-short.json`, `audio/voice.wav` and the final
+`*-short-black.mp4`, plus a per-run `output/qa-<timestamp>.md` report.
 
 ## What It Does
 

@@ -38,8 +38,16 @@ def write_scene(
     fact_sheet: FactSheet,
     previous: list[str],
     target_words: int,
+    source_text: str = "",
 ) -> str:
     prev = "\n".join(previous) if previous else "(none)"
+    source = ""
+    if source_text:
+        source = (
+            "\nSOURCE BOOK EXCERPT (draw the scene's language and idea from "
+            "this; say what it says, in your own speaking voice):\n"
+            f"'''\n{source_text[:1600]}\n'''\n"
+        )
     msgs = [
         LLMMessage(role="system", content=SYSTEM),
         LLMMessage(
@@ -50,6 +58,7 @@ def write_scene(
                 f"Mechanism: {fact_sheet.mechanism}\n"
                 f"Counter-move: {fact_sheet.counter_move}\n"
                 f"Previous lines:\n{prev}\n"
+                f"{source}"
                 f"Write the scene in {target_words} words (±2). "
                 "End with a natural advantage line, no filler tags. "
                 "Format: NARRATION: <text>\nVISUAL: <query>"

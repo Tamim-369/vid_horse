@@ -297,6 +297,7 @@ class ScriptEngineBlock:
             self._llm, topic, source_chunks=source_chunks, context_note=context_note
         )
         beats = generate_beats(self._llm, fs)
+        source_text = " ".join(source_chunks or [])
 
         # words per scene: distribute target seconds
         wps = 2.5
@@ -305,21 +306,21 @@ class ScriptEngineBlock:
 
         # Generate payoff first, then hook referencing it.
         payoff_beat = beats[5] if len(beats) >= 6 else beats[-1]
-        payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12)
+        payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12, source_text=source_text)
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
         if not payoff_narr or _is_placeholder(payoff_narr):
             payoff_narr = _clean_speech(payoff_beat)
         payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
 
         hook_beat = beats[0]
-        hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10)
+        hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10, source_text=source_text)
         hook_narr, _hook_vis = _parse_scene(hook_raw)
         if not hook_narr or _is_placeholder(hook_narr):
             hook_narr = _clean_speech(hook_beat)
         # hooks must be short and COMPLETE
         if len(hook_narr.split()) > 12 or _is_incomplete(hook_narr):
             logger.info("hook needs fix (len=%d incomplete=%s); retrying", len(hook_narr.split()), _is_incomplete(hook_narr))
-            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off)", fs, [payoff_narr], 10)
+            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off)", fs, [payoff_narr], 10, source_text=source_text)
             retry_narr, _retry_vis = _parse_scene(hook_raw)
             if retry_narr and not _is_placeholder(retry_narr) and len(retry_narr.split()) <= 14 and not _is_incomplete(retry_narr):
                 hook_narr = retry_narr
@@ -337,7 +338,7 @@ class ScriptEngineBlock:
             vis = ""
             while attempt < self._max_scene_retries:
                 try:
-                    raw = write_scene(self._llm, beat, fs, narrations, target)
+                    raw = write_scene(self._llm, beat, fs, narrations, target, source_text=source_text)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("scene %d write failed: %s", i, exc)
                     attempt += 1
