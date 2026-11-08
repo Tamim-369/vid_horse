@@ -33,11 +33,11 @@ _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,68,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,310,1"
 )
-# Keyword emphasis — ORIGINAL subtitle position (MarginV 350), BIGGER/BOLDER (90pt).
-# Layer 1, pure white. Smooth crossfade via \fad. REPLACES subtitle entirely.
+# Keyword emphasis — SAME position as Cue (MarginV 310), SLIGHTLY LARGER (85pt).
+# Layer 1, bolder, pure white. Smooth crossfade via \fad. REPLACES subtitle.
 _EMPHASIS_LINE = (
-    "Style: Emphasis,DejaVu Sans Condensed,90,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,-1,0,0,0,100,100,0,0,1,3.6,0,2,70,70,350,1"
+    "Style: Emphasis,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
+    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,310,1"
 )
 # fmt: on
 
@@ -389,11 +389,22 @@ _TAKEOVER_TERMS = {
 HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
 # Filler framing phrases (normalized same as _norm_tok) that should
-# never plate over the actual concept
+# never plate over the actual concept. Covers framing + auxiliary/modal
+# constructions that are grammatical glue, not concepts.
 _PLATE_FILLER = {
     _norm_tok(p) for p in [
+        # framing
         "what we call", "what is", "what are", "we call", "is called",
         "they call", "this is", "that is", "known as", "referred to",
+        # auxiliary/modal glue — never concepts
+        "want to", "need to", "going to", "have to", "has to", "had to",
+        "try to", "used to", "suppose to", "supposed to", "mean to",
+        "plan to", "hope to", "like to", "love to", "hate to",
+        "can", "could", "would", "should", "might", "must",
+        "will", "shall", "may", "ought",
+        # weak verbs
+        "get", "gets", "got", "become", "becomes", "became",
+        "seem", "seems", "looks", "feels", "sounds",
     ]
 }
 
@@ -631,9 +642,9 @@ def write_ass(
     if mode != "none":
         fade_cs = int(EMPHASIS_FADE * 100)  # centiseconds for ASS \fad
         for ps, pe, disp in emphasis:
-            # Layer 1, ORIGINAL subtitle position (MarginV 350) -> y = 1920 - 350 = 1570
+            # Layer 1, SAME position as Cue (MarginV 310) -> y = 1920 - 310 = 1610
             # \an2 = bottom center, so pos y = screen_h - MarginV
-            fx = r"{\an2\pos(540,1570)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
+            fx = r"{\an2\pos(540,1610)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
             body.append(
                 f"Dialogue: 1,{_ass_time(ps)},{_ass_time(pe)},"
                 f"Emphasis,,0,0,0,,{fx}{disp}"
