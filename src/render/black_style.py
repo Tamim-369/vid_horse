@@ -337,22 +337,24 @@ def render_black_style(
 
         asset = _pick_asset_for_line(line_idx)
 
-        # Build the visual clip for this line: the per-sentence image,
-        # with the (up to 2) key words burned in as a centered subtitle.
-        if asset is not None and asset.url:
-            asset_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 6.0), style_cfg)
-            if line_key_words:
-                kw_text = " ".join(line_key_words[:2])
-                asset_clip = _overlay_subtitle(asset_clip, out_path.parent / "render-work", len(clips), kw_text, min(line_dur, 6.0), style_cfg.subtitle.fontsize)
-            clips.append(asset_clip)
-        elif line_key_words:
-            # No image available: flash the key words on black
-            fontsize = style_cfg.subtitle.fontsize
-            for kw in line_key_words[:2]:
-                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, min(1.5, line_dur), fontsize)
-                clips.append(flash)
+        # Subtitle: up to 2 words for this line. Prefer the emphasis key
+        # words; otherwise the first two content words of the narration.
+        if line_key_words:
+            subtitle_text = " ".join(line_key_words[:2])
         else:
-            clips.append(_black_frame(out_path.parent / "render-work", len(clips), line_dur))
+            _sw = [w for w in line.split() if w.lower().strip(".,!?") not in ("the", "a", "an", "of", "to", "and", "is", "are", "was", "in", "on", "at", "for", "with", "that", "this", "it", "its", "you", "your")]
+            subtitle_text = " ".join(_sw[:2])
+
+        # Base clip for this line
+        if asset is not None and asset.url:
+            base_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 6.0), style_cfg)
+        else:
+            base_clip = _black_frame(out_path.parent / "render-work", len(clips), min(line_dur, 6.0))
+
+        # Burn the subtitle over the base clip for the whole line
+        if subtitle_text.strip():
+            base_clip = _overlay_subtitle(base_clip, out_path.parent / "render-work", len(clips), subtitle_text, min(line_dur, 6.0), style_cfg.subtitle.fontsize)
+        clips.append(base_clip)
 
     # Build final video
     silent = _join_cards(clips, work)
