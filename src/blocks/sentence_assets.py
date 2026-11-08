@@ -437,6 +437,7 @@ def _build_asset_from_concept(
     fetch_dir: Path,
     position: float,
     used_motifs: set[str] | None = None,
+    used_stock_files: set[str] | None = None,
 ) -> VisualAsset:
     """Create a VisualAsset: best-matching image for this sentence.
 
@@ -448,6 +449,7 @@ def _build_asset_from_concept(
     """
 
     used_motifs = set(used_motifs or [])
+    used_stock_files = set(used_stock_files or [])
     chosen: tuple[str, Path, float | None, dict] | None = None  # (source, path, clip, meta)
     subject_base = sent[:180]
 
@@ -491,6 +493,8 @@ def _build_asset_from_concept(
         scorer = _clip_scorer()
         best = (None, candidates[0][1], candidates[0][0])
         for query, path in candidates:
+            if path.name in used_stock_files:
+                continue
             s = _clip_score(scorer, subject_base, path)
             if s is not None and (best[0] is None or s > best[0]):
                 best = (s, path, query)
@@ -515,6 +519,8 @@ def _build_asset_from_concept(
             mid = meta.get("motif")
             if mid:
                 used_motifs.add(mid)
+        elif source == "stock":
+            used_stock_files.add(path.name)
         url = f"file://{path.resolve()}"
         page_url = f"{source}:{path.name}"
         caption = f"{concept_visuals.concept}: {meta.get('motif_name') or meta.get('query', '')}"
@@ -571,13 +577,15 @@ def assign_sentence_assets(
         return []
 
     used_motifs: set[str] = set()
+    used_stock_files: set[str] = set()
     assets: list[VisualAsset] = []
     for idx, (_ti, _si, sent) in enumerate(all_sents):
         concept_visuals = _select_concept_for_sentence(sent, used_concepts)
 
         position = idx / max(len(all_sents) - 1, 1) if len(all_sents) > 1 else 0.0
         asset = _build_asset_from_concept(
-            sent, concept_visuals, fetch_dir, position, used_motifs=used_motifs
+            sent, concept_visuals, fetch_dir, position,
+            used_motifs=used_motifs, used_stock_files=used_stock_files,
         )
         assets.append(asset)
 
