@@ -27,17 +27,10 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
-# Normal progressive subtitles — SLIGHTLY UP (MarginV 310), SLIGHTLY BIGGER (68pt).
-# White, no bounce, no gray.
+# Single style: progressive subtitles. Active/key word gets inline size+bold boost.
 _STYLE_LINE = (
     "Style: Cue,DejaVu Sans Condensed,68,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,310,1"
-)
-# Keyword emphasis — SAME position as Cue (MarginV 310), SLIGHTLY LARGER (85pt).
-# Layer 1, bolder, pure white. Smooth crossfade via \fad. REPLACES subtitle.
-_EMPHASIS_LINE = (
-    "Style: Emphasis,DejaVu Sans Condensed,85,&H00FFFFFF,&H00FFFFFF,&H00000000,"
-    "&H00000000,-1,0,0,0,100,100,0,0,1,3.5,0,2,70,70,310,1"
 )
 # fmt: on
 
@@ -50,7 +43,6 @@ WrapStyle: 0
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 {_STYLE_LINE}
-{_EMPHASIS_LINE}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -388,189 +380,13 @@ _TAKEOVER_TERMS = {
 }
 HIGHLIGHT_LEAD = 0.09  # show highlight a bit before the word is spoken
 
-# Filler framing phrases (normalized same as _norm_tok) that should
-# never plate over the actual concept. Covers framing + auxiliary/modal
-# constructions that are grammatical glue, not concepts.
-_PLATE_FILLER = {
-    _norm_tok(p) for p in [
-        # framing
-        "what we call", "what is", "what are", "we call", "is called",
-        "they call", "this is", "that is", "known as", "referred to",
-        # auxiliary/modal glue — never concepts
-        "want to", "need to", "going to", "have to", "has to", "had to",
-        "try to", "used to", "suppose to", "supposed to", "mean to",
-        "plan to", "hope to", "like to", "love to", "hate to",
-        "can", "could", "would", "should", "might", "must",
-        "will", "shall", "may", "ought",
-        # weak verbs
-        "get", "gets", "got", "become", "becomes", "became",
-        "seem", "seems", "looks", "feels", "sounds",
-    ]
-}
-
-
-def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
-    """The keyword a plate should show for this cue, and whether it is strong.
-
-    Strong terms (command/reveal vocabulary) may plate every
-    ``PLATE_MIN_GAP`` seconds; ordinary emphasized words only every
-    ``PLATEOrdinary_GAP`` so the big word stays an event, not a strobe.
-
-    If ALL pops for this cue are filler framing phrases, skip the cue
-    entirely — the next cue likely has the actual concept.
-    """
-
-    pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
-    if not pops:
-        return None
-    # If every pop is a filler phrase, this cue carries no concept — skip it
-    if all(any(f in _norm_tok(p) for f in _PLATE_FILLER) for p in pops):
-        return None
-    ranked = sorted(
-        pops,
-        key=lambda p: (
-            -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()),
-            # penalize filler framing phrases even when embedded in longer pops
-            # e.g. "what we call crowd mind" should not beat "crowd mind"
-            1 if any(f in _norm_tok(p) for f in _PLATE_FILLER) else 0,
-            # then prefer concise concept words (2-3 words > 1, but filler is last)
-            -len(str(p).split()),
-        ),
-    )
-    for pop in ranked:
-        words = str(pop).split()
-        if not 0 < len(words) <= 3:
-            continue
-        strong = any(_norm_tok(t) in _TAKEOVER_TERMS for t in words)
-        return " ".join(words).strip().upper(), strong
-    return None
-
-
-PLATE_MIN_GAP = 2.0  # min gap between ANY plate starts — ~8-10 plates per 40s
-PLATE_ORDINARY_GAP = 2.0  # unified
-PLATE_MAX_HOLD = 1.75  # hold window decreased ~30% from 2.5s
-PLATE_MIN_HOLD = 0.9
-PLATE_MAX_PER_VIDEO = 10  # cap
-
-
-# Concept terms that boost a plate's priority (the lesson's core ideas)
-_PLATE_CONCEPT_BOOST = {
-    "crowd mind", "group think", "social proof", "herd", "conform",
-    "manipulation", "influence", "persuasion", "compliance", "obedience",
-    "authority", "reciprocity", "scarcity", "consistency", "liking",
-    "foot in door", "door in face", "lowball", "bait", "anchoring",
-}
-
-def _plate_score(disp: str) -> int:
-    """Higher = more important concept."""
-    normed = _norm_tok(disp)
-    words = disp.split()
-    score = len(words)
-    for term in _PLATE_CONCEPT_BOOST:
-        if term.replace(" ", "") in normed:
-            score += 5
-    for w in words:
-        if _norm_tok(w) in _TAKEOVER_TERMS:
-            score += 3
-    return score
-
-
-EMPHASIS_MIN_GAP = 2.5  # min gap between emphasis starts (calm rhythm)
-EMPHASIS_HOLD = 2.5  # hold: 2.5s — long enough to read, not strobe
-EMPHASIS_MAX_PER_VIDEO = 10  # cap
-EMPHASIS_FADE = 0.3  # crossfade duration (seconds)
-
-
-def _plate_pick(cue: Cue) -> tuple[str, bool] | None:
-    """The keyword a takeover should show for this cue, and whether it is strong.
-
-    If ALL pops for this cue are filler framing phrases, skip the cue
-    entirely — the next cue likely has the actual concept.
-    """
-
-    pops = [p for p in getattr(cue, "pops", []) or [] if str(p).strip()]
-    if not pops:
-        return None
-    # If every pop is a filler phrase, this cue carries no concept — skip it
-    if all(any(f in _norm_tok(p) for f in _PLATE_FILLER) for p in pops):
-        return None
-    ranked = sorted(
-        pops,
-        key=lambda p: (
-            -sum(_norm_tok(t) in _TAKEOVER_TERMS for t in str(p).split()),
-            1 if any(f in _norm_tok(p) for f in _PLATE_FILLER) else 0,
-            -len(str(p).split()),
-        ),
-    )
-    for pop in ranked:
-        words = str(pop).split()
-        if not 0 < len(words) <= 3:
-            continue
-        strong = any(_norm_tok(t) in _TAKEOVER_TERMS for t in words)
-        return " ".join(words).strip().upper(), strong
-    return None
-
-
-def build_emphasis(cues: list[Cue]) -> list[tuple[float, float, str]]:
-    """Keyword emphasis events: (start, end, DISPLAY).
-
-    An emphasis appears when its word starts being spoken (HIGHLIGHT_LEAD
-    early) and holds for EMPHASIS_HOLD (2.5s). It layers ON TOP of the
-    continuous subtitle at the SAME position — smooth crossfade via
-    \\fad(in,out). No gaps, eye never moves. Higher-scoring concepts win.
-    """
-
-    candidates: list[tuple[float, str, bool, int]] = []
-    for cue in cues:
-        picked = _plate_pick(cue)
-        if not picked:
-            continue
-        disp, strong = picked
-        wt = _pop_word_times(cue, disp)
-        if not wt:
-            continue
-        ps = max(0.0, wt[0] - HIGHLIGHT_LEAD)
-        score = _plate_score(disp)
-        candidates.append((ps, disp, strong, score))
-    # sort by score DESC, then time ASC
-    candidates.sort(key=lambda item: (-item[3], item[0]))
-
-    chosen: list[list] = []  # [start, display, score]
-    for ps, disp, strong, score in candidates:
-        if len(chosen) >= EMPHASIS_MAX_PER_VIDEO:
-            break
-        # check interval overlap: [ps, ps+EMPHASIS_HOLD] vs [cp, cp+EMPHASIS_HOLD]
-        overlap = False
-        for cp, cd, cs in chosen:
-            if ps < cp + EMPHASIS_HOLD and cp < ps + EMPHASIS_HOLD:
-                overlap = True
-                break
-        if overlap:
-            continue
-        chosen.append([ps, disp, score])
-
-    # sort chosen by time for output
-    chosen.sort(key=lambda item: item[0])
-
-    emphasis: list[tuple[float, float, str]] = []
-    for ps, disp, _score in chosen:
-        pe = ps + EMPHASIS_HOLD
-        emphasis.append((ps, pe, disp))
-    return emphasis
-
-
-def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float, emphasis_ranges: list[tuple[float, float]] | None = None) -> None:
+def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) -> None:
     raw = [
         (w, max(start, ws), min(finish, we))
         for (w, ws, we) in (getattr(cue, "words", None) or [])
         if we > start and ws < finish
     ]
     if not raw:
-        # check if this whole cue falls in an emphasis window
-        if emphasis_ranges:
-            mid = (start + finish) / 2
-            if any(ps <= mid <= pe for ps, pe in emphasis_ranges):
-                return  # skip — emphasis covers this
         text = _TIMESTAMP.sub("", cue.text.replace("\n", " ")).strip()
         body.append(
             f"Dialogue: 0,{_ass_time(start)},{_ass_time(max(finish, start))},"
@@ -590,21 +406,19 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float, 
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
             continue
-        # skip this word event if it falls in an emphasis window
-        if emphasis_ranges:
-            mid = (ws + we) / 2
-            if any(ps <= mid <= pe for ps, pe in emphasis_ranges):
-                continue
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
+                # Active word: BIGGER (92pt) + BOLD + pure white
+                parts.append(r"{\fs92\b1\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
-                parts.append(r"{\c&H00FFFFFF&\bord2.2\3c&H00000000&}" + disp + r"{\r}")
+                # Key word (not currently active): BIGGER (80pt) + BOLD + pure white
+                parts.append(r"{\fs80\b1\c&H00FFFFFF&\bord2.5\3c&H00000000&}" + disp + r"{\r}")
             else:
-                parts.append(r"{\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
+                # Regular word: base size (68pt) + dim white
+                parts.append(r"{\fs68\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"
@@ -618,36 +432,20 @@ def write_ass(
     *,
     end: float | None = None,
     mode: str = "all",
-    emphasis: list[tuple[float, float, str]] | None = None,
 ) -> Path:
     """Serialise cues to ASS.
 
-    mode: 'all' = continuous word-synced subtitles + keyword emphasis
-          (emphasis REPLACES subtitle at same position, smooth crossfade),
-          'highlights' = emphasis only, 'none' = nothing.
+    mode: 'all' = word-synced progressive subtitles with inline emphasis
+          (active word bigger+bold, key words bigger+bold),
+          'highlights' = same as all (kept for compat), 'none' = nothing.
     """
 
-    if emphasis is None:
-        emphasis = build_emphasis(cues)
-
-    emphasis_ranges = [(ps, pe) for ps, pe, _d in emphasis]
-
     body: list[str] = []
-    if mode == "all":
+    if mode != "none":
         for index, cue in enumerate(cues):
             start, stop = cue.start, max(cue.end, cue.start + 0.25)
             finish = _cue_finish(cues, index, stop)
-            _progressive_bottom(body, cue, start, finish, emphasis_ranges)
+            _progressive_bottom(body, cue, start, finish)
 
-    if mode != "none":
-        fade_cs = int(EMPHASIS_FADE * 100)  # centiseconds for ASS \fad
-        for ps, pe, disp in emphasis:
-            # Layer 1, SAME position as Cue (MarginV 310) -> y = 1920 - 310 = 1610
-            # \an2 = bottom center, so pos y = screen_h - MarginV
-            fx = r"{\an2\pos(540,1610)\fad(" + str(fade_cs) + "," + str(fade_cs) + ")}"
-            body.append(
-                f"Dialogue: 1,{_ass_time(ps)},{_ass_time(pe)},"
-                f"Emphasis,,0,0,0,,{fx}{disp}"
-            )
     path.write_text(_ASS_HEADER + "\n".join(body) + "\n", encoding="utf-8")
     return path
