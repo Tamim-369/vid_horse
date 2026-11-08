@@ -1,0 +1,217 @@
+{
+  "_comment": "Style Presets — distinct visual identities for different videos/channels. Each preset is a complete VideoStyle override. Assign via 'style_preset' in per-video config or rotate automatically.",
+  "presets": {
+    "clinical_cold": {
+      "name": "Clinical Cold",
+      "description": "Sterile, analytical, unsettlingly clean. High contrast, minimal motion, clinical typography.",
+      "subtitle": {
+        "font": "DejaVu Sans Mono",
+        "fontsize": 72,
+        "primary_color": "&H00E0E0E0",
+        "outline_color": "&H00101010",
+        "active_color": "&H0000FFFF",
+        "active_outline": 2.0,
+        "key_color": "&H0000FFFF",
+        "key_outline": 1.5,
+        "margin_v": 340,
+        "spacing": 2.0
+      },
+      "image": {
+        "motion_pool": [0, 3, 20, 21, 22, 23],
+        "subject_crossfade": 0.6,
+        "card_crossfade": 0.5,
+        "motions": {
+          "0": {"zoom": 0.03, "drift": 0.2},
+          "3": {"zoom": 0.03, "drift": 0.2}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1",
+        "colorbalance": "rs=-0.05:gs=-0.02:bs=0.08"
+      },
+      "audio": {
+        "music_bed": "clinical_hum.mp3",
+        "music_bed_volume": 0.12
+      }
+    },
+    "noir_grain": {
+      "name": "Noir Grain",
+      "description": "Film noir aesthetic — heavy vignette, grain, high contrast, slow dramatic moves.",
+      "subtitle": {
+        "font": "DejaVu Serif Condensed",
+        "fontsize": 78,
+        "primary_color": "&H00F0F0F0",
+        "outline_color": "&H00000000",
+        "active_color": "&H00FFFFFF",
+        "active_outline": 3.5,
+        "key_color": "&H00FFD700",
+        "key_outline": 2.8,
+        "margin_v": 280,
+        "bold": 0,
+        "italic": 1
+      },
+      "image": {
+        "motion_pool": [3, 4, 5, 10, 11, 18, 19],
+        "subject_crossfade": 0.8,
+        "card_crossfade": 0.6,
+        "motions": {
+          "3": {"zoom": 0.08, "drift": 0.4},
+          "5": {"zoom": 0.06, "drift": 0.5}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.25:saturation=0.35:brightness=-0.08:gamma=1.15",
+        "colorbalance": "rs=0.08:gs=-0.05:bs=-0.12",
+        "noise": "alls=18:allf=t",
+        "vignette": "PI/3.0"
+      },
+      "audio": {
+        "music_bed": "noir_piano.mp3",
+        "music_bed_volume": 0.22
+      }
+    },
+    "documentary_clean": {
+      "name": "Documentary Clean",
+      "description": "PBS-style — readable, authoritative, subtle motion, neutral grade.",
+      "subtitle": {
+        "font": "DejaVu Sans",
+        "fontsize": 70,
+        "primary_color": "&H00FFFFFF",
+        "outline_color": "&H00202020",
+        "active_color": "&H0000FF00",
+        "active_outline": 2.5,
+        "key_color": "&H0000FF00",
+        "key_outline": 2.0,
+        "margin_v": 320,
+        "outline": 2.2
+      },
+      "image": {
+        "motion_pool": [0, 1, 2, 12, 13, 14, 15, 16, 17],
+        "subject_crossfade": 0.5,
+        "card_crossfade": 0.4,
+        "motions": {
+          "0": {"zoom": 0.04, "drift": 0.3},
+          "12": {"zoom": 0.03, "drift": 0.25}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.05:saturation=0.9:brightness=-0.02:gamma=1.02"
+      },
+      "audio": {
+        "music_bed": "documentary_bed.mp3",
+        "music_bed_volume": 0.16
+      }
+    },
+    "dark_academic": {
+      "name": "Dark Academic",
+      "description": "Old library feel — serif type, sepia tones, slow deliberate motion, textured.",
+      "subtitle": {
+        "font": "DejaVu Serif",
+        "fontsize": 74,
+        "primary_color": "&H00E8DCC8",
+        "outline_color": "&H001A1510",
+        "back_color": "&H00000000",
+        "active_color": "&H00FFFFFF",
+        "active_outline": 3.0,
+        "key_color": "&H00FFE4B5",
+        "key_outline": 2.5,
+        "margin_v": 300,
+        "italic": 1
+      },
+      "image": {
+        "motion_pool": [3, 12, 13, 14, 15, 16, 17, 20],
+        "subject_crossfade": 0.7,
+        "card_crossfade": 0.5,
+        "motions": {
+          "3": {"zoom": 0.05, "drift": 0.35},
+          "16": {"zoom": 0.04, "drift": 0.3}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.1:saturation=0.55:brightness=-0.05:gamma=1.08",
+        "colorbalance": "rs=0.12:gs=0.06:bs=-0.04",
+        "noise": "alls=12:allf=t"
+      },
+      "audio": {
+        "music_bed": "academic_strings.mp3",
+        "music_bed_volume": 0.18
+      }
+    },
+    "tech_minimal": {
+      "name": "Tech Minimal",
+      "description": "Clean, precise, monospace, subtle grid-like motion, cool tones.",
+      "subtitle": {
+        "font": "DejaVu Sans Mono",
+        "fontsize": 68,
+        "primary_color": "&H00B0D0F0",
+        "outline_color": "&H00050510",
+        "active_color": "&H0000FFFF",
+        "active_outline": 2.0,
+        "key_color": "&H0000FFFF",
+        "key_outline": 1.5,
+        "margin_v": 330,
+        "spacing": 1.5,
+        "outline": 1.8
+      },
+      "image": {
+        "motion_pool": [0, 1, 2, 20, 21, 22, 23],
+        "subject_crossfade": 0.3,
+        "card_crossfade": 0.25,
+        "motions": {
+          "0": {"zoom": 0.025, "drift": 0.15},
+          "20": {"zoom": 0.02, "drift": 0.1}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.08:saturation=0.4:brightness=-0.02:gamma=1.05",
+        "colorbalance": "rs=-0.08:gs=-0.04:bs=0.15"
+      },
+      "audio": {
+        "music_bed": "ambient_tech.mp3",
+        "music_bed_volume": 0.10
+      }
+    },
+    "visceral_raw": {
+      "name": "Visceral Raw",
+      "description": "High impact, bold type, aggressive contrast, fast cuts, in-your-face.",
+      "subtitle": {
+        "font": "DejaVu Sans Condensed",
+        "fontsize": 84,
+        "primary_color": "&H00FFFFFF",
+        "outline_color": "&H00000000",
+        "back_color": "&H00000000",
+        "active_color": "&H000000FF",
+        "active_outline": 5.0,
+        "key_color": "&H000000FF",
+        "key_outline": 4.0,
+        "margin_v": 260,
+        "bold": 1,
+        "outline": 4.0
+      },
+      "image": {
+        "motion_pool": [1, 2, 4, 5, 8, 9, 10, 11],
+        "subject_crossfade": 0.25,
+        "card_crossfade": 0.2,
+        "motions": {
+          "1": {"zoom": 0.12, "drift": 0.7},
+          "8": {"zoom": 0.1, "drift": 0.6}
+        }
+      },
+      "color_grade": {
+        "enabled": true,
+        "eq": "contrast=1.35:saturation=1.2:brightness=0.02:gamma=1.2",
+        "colorbalance": "rs=0.15:gs=-0.1:bs=-0.15",
+        "vignette": "PI/2.5"
+      },
+      "audio": {
+        "music_bed": "tension_drone.mp3",
+        "music_bed_volume": 0.25
+      }
+    }
+  }
+}

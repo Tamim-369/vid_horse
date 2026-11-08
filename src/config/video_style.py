@@ -57,7 +57,7 @@ class SubtitleStyle:
 @dataclass
 class MotionStyle:
     """Single motion definition for zoompan."""
-    name: str
+    name: str = ""
     zoom: float = 0.05
     drift: float = 0.5
     # Custom zoompan expression pieces (advanced)
@@ -98,6 +98,7 @@ class AudioStyle:
     line_gap: float = 0.30
     music_bed_volume: float = 0.18
     sfx_volume: float = 0.40
+    music_bed: str = ""
 
 @dataclass
 class VideoStyle:
@@ -156,6 +157,33 @@ class VideoStyle:
 # ---------------------------------------------------------------------------
 
 DEFAULT_CONFIG_PATH = Path("config/video_style_default.json")
+PRESETS_PATH = Path("config/style_presets.json")
+
+
+def _load_presets() -> dict:
+    """Load style presets from JSON file."""
+    if PRESETS_PATH.exists():
+        try:
+            with PRESETS_PATH.open("r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data.get("presets", {})
+        except Exception as e:
+            logger.warning("Failed to load style presets: %s", e)
+    return {}
+
+
+def _apply_preset(base: dict, preset_name: str) -> dict:
+    """Apply a named preset on top of base config."""
+    presets = _load_presets()
+    if preset_name in presets:
+        preset = presets[preset_name]
+        # Remove metadata fields
+        preset_cfg = {k: v for k, v in preset.items() if k not in ("name", "description")}
+        logger.info("Applied style preset: %s", preset_name)
+        return _deep_merge(base, preset_cfg)
+    else:
+        logger.warning("Style preset '%s' not found, ignoring", preset_name)
+        return base
 
 
 def _deep_merge(base: dict, override: dict) -> dict:
@@ -194,6 +222,10 @@ def load_style_config(slug: str | None = None) -> VideoStyle:
             try:
                 with video_cfg_path.open("r", encoding="utf-8") as f:
                     video_cfg = json.load(f)
+                # Check for preset first
+                preset_name = video_cfg.get("style_preset")
+                if preset_name:
+                    merged = _apply_preset(merged, preset_name)
                 merged = _deep_merge(merged, video_cfg)
                 logger.info("Loaded per-video style config from %s", video_cfg_path)
             except Exception as e:
@@ -217,6 +249,8 @@ def create_example_config(path: Path | str = "config/video_style_example.json") 
     path.parent.mkdir(parents=True, exist_ok=True)
     example = {
         "_comment": "Video style configuration — all keys optional. See src/config/video_style.py for schema.",
+        "_presets": "Available presets: clinical_cold, noir_grain, documentary_clean, dark_academic, tech_minimal, visceral_raw. Use 'style_preset' key to apply one.",
+        "style_preset": "noir_grain",
         "subtitle": {
             "font": "DejaVu Sans Condensed",
             "fontsize": 76,
