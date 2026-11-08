@@ -465,9 +465,6 @@ def _build_asset_from_concept(
         entry = entries.get(motif_id)
         if entry is None:
             continue
-        recent = motif_id in recent_motifs[-1:] if recent_motifs else False
-        if recent and len(ranked) > 1:
-            continue  # avoid visual ping-pong across adjacent sentences
         chosen = (
             "motif",
             entry["path"],
