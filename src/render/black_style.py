@@ -44,11 +44,11 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 152) -> Path:
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
     _run([
         "ffmpeg", "-y", "-f", "lavfi",
         "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
@@ -72,12 +72,10 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
     motion_style = _style_for(tag, motion_pool)
 
     extra = getattr(asset, "extra", {}) or {}
-    motion_cfg = None
-
-    tail = f"{_motion_filter(frames, motion_style, motion_cfg)}"
-
-    # Apply concept-specific color grade
     grade_emphasis = extra.get("grade_emphasis")
+
+    tail = f"{_motion_filter(frames, motion_style, None)}"
+
     if grade_emphasis:
         grade_map = {
             "cold": "eq=contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1,colorbalance=rs=-0.05:gs=-0.02:bs=0.08",
@@ -89,41 +87,45 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
         }
         grade_filter = grade_map.get(extra.get("grade_emphasis"), "")
         if grade_filter:
-            tail = f"{_motion_filter(0, 0)}"
-    else:
-        tail = f"{_motion_filter(0, 0)}"
+            tail = f"{tail},{grade_filter}"
 
-    # Simplified: just use the motion filter without grade for now
-    motion_style = 0
-    frames = max(1, round(3 * FPS))  # placeholder
-    # We'll build proper clips below
-    return work / f"asset-placeholder-{tag}.mp4"
+    vf = f"{_cover_prep()},{tail}"
+    out = work / f"asset-{tag}.mp4"
+    _run([
+        "ffmpeg", "-y", "-loop", "1", "-i", str(source),
+        "-vf", vf,
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
+    return out
 
 
 def _black_frame(work: Path, index: int, length: float) -> Path:
     out = work / f"black-{index:02d}.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-f", "lavfi",
-        "-i", f"color=c=black:s=1080x1920",
-        "-t", f"{length:.3f}", "-r", "30",
+        "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
+        "-t", f"{length:.3f}", "-r", str(FPS),
         "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
         "-crf", "20", str(out),
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ])
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 152) -> Path:
+    """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
-    subprocess.run([
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    _run([
         "ffmpeg", "-y", "-f", "lavfi",
-        "-i", "color=c=black:s=1080x1920",
+        "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
         "-vf", f"drawtext={draw}",
-        "-t", f"{length:.3f}", "-r", "30",
+        "-t", f"{length:.3f}", "-r", str(FPS),
         "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
         "-crf", "20", str(out),
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ])
     return out
 
 
@@ -133,8 +135,8 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
     clip = work / f"asset-{tag}.mp4"
     source = _asset_source(asset, work, tag)
 
-    frames = max(1, round(length * 30))
-    motion_pool = style.image.motion_pool if hasattr(style, 'image') and style.image.motion_pool else list(range(24))
+    frames = max(1, round(length * FPS))
+    motion_pool = style.image.motion_pool if style else list(range(24))
     motion_style = _style_for(tag, motion_pool)
 
     extra = getattr(asset, "extra", {}) or {}
@@ -157,13 +159,13 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
 
     vf = f"{_cover_prep()},{tail}"
     out = work / f"asset-{tag}.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-loop", "1", "-i", str(source),
         "-vf", vf,
-        "-t", f"{length:.3f}", "-r", "30",
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        str(out),
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
     return out
 
 
@@ -171,11 +173,11 @@ def _join_cards(clips: list, work: Path) -> Path:
     concat_list = work / "concat.txt"
     concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
     out = work / "cards.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p", str(out),
-    ], check=True)
+    ])
     return out
 
 
@@ -227,9 +229,9 @@ def render_black_style(
     from render.audio_mix import _bed_tracks, _build_bed, _music_spans, _mix_audio, _voice_track
     cards = _bed_tracks(script, None, "")
     spans = _music_spans(cards, offsets, sum(_duration(w) for w in wavs))
-    bed = _build_bed(spans, out_path.parent / "render-work", sum(_duration(w) for w in wavs))
-    voice = _voice_track(wavs, [_duration(w) for w in wavs], out_path.parent / "render-work")
-    mixed = _mix_audio(voice, bed, out_path.parent / "render-work")
+    bed = _build_bed(spans, work, sum(_duration(w) for w in wavs))
+    voice = _voice_track(wavs, lengths, work)
+    mixed = _mix_audio(voice, bed, work)
 
     # Build concept-driven edit
     narration_lines_full = [script.hook, *(s.narration for s in script.scenes), script.outro]
@@ -288,8 +290,9 @@ def render_black_style(
         # Build segments for this line
         if line_key_words:
             # Black + key word flashes
+            fontsize = style_cfg.subtitle.fontsize
             for kw in line_key_words:
-                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, 1.5)
+                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, 1.5, fontsize)
                 clips.append(flash)
         else:
             # Show concept visual if available
@@ -306,12 +309,12 @@ def render_black_style(
                 clips.append(_black_frame(out_path.parent / "render-work", len(clips), line_dur))
 
     # Build final video
-    silent = _join_cards(clips, out_path.parent / "render-work")
+    silent = _join_cards(clips, work)
 
     # Mux with audio
     total = sum(lengths)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
         "-t", f"{total:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
@@ -319,30 +322,29 @@ def render_black_style(
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ], check=True)
+    ])
     return out_path
 
 
-# Simplified implementations
 def _black_frame(work, index, length):
     out = work / f"black-{index:02d}.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
         "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ])
     return out
 
 
-def _word_flash(work, index, word, length):
+def _word_flash(work, index, word, length, fontsize=152):
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
-    subprocess.run([
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    _run([
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
         "-vf", f"drawtext={draw}", "-t", f"{length:.3f}", "-r", "30",
         "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ])
     return out
 
 
@@ -350,8 +352,8 @@ def _asset_clip(asset, work, tag, length, style):
     from render.cards import _asset_source, _motion_filter, _style_for, _cover_prep
     clip = work / f"asset-{tag}.mp4"
     source = _asset_source(asset, work, tag)
-    frames = max(1, round(length * 30))
-    motion_pool = style.image.motion_pool if hasattr(style, 'image') and style.image.motion_pool else list(range(24))
+    frames = max(1, round(length * FPS))
+    motion_pool = style.image.motion_pool if style else list(range(24))
     motion_style = _style_for(tag, motion_pool)
     extra = getattr(asset, "extra", {}) or {}
     grade_emphasis = extra.get("grade_emphasis")
@@ -370,43 +372,22 @@ def _asset_clip(asset, work, tag, length, style):
             tail = f"{tail},{grade_filter}"
     vf = f"{_cover_prep()},{tail}"
     out = work / f"asset-{tag}.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-loop", "1", "-i", str(source), "-vf", vf,
-        "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return out
-
-
-def _black_frame(work, index, length):
-    out = work / f"black-{index:02d}.mp4"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
-        "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
-        "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return out
-
-
-def _word_flash(work, index, word, length):
-    out = work / f"flash-{index:02d}.mp4"
-    safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
-        "-vf", f"drawtext={draw}", "-t", f"{length:.3f}", "-r", "30",
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
-    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return out
+        "-t", f"{length:.3f}", "-r", str(FPS), "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        str(out),
+    ])
+    return clip
 
 
 def _join_cards(clips, work):
     concat_list = work / "concat.txt"
     concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
     out = work / "cards.mp4"
-    subprocess.run([
+    _run([
         "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-        "-pix_fmt", "yuv420p", str(out)
-    ], check=True)
+        "-pix_fmt", "yuv420p", str(out),
+    ])
     return out

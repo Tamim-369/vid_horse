@@ -25,34 +25,26 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SubtitleStyle:
     font: str = "DejaVu Sans Condensed"
-    fontsize: int = 76
-    primary_color: str = "&H00F2F2F2"      # dim white
-    outline_color: str = "&H00000000"       # black
+    fontsize: int = 152              # 2x size
+    primary_color: str = "&H00FFFFFF"  # pure white
+    outline_color: str = "&H00000000"  # black
     back_color: str = "&H00000000"
-    bold: int = 0
+    bold: int = 1                    # bold
     italic: int = 0
     underline: int = 0
     strikeout: int = 0
     border_style: int = 1
-    outline: float = 2.8
+    outline: float = 4.0             # thicker outline
     shadow: float = 0
-    alignment: int = 2                      # bottom center
+    alignment: int = 10              # middle center
     margin_l: int = 70
     margin_r: int = 70
-    margin_v: int = 310
+    margin_v: int = 0                # center vertically
     encoding: int = 1
     scale_x: float = 100.0
     scale_y: float = 100.0
     spacing: float = 0.0
     angle: float = 0.0
-
-    # Highlight (active word) overrides
-    active_color: str = "&H00FFFFFF"        # pure white
-    active_outline: float = 3.0
-    # Key word (pops) overrides
-    key_color: str = "&H00FFFFFF"
-    key_outline: float = 2.5
-    # No size jumps — color/outline only
 
 @dataclass
 class MotionStyle:

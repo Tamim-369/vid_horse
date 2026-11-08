@@ -20,7 +20,7 @@ from config.video_style import load_style_config, VideoStyle
 
 logger = logging.getLogger(__name__)
 
-CUE_MAX_WORDS = 4
+CUE_MAX_WORDS = 2
 
 # fmt: off
 _FORMAT_LINE = (
@@ -416,14 +416,10 @@ def _progressive_bottom(
         if bounds[k] <= bounds[k - 1]:
             bounds[k] = bounds[k - 1] + 0.02
     plain = [w for w, _s, _e in raw]
-    pops_norm = {_norm_tok(p) for p in (getattr(cue, "pops", []) or []) for p in str(p).split()}
     s = style.subtitle
-    base_color = s.primary_color
-    base_outline = s.outline
-    active_color = s.active_color
-    active_outline = s.active_outline
-    key_color = s.key_color
-    key_outline = s.key_outline
+    color = s.primary_color
+    outline = s.outline
+    outline_color = s.outline_color
     for i in range(len(raw)):
         ws, we = bounds[i], bounds[i + 1]
         if we - ws < 0.04:
@@ -431,18 +427,15 @@ def _progressive_bottom(
         parts = []
         for j, tok in enumerate(plain):
             disp = _TIMESTAMP.sub("", tok).strip()
-            is_pop = _norm_tok(tok) in pops_norm
             if j == i:
+                # Active word: same style, just ensure it's visible
                 parts.append(
-                    r"{\c" + active_color + r"&\bord" + str(active_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
-                )
-            elif is_pop:
-                parts.append(
-                    r"{\c" + key_color + r"&\bord" + str(key_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
+                    r"{\c" + color + r"&\bord" + str(outline) + r"\3c" + outline_color + r"&}" + disp + r"{\r}"
                 )
             else:
+                # Other words: same style
                 parts.append(
-                    r"{\c" + base_color + r"&\bord" + str(base_outline) + r"\3c" + s.outline_color + r"&}" + disp + r"{\r}"
+                    r"{\c" + color + r"&\bord" + str(outline) + r"\3c" + outline_color + r"&}" + disp + r"{\r}"
                 )
         line = " ".join(parts)
         body.append(
