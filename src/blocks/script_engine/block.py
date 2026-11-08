@@ -7,6 +7,7 @@ import re
 
 from blocks.script_engine.beats import generate_beats
 from blocks.script_engine.facts import generate_fact_sheet
+from blocks.script_engine.polish import polish_script_lines
 from blocks.script_engine.validators import (
     check_claims,
     grounding_score,
@@ -383,6 +384,18 @@ class ScriptEngineBlock:
             payoff_narr = _fix_pov(payoff_narr)
             for scene in scenes:
                 scene.narration = _fix_pov(scene.narration)
+
+        # coherence polish: one LLM pass rewriting all lines as natural
+        # spoken prose (fixes telegraph fragments and scene-to-scene seams;
+        # falls back to the original lines on any validation failure)
+        raw_lines = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
+        polished = polish_script_lines(self._llm, raw_lines, context_note=context_note)
+        if polished != raw_lines:
+            hook_narr = polished[0]
+            for scene, narr in zip(scenes, polished[1:-1]):
+                scene.narration = narr
+            payoff_narr = polished[-1]
+            logger.info("polish pass rewrote %d/%d lines", sum(1 for a, b in zip(raw_lines, polished) if a != b), len(raw_lines))
 
         # claims check
         full_text = " ".join([hook_narr] + [s.narration for s in scenes] + [payoff_narr])
