@@ -417,7 +417,7 @@ def _build_asset_from_concept(
             "music_mood": concept_visuals.music_mood,
             "clip_score": round(clip, 4) if clip is not None else None,
             "source": source,
-            **{"motif_" + k if k != "query" else k: v for k, v in meta.items()},
+            **meta,
         },
     )
 

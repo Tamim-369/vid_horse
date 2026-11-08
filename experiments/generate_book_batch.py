@@ -69,6 +69,7 @@ def _qa_lines(rows: list[dict]) -> list[str]:
         lines.append(f"## {row.get('chunk','')} — {row.get('idea','')}")
         lines.append(f"- chapter: `{row.get('chapter','')}`")
         lines.append(f"- narration grounding: {row.get('grounding','')}")
+        lines.append(f"- visuals: {row.get('visuals_detail','')}")
         lines.append("```")
         lines.append(row.get("script_text", ""))
         lines.append("```")
@@ -128,15 +129,19 @@ def render_one(
     # QA metrics
     clipd = weak = 0
     weak_detail: list[str] = []
+    visuals_detail: list[str] = []
     for scene in pack.scenes:
         for asset in scene.assets:
-            cs = (asset.extra or {}).get("clip_score")
+            e = asset.extra or {}
+            cs = e.get("clip_score")
             if cs is None:
                 continue
             clipd += 1
+            label = e.get("motif") or e.get("query", "") or e.get("concept", "")
+            visuals_detail.append(f"{e.get('source', '?')}:{label} ({cs:.2f})")
             if cs < 0.18:
                 weak += 1
-                weak_detail.append(f"{cs:.2f} [{(asset.extra or {}).get('query', '')}]")
+                weak_detail.append(f"{cs:.2f} [{label}]")
     grounding = grounding_score(
         " ".join([script.hook] + [s.narration for s in script.scenes] + [script.outro]),
         (lesson.read_text(encoding="utf-8", errors="replace")),
@@ -153,6 +158,7 @@ def render_one(
         "clipd": str(clipd),
         "script_text": render_markdown(script),
         "weak_detail": "; ".join(weak_detail[:4]),
+        "visuals_detail": "; ".join(visuals_detail),
         "seconds": round(time.monotonic() - started),
     }
 
