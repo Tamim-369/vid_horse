@@ -43,6 +43,7 @@ def register(app: typer.Typer) -> None:
     app.command(name="publish")(publish_cmd)
     app.command(name="voice")(voice_cmd)
     app.command(name="render")(render_cmd)
+    app.command(name="render-black")(render_black_cmd)
     app.command(name="run-all")(run_all_cmd)
     app.command(name="make")(make_cmd)
     app.command(name="horror-pull", hidden=True)(horror_pull_cmd)
@@ -557,6 +558,50 @@ def render_cmd(
                 script, pack, directory / "audio", out_path,
                 stem=stem, genre=genre, music=music, subtitle_mode=subtitle_mode,
                 slug=slug,
+            )
+        except FileNotFoundError as error:
+            _fail(str(error).split(";")[0])
+    console.print("[green]Video ready[/green] -> " + str(out_path))
+
+
+def render_black_cmd(
+    slug: str = typer.Argument(..., help="Catalog slug, e.g. 'baron-52'."),
+    format: str = typer.Option("short", "--format", "-f", help="short|long"),
+    music: str = typer.Option(
+        "", "--music", help="Bed override, e.g. 'swell-tension.mp3'."
+    ),
+) -> None:
+    """Render black-screen conceptual edit: black default, concept visuals, key words on black."""
+
+    from render.black_style import render_black_style
+
+    settings = get_settings()
+    if format not in _FORMATS:
+        _fail(f"Unknown format '{format}'. Choose short or long.")
+    directory = Path(settings.output_dir) / slug
+    assets_path = directory / f"assets-{format}.json"
+    script_path = directory / f"{format}.json"
+    if not script_path.exists():
+        _fail(f"No {format} script for '{slug}'. Run 'ash_speaks script {slug}' first.")
+    if not assets_path.exists():
+        _fail(f"No {format} assets for '{slug}'. Run 'ash_speaks assets {slug}' first.")
+    script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
+    pack = AssetPack.model_validate_json(assets_path.read_text(encoding="utf-8"))
+    genre = None
+    brief_path = directory / "brief.json"
+    if brief_path.exists():
+        genre = ResearchBrief.model_validate_json(
+            brief_path.read_text(encoding="utf-8")
+        ).genre
+
+    stem = "voice" if format == "short" else f"voice-{format}"
+    out_path = directory / f"{slug}-{format}-black.mp4"
+    with console.status(f"Assembling the {format} video (black-style)..."):
+        try:
+            from render.black_style import render_black_style
+            render_black_style(
+                script, pack, directory / "audio", out_path,
+                stem=stem, genre=genre, music=music, slug=slug,
             )
         except FileNotFoundError as error:
             _fail(str(error).split(";")[0])

@@ -9,6 +9,13 @@ import typer
 from cli.commands import register
 from config import get_settings, setup_logging
 
+# Load .env file explicitly so os.getenv() works for all components
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:
+    pass
+
 app = typer.Typer(
     name="ash_speaks",
     help=(
@@ -45,6 +52,7 @@ _TYPER_COMMANDS = {
     "publish",
     "voice",
     "render",
+    "render-black",
     "run-all",
     "make",
     "horror-pull",

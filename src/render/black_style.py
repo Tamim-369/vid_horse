@@ -1,0 +1,412 @@
+"""Black-screen conceptual editing style.
+
+Editing logic:
+- Default: BLACK screen
+- When narration describes a scene/concept → show the concept's visual asset
+- When narration hits a KEY CONCEPT → cut to BLACK + key word(s) in white
+- No subtitles ever
+- Music bed per video from music assets
+"""
+
+from __future__ import annotations
+
+import logging
+import subprocess
+from pathlib import Path
+
+from config.settings import get_settings
+from config.video_style import load_style_config, VideoStyle
+from core.errors import BlockError
+from core.models import AssetPack, SfxPlan, VideoScript, VisualAsset
+from utils import computing
+
+logger = logging.getLogger(__name__)
+
+FPS = 30
+WIDTH = 1080
+HEIGHT = 1920
+
+
+def _run(args: list[str]) -> None:
+    subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _black_frame(work: Path, index: int, length: float) -> Path:
+    """Pure black frame for given length."""
+    out = work / f"black-{index:02d}.mp4"
+    _run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
+    return out
+
+
+def _word_flash(work: Path, index: int, word: str, length: float) -> Path:
+    """Black screen with single word/phrase centered in white."""
+    out = work / f"flash-{index:02d}.mp4"
+    safe_word = word.replace("'", "\\'").replace('"', '\\"')
+    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    _run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
+        "-vf", f"drawtext={draw}",
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
+    return out
+
+
+def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -> Path:
+    """Render a concept asset with its concept-specific motion/grade."""
+    from render.cards import _asset_source, _motion_filter, _style_for, _cover_prep
+
+    clip = work / f"asset-{tag}.mp4"
+    source = _asset_source(asset, work, tag)
+
+    frames = max(1, round(length * FPS))
+    motion_pool = style.image.motion_pool if style else list(range(24))
+    motion_style = _style_for(tag, motion_pool)
+
+    extra = getattr(asset, "extra", {}) or {}
+    motion_cfg = None
+
+    tail = f"{_motion_filter(frames, motion_style, motion_cfg)}"
+
+    # Apply concept-specific color grade
+    grade_emphasis = extra.get("grade_emphasis")
+    if grade_emphasis:
+        grade_map = {
+            "cold": "eq=contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1,colorbalance=rs=-0.05:gs=-0.02:bs=0.08",
+            "noir": "eq=contrast=1.25:saturation=0.35:brightness=-0.08:gamma=1.15,noise=alls=18:allf=t,vignette=PI/3.0",
+            "raw": "eq=contrast=1.35:saturation=1.2:brightness=0.02:gamma=1.2,colorbalance=rs=0.15:gs=-0.1:bs=-0.15,vignette=PI/2.5",
+            "academic": "eq=contrast=1.1:saturation=0.55:brightness=-0.05:gamma=1.08,colorbalance=rs=0.12:gs=0.06:bs=-0.04,noise=alls=12:allf=t",
+            "tech": "eq=contrast=1.08:saturation=0.4:brightness=-0.02:gamma=1.05,colorbalance=rs=-0.08:gs=-0.04:bs=0.15",
+            "neutral": "",
+        }
+        grade_filter = grade_map.get(extra.get("grade_emphasis"), "")
+        if grade_filter:
+            tail = f"{_motion_filter(0, 0)}"
+    else:
+        tail = f"{_motion_filter(0, 0)}"
+
+    # Simplified: just use the motion filter without grade for now
+    motion_style = 0
+    frames = max(1, round(3 * FPS))  # placeholder
+    # We'll build proper clips below
+    return work / f"asset-placeholder-{tag}.mp4"
+
+
+def _black_frame(work: Path, index: int, length: float) -> Path:
+    out = work / f"black-{index:02d}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", f"color=c=black:s=1080x1920",
+        "-t", f"{length:.3f}", "-r", "30",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _word_flash(work: Path, index: int, word: str, length: float) -> Path:
+    out = work / f"flash-{index:02d}.mp4"
+    safe_word = word.replace("'", "\\'").replace('"', '\\"')
+    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "color=c=black:s=1080x1920",
+        "-vf", f"drawtext={draw}",
+        "-t", f"{length:.3f}", "-r", "30",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -> Path:
+    from render.cards import _asset_source, _motion_filter, _style_for, _cover_prep
+
+    clip = work / f"asset-{tag}.mp4"
+    source = _asset_source(asset, work, tag)
+
+    frames = max(1, round(length * 30))
+    motion_pool = style.image.motion_pool if hasattr(style, 'image') and style.image.motion_pool else list(range(24))
+    motion_style = _style_for(tag, motion_pool)
+
+    extra = getattr(asset, "extra", {}) or {}
+    grade_emphasis = extra.get("grade_emphasis")
+
+    tail = f"{_motion_filter(frames, motion_style, None)}"
+
+    if grade_emphasis:
+        grade_map = {
+            "cold": "eq=contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1,colorbalance=rs=-0.05:gs=-0.02:bs=0.08",
+            "noir": "eq=contrast=1.25:saturation=0.35:brightness=-0.08:gamma=1.15,noise=alls=18:allf=t,vignette=PI/3.0",
+            "raw": "eq=contrast=1.35:saturation=1.2:brightness=0.02:gamma=1.2,colorbalance=rs=0.15:gs=-0.1:bs=-0.15,vignette=PI/2.5",
+            "academic": "eq=contrast=1.1:saturation=0.55:brightness=-0.05:gamma=1.08,colorbalance=rs=0.12:gs=0.06:bs=-0.04,noise=alls=12:allf=t",
+            "tech": "eq=contrast=1.08:saturation=0.4:brightness=-0.02:gamma=1.05,colorbalance=rs=-0.08:gs=-0.04:bs=0.15",
+            "neutral": "",
+        }
+        grade_filter = grade_map.get(extra.get("grade_emphasis"), "")
+        if grade_filter:
+            tail = f"{tail},{grade_filter}"
+
+    vf = f"{_cover_prep()},{tail}"
+    out = work / f"asset-{tag}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-loop", "1", "-i", str(source),
+        "-vf", vf,
+        "-t", f"{length:.3f}", "-r", "30",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        str(out),
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _join_cards(clips: list, work: Path) -> Path:
+    concat_list = work / "concat.txt"
+    concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
+    out = work / "cards.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", str(out),
+    ], check=True)
+    return out
+
+
+def render_black_style(
+    script,
+    pack,
+    audio_dir: Path,
+    out_path: Path,
+    *,
+    stem: str = "voice",
+    genre: str | None = None,
+    music: str = "",
+    slug: str | None = None,
+) -> Path:
+    """Render black-screen conceptual edit."""
+
+    work = out_path.parent / "render-work"
+    work.mkdir(parents=True, exist_ok=True)
+
+    style_cfg = load_style_config(slug) if slug else VideoStyle.defaults()
+
+    # Load narration audio
+    narration_lines = [script.hook, *(s.narration for s in script.scenes), script.outro]
+    wavs = []
+    for i in range(len(narration_lines)):
+        wav = audio_dir / f"voice-{i:02d}.wav"
+        if not wav.exists():
+            raise FileNotFoundError(f"Missing narration {wav}")
+        wavs.append(wav)
+
+    # Get word-level timing from whisper
+    from voice.subtitles import align_speech
+    from render.media import _duration
+
+    lengths = [_duration(w) for w in wavs]
+    offsets = []
+    start = 0.0
+    for l in lengths:
+        offsets.append(start)
+        start += l
+    line_ends = offsets[1:] + [start]
+
+    word_lines, cues = align_speech(
+        narration_lines, wavs, offsets, line_ends,
+        model_size=get_settings().subtitle_whisper_model,
+    )
+
+    # Load music
+    from render.audio_mix import _bed_tracks, _build_bed, _music_spans, _mix_audio, _voice_track
+    cards = _bed_tracks(script, None, "")
+    spans = _music_spans(cards, offsets, sum(_duration(w) for w in wavs))
+    bed = _build_bed(spans, out_path.parent / "render-work", sum(_duration(w) for w in wavs))
+    voice = _voice_track(wavs, [_duration(w) for w in wavs], out_path.parent / "render-work")
+    mixed = _mix_audio(voice, bed, out_path.parent / "render-work")
+
+    # Build concept-driven edit
+    narration_lines_full = [script.hook, *(s.narration for s in script.scenes), script.outro]
+
+    # Build asset lookup by concept
+    asset_by_concept = {}
+    for scene in pack.scenes:
+        for asset in scene.assets:
+            if asset.extra and asset.extra.get("concept"):
+                concept = asset.extra["concept"]
+                if concept not in asset_by_concept:
+                    asset_by_concept[concept] = []
+                asset_by_concept[concept].append(asset)
+
+    # Key words from emphasis
+    from voice.emphasis import emphasize_cues
+    from providers.llm import create_llm_provider
+    from config.settings import get_settings as _gs
+
+    _llm = create_llm_provider(_gs())
+    narration_for_emphasis = [script.hook, *(s.narration for s in script.scenes), script.outro]
+    cues = emphasize_cues(_llm, narration_for_emphasis, [])
+    key_words = set()
+    for cue in cues:
+        for pop in cue.pops:
+            key_words.add(pop.upper())
+
+    # Build clips
+    clips = []
+    clip_idx = 0
+    narration_lines_full = [script.hook, *(s.narration for s in script.scenes), script.outro]
+    lengths = [0] * len(narration_lines_full)  # placeholder
+
+    # Get actual durations
+    from render.media import _duration
+    for i, wav in enumerate([script.hook, *(s.narration for s in script.scenes), script.outro]):
+        wav_path = out_path.parent / "audio" / f"voice-{i:02d}.wav"
+        if wav_path.exists():
+            lengths[i] = _duration(wav_path)
+
+    for line_idx, (line, line_dur) in enumerate(zip(narration_lines_full, lengths)):
+        if line_dur <= 0:
+            continue
+
+        # Find concepts in this line
+        from blocks.concept_metaphors import extract_concepts_from_text
+        line_concepts = extract_concepts_from_text(line)
+
+        # Get key words in this line
+        line_key_words = []
+        for cue in cues:
+            if cue.start >= offsets[line_idx] - 0.5 and cue.end <= offsets[line_idx] + line_dur + 0.5:
+                for pop in cue.pops:
+                    line_key_words.append(pop.upper())
+
+        # Build segments for this line
+        if line_key_words:
+            # Black + key word flashes
+            for kw in line_key_words:
+                flash = _word_flash(out_path.parent / "render-work", len(clips), kw, 1.5)
+                clips.append(flash)
+        else:
+            # Show concept visual if available
+            shown_concept = False
+            for concept in line_concepts:
+                if concept in asset_by_concept and asset_by_concept[concept]:
+                    asset = asset_by_concept[concept][0]
+                    asset_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 5.0), style_cfg)
+                    clips.append(asset_clip)
+                    shown_concept = True
+                    break
+            if not shown_concept:
+                # Black screen
+                clips.append(_black_frame(out_path.parent / "render-work", len(clips), line_dur))
+
+    # Build final video
+    silent = _join_cards(clips, out_path.parent / "render-work")
+
+    # Mux with audio
+    total = sum(lengths)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
+        "-t", f"{total:.3f}",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(out_path),
+    ], check=True)
+    return out_path
+
+
+# Simplified implementations
+def _black_frame(work, index, length):
+    out = work / f"black-{index:02d}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
+        "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _word_flash(work, index, word, length):
+    out = work / f"flash-{index:02d}.mp4"
+    safe_word = word.replace("'", "\\'").replace('"', '\\"')
+    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
+        "-vf", f"drawtext={draw}", "-t", f"{length:.3f}", "-r", "30",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _asset_clip(asset, work, tag, length, style):
+    from render.cards import _asset_source, _motion_filter, _style_for, _cover_prep
+    clip = work / f"asset-{tag}.mp4"
+    source = _asset_source(asset, work, tag)
+    frames = max(1, round(length * 30))
+    motion_pool = style.image.motion_pool if hasattr(style, 'image') and style.image.motion_pool else list(range(24))
+    motion_style = _style_for(tag, motion_pool)
+    extra = getattr(asset, "extra", {}) or {}
+    grade_emphasis = extra.get("grade_emphasis")
+    tail = f"{_motion_filter(frames, motion_style, None)}"
+    if grade_emphasis:
+        grade_map = {
+            "cold": "eq=contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1,colorbalance=rs=-0.05:gs=-0.02:bs=0.08",
+            "noir": "eq=contrast=1.25:saturation=0.35:brightness=-0.08:gamma=1.15,noise=alls=18:allf=t,vignette=PI/3.0",
+            "raw": "eq=contrast=1.35:saturation=1.2:brightness=0.02:gamma=1.2,colorbalance=rs=0.15:gs=-0.1:bs=-0.15,vignette=PI/2.5",
+            "academic": "eq=contrast=1.1:saturation=0.55:brightness=-0.05:gamma=1.08,colorbalance=rs=0.12:gs=0.06:bs=-0.04,noise=alls=12:allf=t",
+            "tech": "eq=contrast=1.08:saturation=0.4:brightness=-0.02:gamma=1.05,colorbalance=rs=-0.08:gs=-0.04:bs=0.15",
+            "neutral": "",
+        }
+        grade_filter = grade_map.get(extra.get("grade_emphasis"), "")
+        if grade_filter:
+            tail = f"{tail},{grade_filter}"
+    vf = f"{_cover_prep()},{tail}"
+    out = work / f"asset-{tag}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-loop", "1", "-i", str(source), "-vf", vf,
+        "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _black_frame(work, index, length):
+    out = work / f"black-{index:02d}.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
+        "-t", f"{length:.3f}", "-r", "30", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _word_flash(work, index, word, length):
+    out = work / f"flash-{index:02d}.mp4"
+    safe_word = word.replace("'", "\\'").replace('"', '\\"')
+    draw = f"text='{safe_word}':fontcolor=white:fontsize=96:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
+        "-vf", f"drawtext={draw}", "-t", f"{length:.3f}", "-r", "30",
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20", str(out)
+    ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return out
+
+
+def _join_cards(clips, work):
+    concat_list = work / "concat.txt"
+    concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
+    out = work / "cards.mp4"
+    subprocess.run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", str(out)
+    ], check=True)
+    return out
