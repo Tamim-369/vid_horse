@@ -48,7 +48,7 @@ def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int 
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
     _run([
         "ffmpeg", "-y", "-f", "lavfi",
         "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
@@ -117,7 +117,7 @@ def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int 
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
     _run([
         "ffmpeg", "-y", "-f", "lavfi",
         "-i", f"color=c=black:s={WIDTH}x{HEIGHT}",
@@ -225,9 +225,25 @@ def render_black_style(
         model_size=get_settings().subtitle_whisper_model,
     )
 
-    # Load music
-    from render.audio_mix import _bed_tracks, _build_bed, _music_spans, _mix_audio, _voice_track
-    cards = _bed_tracks(script, None, "")
+    # Load music (variety: pick a track per video from the shelf so we never
+    # ship the same bed for every video; content role biases the choice)
+    from render.audio_mix import _shelf, _bed_tracks, _build_bed, _music_spans, _mix_audio, _voice_track
+    import hashlib
+
+    music_override = music
+    if not music_override:
+        shelf = _shelf()
+        tracks = [t["file"] for t in shelf.get("tracks", []) if t.get("file") and t["file"] != "decrease_volume.mp3"]
+        if tracks:
+            seed = 0
+            if slug:
+                seed = int(hashlib.md5(slug.encode()).hexdigest(), 16)
+            if getattr(script, "music", None) is not None and getattr(script.music, "base_role", None):
+                role = script.music.base_role
+                role_idx = {"threat": 0, "big-event": 1, "mystery": 2, "discovery": 3, "vast-reveal": 4, "dread-mission": 5, "default": 6}.get(role, 0)
+                seed = seed + role_idx * 997
+            music_override = tracks[seed % len(tracks)]
+    cards = _bed_tracks(script, None, music_override)
     spans = _music_spans(cards, offsets, sum(_duration(w) for w in wavs))
     bed = _build_bed(spans, work, sum(_duration(w) for w in wavs))
     voice = _voice_track(wavs, lengths, work)
@@ -363,7 +379,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     safe = text.replace("'", "\\'").replace('"', '\\"')
     draw = (
         f"text='{safe}':fontcolor=white:fontsize={fontsize}:"
-        f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:"
+        f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
         f"x=(w-text_w)/2:y=h*0.78,"
         f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill"
     )
@@ -371,7 +387,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     vf = (
         f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill,"
         f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
-        f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:"
+        f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
         f"x=(w-text_w)/2:y=h*0.76"
     )
     _run([
@@ -394,7 +410,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
 def _word_flash(work, index, word, length, fontsize=152):
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
-    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
+    draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"
     _run([
         "ffmpeg", "-y", "-f", "lavfi", "-i", "color=c=black:s=1080x1920",
         "-vf", f"drawtext={draw}", "-t", f"{length:.3f}", "-r", "30",
