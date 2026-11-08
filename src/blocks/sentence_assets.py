@@ -82,28 +82,9 @@ def _trigger(sentence: str) -> str:
 
 # -- candidates ----------------------------------------------------------------
 
-def _download(url_or_path: str, fetch_dir: Path, tag: str = "c") -> Path | None:
-    """Download one candidate image, cached by URL hash."""
-    fetch_dir.mkdir(parents=True, exist_ok=True)
-    name = tag + hashlib.sha1(url_or_path.encode()).hexdigest()[:16] + ".jpg"
-    raw = fetch_dir / ("raw-" + name)
-    out = fetch_dir / name
-    if out.exists() and out.stat().st_size > 0:
-        return out
-    try:
-        if url_or_path.startswith("file://"):
-            src = Path(url_or_path[7:])
-            if not src.exists():
-                return None
-            raw.write_bytes(src.read_bytes())
-        else:
-            r = httpx.get(url_or_path, timeout=30.0, follow_redirects=True)
-            r.raise_for_status()
-            raw.write_bytes(r.content)
-    except Exception as exc:  # noqa: BLE001
-        logger.debug("candidate download failed for %r: %s", url_or_path, exc)
-        return None
-    return _darken(raw, out)
+_MOTIF_DIR = Path(__file__).resolve().parents[2] / "assets" / "motifs_pollinations"
+MotifIndexState = dict | None
+_motif_state: MotifIndexState = None
 
 
 def _darken(src: Path, dst: Path) -> Path:
@@ -156,6 +137,106 @@ def _clip_score(scorer, subject: str, image_path: Path) -> float | None:
     except Exception as exc:  # noqa: BLE001
         logger.debug("clip scoring failed for %s: %s", image_path.name, exc)
         return None
+
+
+# -- motif library (assets/motifs_pollinations, taxonomy in render.motifs) ------
+
+def _motif_state_ready() -> dict | None:
+    """One-time index of all local motif images with CLIP embeddings."""
+    global _motif_state
+    if _motif_state is not None:
+        return _motif_state or None
+    try:
+        from render.motifs import MOTIFS
+
+        scorer = _clip_scorer()
+        if scorer is None or not _MOTIF_DIR.exists():
+            _motif_state = {}
+            return None
+        import numpy as np
+        import torch
+        import PIL.Image
+
+        entries: dict[str, dict] = {}
+        for motif in MOTIFS:
+            img_path = _MOTIF_DIR / f"{motif.id}.png"
+            if not img_path.exists():
+                continue
+            with PIL.Image.open(img_path) as im:
+                prepared = scorer._preprocess(im.convert("RGB"))
+            with torch.no_grad():
+                feat = scorer._model.encode_image(prepared.unsqueeze(0))
+            feat = feat / feat.norm(dim=-1, keepdim=True)
+            entries[motif.id] = {
+                "path": img_path,
+                "name": motif.name,
+                "category": motif.category,
+                "description": motif.description,
+                "terms": motif.search_terms,
+                "embed": feat,
+            }
+        if not entries:
+            _motif_state = {}
+            return None
+        # stack for vectorized scoring
+        ids = sorted(entries)
+        _motif_state = {
+            "entries": entries,
+            "ids": ids,
+            "matrix": torch.cat([entries[i]["embed"] for i in ids]).float(),
+        }
+        return _motif_state
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("motif index build failed: %s", exc)
+        _motif_state = {}
+        return None
+
+
+def _best_motifs(subject: str, top: int = 3) -> list[tuple[str, float]]:
+    """Motif ids ranked by CLIP similarity between the sentence and the image."""
+    state = _motif_state_ready()
+    if not state:
+        return []
+    scorer = _clip_scorer()
+    if scorer is None:
+        return []
+    try:
+        import torch
+
+        text = scorer.text_embed(subject[:180])
+        if text is None:
+            return []
+        sims = (state["matrix"] @ text.t()).squeeze(-1)
+        order = sims.argsort(descending=True)[:top]
+        ids = state["ids"]
+        return [(ids[i], float(sims[i])) for i in order]
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("motif scoring failed: %s", exc)
+        return []
+
+
+def _download(url_or_path: str, fetch_dir: Path, tag: str = "c") -> Path | None:
+    """Download one candidate image, cached by URL hash."""
+    fetch_dir.mkdir(parents=True, exist_ok=True)
+    name = tag + hashlib.sha1(url_or_path.encode()).hexdigest()[:16] + ".jpg"
+    raw = fetch_dir / ("raw-" + name)
+    out = fetch_dir / name
+    if out.exists() and out.stat().st_size > 0:
+        return out
+    try:
+        if url_or_path.startswith("file://"):
+            src = Path(url_or_path[7:])
+            if not src.exists():
+                return None
+            raw.write_bytes(src.read_bytes())
+        else:
+            r = httpx.get(url_or_path, timeout=30.0, follow_redirects=True)
+            r.raise_for_status()
+            raw.write_bytes(r.content)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("candidate download failed for %r: %s", url_or_path, exc)
+        return None
+    return _darken(raw, out)
 
 
 def _gather_candidates(
@@ -231,48 +312,93 @@ def _build_asset_from_concept(
     concept_visuals: ConceptVisuals,
     fetch_dir: Path,
     position: float,
+    recent_motifs: list[str] | None = None,
 ) -> VisualAsset:
-    """Create a VisualAsset: best CLIP-matched candidate for this sentence."""
+    """Create a VisualAsset: best-matching image for this sentence.
 
-    chosen_path: Path | None = None
-    query_used = ""
-    clip = None
+    Candidates come from two pools:
+      1. the local motif library (assets/motifs_pollinations) scored by CLIP
+      2. stock downloads (sentence keywords + concept metaphor queries)
+    The highest CLIP similarity wins; the motif library guarantees every
+    sentence gets an image even when every external source fails.
+    """
 
+    recent_motifs = list(recent_motifs or [])
+    chosen: tuple[str, Path, float | None, dict] | None = None  # (source, path, clip, meta)
+    subject_base = sent[:180]
+
+    # 1. motif library
+    ranked = _best_motifs(subject_base, top=6)
+    motif_state = _motif_state_ready() or {}
+    entries = motif_state.get("entries", {})
+    for motif_id, score in ranked:
+        entry = entries.get(motif_id)
+        if entry is None:
+            continue
+        recent = motif_id in recent_motifs[-1:] if recent_motifs else False
+        if recent and len(ranked) > 1:
+            continue  # avoid visual ping-pong across adjacent sentences
+        chosen = (
+            "motif",
+            entry["path"],
+            score,
+            {
+                "motif": motif_id,
+                "motif_name": entry["name"],
+                "category": entry["category"],
+                "description": entry["description"],
+            },
+        )
+        break
+
+    # 2. stock candidates (only worth it when they can beat the motif)
+    stock_best: tuple[str, Path, float | None, dict] | None = None
     try:
-        candidates = _gather_candidates(sent, concept_visuals, fetch_dir)
+        candidates = _gather_candidates(subject_base, concept_visuals, fetch_dir, max_candidates=4)
     except Exception as exc:  # noqa: BLE001
         logger.debug("candidate gathering failed: %s", exc)
         candidates = []
-
     if candidates:
         scorer = _clip_scorer()
-        best = (None, candidates[0][1], candidates[0][0])  # (score, path, query)
+        best = (None, candidates[0][1], candidates[0][0])
         for query, path in candidates:
-            s = _clip_score(scorer, sent, path)
+            s = _clip_score(scorer, subject_base, path)
             if s is not None and (best[0] is None or s > best[0]):
                 best = (s, path, query)
-        chosen_path = best[1]
-        query_used = best[2]
-        clip = best[0]
-        if clip is not None and clip < CLIP_WEAK:
-            logger.info(
-                "weak visual match (%.2f) for %r [query %r]",
-                clip,
-                sent[:60],
-                query_used,
-            )
+        stock_best = (
+            "stock",
+            best[1],
+            best[0],
+            {"query": best[2]},
+        )
 
-    if chosen_path:
-        url = f"file://{chosen_path.resolve()}"
-        page_url = f"pexels:{chosen_path.name}"
-        caption = f"{concept_visuals.concept}: {query_used}"
-        fname = chosen_path.name
+    # pick the pool winner; ties slightly favor the signed motif art
+    if chosen and stock_best:
+        motif_clip = chosen[2] if chosen[2] is not None else -1.0
+        stock_clip = stock_best[2] if stock_best[2] is not None else -1.0
+        winner = chosen if motif_clip >= stock_clip - 0.012 else stock_best
     else:
-        # Ultimate fallback - placeholder
+        winner = chosen or stock_best
+
+    if winner:
+        source, path, clip, meta = winner
+        url = f"file://{path.resolve()}"
+        page_url = f"{source}:{path.name}"
+        caption = f"{concept_visuals.concept}: {meta.get('motif_name') or meta.get('query', '')}"
+        fname = path.name
+    else:
+        # unreachable while the motif library exists, but keep the tabs safe
         url = ""
         page_url = f"concept:{concept_visuals.concept}"
         caption = concept_visuals.concept
         fname = ""
+        source, clip, meta = "none", None, {}
+
+    if clip is not None and clip < CLIP_WEAK:
+        logger.info(
+            "weak visual match (%.2f) for %r [%s %s]",
+            clip, sent[:60], source, meta.get("query", meta.get("motif", "")),
+        )
 
     return VisualAsset(
         kind="image",
@@ -290,7 +416,8 @@ def _build_asset_from_concept(
             "card_crossfade": concept_visuals.card_crossfade,
             "music_mood": concept_visuals.music_mood,
             "clip_score": round(clip, 4) if clip is not None else None,
-            "query": query_used,
+            "source": source,
+            **{"motif_" + k if k != "query" else k: v for k, v in meta.items()},
         },
     )
 
@@ -310,12 +437,19 @@ def assign_sentence_assets(
     if not all_sents:
         return []
 
+    recent_motifs: list[str] = []
     assets: list[VisualAsset] = []
     for idx, (_ti, _si, sent) in enumerate(all_sents):
         concept_visuals = _select_concept_for_sentence(sent, used_concepts)
 
         position = idx / max(len(all_sents) - 1, 1) if len(all_sents) > 1 else 0.0
-        asset = _build_asset_from_concept(sent, concept_visuals, fetch_dir, position)
+        asset = _build_asset_from_concept(
+            sent, concept_visuals, fetch_dir, position, recent_motifs=recent_motifs
+        )
+        motif_id = (asset.extra or {}).get("motif")
+        if motif_id:
+            recent_motifs.append(motif_id)
+            del recent_motifs[:-3]  # remember only the immediate history
         assets.append(asset)
 
     return assets
