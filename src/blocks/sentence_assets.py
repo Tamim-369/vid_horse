@@ -448,8 +448,10 @@ def _build_asset_from_concept(
     sentence gets an image even when every external source fails.
     """
 
-    used_motifs = set(used_motifs or [])
-    used_stock_files = set(used_stock_files or [])
+    if used_motifs is None:
+        used_motifs = set()
+    if used_stock_files is None:
+        used_stock_files = set()
     chosen: tuple[str, Path, float | None, dict] | None = None  # (source, path, clip, meta)
     subject_base = sent[:180]
 
