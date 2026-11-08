@@ -27,9 +27,9 @@ _FORMAT_LINE = (
     "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
     "Alignment, MarginL, MarginR, MarginV, Encoding"
 )
-# Single style: progressive subtitles. Active/key word gets inline size+bold boost.
+# Single style: progressive subtitles. Clean, no size jumps.
 _STYLE_LINE = (
-    "Style: Cue,DejaVu Sans Condensed,68,&H00F2F2F2,&H00F2F2F2,&H00000000,"
+    "Style: Cue,DejaVu Sans Condensed,76,&H00F2F2F2,&H00F2F2F2,&H00000000,"
     "&H00000000,0,0,0,0,100,100,0,0,1,2.8,0,2,70,70,310,1"
 )
 # fmt: on
@@ -411,14 +411,14 @@ def _progressive_bottom(body: list[str], cue: Cue, start: float, finish: float) 
             disp = _TIMESTAMP.sub("", tok).strip()
             is_pop = _norm_tok(tok) in pops_norm
             if j == i:
-                # Active word: BIGGER (92pt) + BOLD + pure white
-                parts.append(r"{\fs92\b1\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
+                # Active word: brighter white, slightly thicker outline (no size jump)
+                parts.append(r"{\c&H00FFFFFF&\bord3\3c&H00000000&}" + disp + r"{\r}")
             elif is_pop:
-                # Key word (not currently active): BIGGER (80pt) + BOLD + pure white
-                parts.append(r"{\fs80\b1\c&H00FFFFFF&\bord2.5\3c&H00000000&}" + disp + r"{\r}")
+                # Key word: brighter white
+                parts.append(r"{\c&H00FFFFFF&\bord2.5\3c&H00000000&}" + disp + r"{\r}")
             else:
-                # Regular word: base size (68pt) + dim white
-                parts.append(r"{\fs68\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
+                # Regular word: base style
+                parts.append(r"{\c&H00F2F2F2&\bord2\3c&H00000000&}" + disp + r"{\r}")
         line = " ".join(parts)
         body.append(
             f"Dialogue: 0,{_ass_time(max(start, ws))},{_ass_time(min(finish, max(we, ws + 0.06)))},"

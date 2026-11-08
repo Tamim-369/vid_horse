@@ -65,13 +65,13 @@ def _title_card(text: str, work: Path, index: int) -> Path:
 # whole pixels, so on a 4x source one rounding step is a quarter pixel at
 # output — smooth instead of the shiver a 1x or 2x source shows.
 def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0.5) -> str:
-    """One of six window motions over the still.
+    """One of multiple window motions over the still.
 
-    0 slow zoom-in, 1 pan L->R, 2 pan R->L, 3 slow zoom-out, 4 pan with a
-    falling drift, 5 vertical drift down. ``zoom`` is the total travel
-    over the scene (keep it gentle), ``drift`` the fraction of the pan
-    slack a pan actually uses (1.0 = full sweep, far too quick; 0.5 reads
-    as a slow cinematic drift).
+    Styles 0-5: classic Ken Burns (zoom/pan/drift)
+    Styles 6-11: subtle rotation + zoom combos
+    Styles 12-17: slow diagonal sweeps
+    Styles 18-23: gentle parallax-style moves
+    All keep zoom/drift gentle so it reads as cinematic, not AI-slides.
     """
 
     end = 1.0 + zoom
@@ -80,32 +80,131 @@ def _motion_filter(frames: int, style: int, zoom: float = 0.05, drift: float = 0
     center_y = "ih/2-(ih/zoom/2)"
     travel = f"(iw-iw/zoom)*{drift:.2f}"
     v_travel = f"(ih-ih/zoom)*{drift:.2f}"
-    if style == 3:
-        # zoom-out: start close on the subject and settle back; the
-        # opposite of the zoom-in everyone's seen a thousand times
+
+    # --- Classic Ken Burns (0-5) ---
+    if style == 0:
+        # slow zoom-in
+        z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
+        x, y = center_x, center_y
+    elif style == 1:
+        # pan L->R
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*on/{on_rate}"
+        y = center_y
+    elif style == 2:
+        # pan R->L
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*(1-on/{on_rate})"
+        y = center_y
+    elif style == 3:
+        # zoom-out: start close and settle back
         z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
         x, y = center_x, center_y
     elif style == 4:
-        # horizontal drift that slowly sinks through the shot
+        # horizontal drift with slow vertical sink
         z_expr = f"{end:.3f}"
         x = f"{center_x}+{travel}*(1-on/{on_rate})"
         y = f"{center_y}+{v_travel}*on/{on_rate}"
     elif style == 5:
-        # vertical drift down: reads like a crane shot on a photo
+        # vertical drift down (crane shot)
         z_expr = f"{end:.3f}"
         x = center_x
         y = f"{center_y}+{v_travel}*(1-on/{on_rate})"
-    elif style == 0:
+
+    # --- Subtle rotation + zoom (6-11) ---
+    elif style == 6:
+        # slow zoom-in + tiny clockwise rotation (0.3° total)
         z_expr = f"min(1+{zoom:.4f}*on/{on_rate},{end:.3f})"
-        x, y = center_x, center_y
-    elif style == 1:
+        x = f"{center_x}+(iw/zoom)*sin(0.005*on/{on_rate})"
+        y = f"{center_y}-(ih/zoom)*cos(0.005*on/{on_rate})"
+    elif style == 7:
+        # slow zoom-out + tiny counter-clockwise rotation
+        z_expr = f"max(1+{zoom:.4f}*(1-on/{on_rate}),1.0)"
+        x = f"{center_x}-(iw/zoom)*sin(0.005*on/{on_rate})"
+        y = f"{center_y}+(ih/zoom)*cos(0.005*on/{on_rate})"
+    elif style == 8:
+        # pan L->R with slight rotation
         z_expr = f"{end:.3f}"
         x = f"{center_x}+{travel}*on/{on_rate}"
-        y = center_y
-    else:
+        y = f"{center_y}+(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
+    elif style == 9:
+        # pan R->L with slight rotation
         z_expr = f"{end:.3f}"
         x = f"{center_x}+{travel}*(1-on/{on_rate})"
+        y = f"{center_y}-(ih/zoom)*0.02*sin(3.14*on/{on_rate})"
+    elif style == 10:
+        # diagonal sweep TL->BR
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*on/{on_rate}"
+        y = f"{center_y}+{v_travel}*on/{on_rate}"
+    elif style == 11:
+        # diagonal sweep TR->BL
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*(1-on/{on_rate})"
+        y = f"{center_y}+{v_travel}*on/{on_rate}"
+
+    # --- Slow diagonal sweeps (12-17) ---
+    elif style == 12:
+        # gentle diagonal TL->BR, minimal zoom
+        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+        x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
+        y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
+    elif style == 13:
+        # gentle diagonal TR->BL
+        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+        x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
+        y = f"{center_y}+(ih/zoom)*0.15*on/{on_rate}"
+    elif style == 14:
+        # gentle diagonal BL->TR
+        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+        x = f"{center_x}+(iw/zoom)*0.15*on/{on_rate}"
+        y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
+    elif style == 15:
+        # gentle diagonal BR->TL
+        z_expr = f"1+{zoom*0.5:.4f}*on/{on_rate}"
+        x = f"{center_x}-(iw/zoom)*0.15*on/{on_rate}"
+        y = f"{center_y}-(ih/zoom)*0.15*on/{on_rate}"
+    elif style == 16:
+        # vertical slow zoom (portrait feel)
+        z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
+        x = center_x
+        y = f"{center_y}+(ih/zoom)*0.1*on/{on_rate}"
+    elif style == 17:
+        # horizontal slow zoom (landscape feel)
+        z_expr = f"min(1+{zoom*0.8:.4f}*on/{on_rate},{1+zoom*0.8:.3f})"
+        x = f"{center_x}+(iw/zoom)*0.1*on/{on_rate}"
         y = center_y
+
+    # --- Parallax-style subtle moves (18-23) ---
+    elif style == 18:
+        # slow arc: pan with gentle curve
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}+{travel}*sin(1.57*on/{on_rate})"
+        y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
+    elif style == 19:
+        # slow arc reverse
+        z_expr = f"{end:.3f}"
+        x = f"{center_x}-{travel}*sin(1.57*on/{on_rate})"
+        y = f"{center_y}+{v_travel}*(1-cos(1.57*on/{on_rate}))"
+    elif style == 20:
+        # very slow zoom, almost static (breathing room)
+        z_expr = f"1+{zoom*0.3:.4f}*sin(3.14*on/{on_rate})"
+        x, y = center_x, center_y
+    elif style == 21:
+        # micro-pan: barely perceptible drift
+        z_expr = f"1+{zoom*0.2:.4f}"
+        x = f"{center_x}+(iw/zoom)*0.05*on/{on_rate}"
+        y = center_y
+    elif style == 22:
+        # micro-vertical drift
+        z_expr = f"1+{zoom*0.2:.4f}"
+        x = center_x
+        y = f"{center_y}+(ih/zoom)*0.05*on/{on_rate}"
+    else:
+        # style 23: almost static, just breathing zoom
+        z_expr = f"1+{zoom*0.15:.4f}*sin(6.28*on/{on_rate})"
+        x, y = center_x, center_y
+
     return (
         f"zoompan=z='{z_expr}':x='{x}':y='{y}':"
         f"d={frames}:s={WIDTH}x{HEIGHT}:fps={FPS}"
@@ -141,7 +240,7 @@ def _video_clip(source: Path, work: Path, tag: str | int, length: float) -> Path
     return clip
 
 
-_MOTION_POOL = [0, 3, 1, 5, 2, 4]
+_MOTION_POOL = list(range(24))  # 0-23: varied Ken Burns + rotation + diagonal + parallax
 
 
 def _style_for(tag: str | int) -> int:
