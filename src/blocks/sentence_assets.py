@@ -1,8 +1,7 @@
-"""Per-sentence asset agent: assign one motif image to every spoken sentence.
+"""Per-sentence asset agent: assign concept-driven visual metaphors to every spoken sentence.
 
-Splits each scene (and hook/outro) into sentences, scores motifs by content
-overlap, and returns an AssetPack with multiple timed assets per scene.
-The render's trigger/position alignment places each image at its sentence.
+Replaces motif library with concept → metaphor mapping. Each sentence's
+psychology concepts drive image search, motion style, color grade, and timing.
 """
 
 from __future__ import annotations
@@ -15,39 +14,23 @@ from pathlib import Path
 
 import httpx
 
+from blocks.concept_metaphors import (
+    ConceptVisuals,
+    extract_concepts_from_text,
+    get_concept_visuals,
+)
+from core.models import AssetPack, SceneAssets, VideoScript, VisualAsset
+
 logger = logging.getLogger(__name__)
 
-from core.models import AssetPack, SceneAssets, VideoScript, VisualAsset
-from render.motifs import MOTIFS, Motif
-
-MOTIF_DIR = Path("assets/motifs_pollinations")
-_TOKEN_STRIP = re.compile(r"[^a-z0-9 ]")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
 _WORD_RE = re.compile(r"[A-Za-z0-9']+")
-
-_STOPWORDS = frozenset(
-    [
-        "the", "a", "an", "and", "or", "but", "if", "then", "so", "because",
-        "when", "while", "your", "you", "they", "them", "their", "this",
-        "that", "these", "those", "what", "how", "why", "not", "no", "yes",
-        "just", "like", "really", "very", "much", "more", "most", "some",
-        "every", "all", "about", "into", "over", "under", "with", "from",
-        "for", "of", "on", "at", "by", "to", "in", "out", "up", "down",
-        "next", "time", "one", "two", "thing", "things", "says", "said",
-        "say", "tell", "tells", "told", "ask", "asks", "asking", "will",
-        "would", "can", "could", "should", "was", "are", "is", "were",
-        "been", "being", "have", "has", "had", "do", "does", "did", "now",
-        "here", "there", "where", "who", "whom", "whose", "its", "get",
-        "gets", "got", "make", "makes", "made", "see", "know", "think",
-    ]
-)
 
 
 def _sentences(text: str) -> list[str]:
     parts = [p.strip() for p in _SENTENCE_SPLIT.split(text.strip()) if p.strip()]
     if not parts and text.strip():
         return [text.strip()]
-    # merge tiny fragments into the previous sentence
     merged: list[str] = []
     for part in parts:
         if merged and len(part.split()) < 4:
@@ -57,26 +40,9 @@ def _sentences(text: str) -> list[str]:
     return merged or ([text.strip()] if text.strip() else [])
 
 
-def _tokens(text: str) -> set[str]:
-    words = _TOKEN_STRIP.sub(" ", text.lower()).split()
-    return {w for w in words if len(w) > 3 and w not in _STOPWORDS}
-
-
-def _motif_tokens(motif: Motif) -> set[str]:
-    tokens = _tokens(motif.name) | _tokens(motif.description)
-    for term in motif.search_terms:
-        tokens |= _tokens(term)
-    return tokens
-
-
-_MOTIF_TOKENS = {m.id: _motif_tokens(m) for m in MOTIFS}
-
-
 def _trigger(sentence: str) -> str:
     words = _WORD_RE.findall(sentence)
     return " ".join(words[:4])
-
-
 
 
 def _darken(src: Path, dst: Path) -> Path:
@@ -96,7 +62,7 @@ def _darken(src: Path, dst: Path) -> Path:
         return src
 
 
-def _pexels_fetch(query: str, fetch_dir: Path, key: str) -> Path | None:
+def _pexels_fetch(query: str, fetch_dir: Path) -> Path | None:
     name = hashlib.sha1(query.encode()).hexdigest()[:16] + ".jpg"
     raw = fetch_dir / ("raw-" + name)
     out = fetch_dir / name
@@ -120,13 +86,79 @@ def _pexels_fetch(query: str, fetch_dir: Path, key: str) -> Path | None:
         logger.debug("pexels fetch failed for %r: %s", query, exc)
         return None
 
-def assign_sentence_assets(
-    texts: list[str], *, used: set[str] | None = None, last_cat: str | None = None, fetch_dir: Path | None = None
-) -> list[VisualAsset]:
-    """One motif per sentence in ``texts``, timed by trigger/position."""
 
-    if used is None:
-        used = set()
+def _select_concept_for_sentence(sentence: str, used_concepts: set[str]) -> ConceptVisuals | None:
+    """Pick the most relevant unused concept for this sentence."""
+    concepts = extract_concepts_from_text(sentence)
+    for c in concepts:
+        if c not in used_concepts:
+            used_concepts.add(c)
+            return get_concept_visuals(c)
+    # Fallback: allow reuse if all used
+    for c in concepts:
+        return get_concept_visuals(c)
+    return get_concept_visuals("default")
+
+
+def _build_asset_from_concept(
+    sent: str,
+    concept_visuals: ConceptVisuals,
+    fetch_dir: Path,
+    position: float,
+) -> VisualAsset:
+    """Create a VisualAsset driven by the concept's visual config."""
+    # Try primary queries first, then fallbacks
+    fetched: Path | None = None
+    query_used = ""
+    for query in concept_visuals.primary_queries + concept_visuals.fallback_queries:
+        fetched = _pexels_fetch(query, fetch_dir)
+        if fetched:
+            query_used = query
+            break
+    if not fetched:
+        # Last resort: generic fetch
+        fetched = _pexels_fetch(sent[:120], fetch_dir)
+        query_used = sent[:80]
+
+    if fetched:
+        url = f"file://{fetched.resolve()}"
+        page_url = f"pexels:{fetched.name}"
+        caption = f"{concept_visuals.concept}: {query_used}"
+        fname = fetched.name
+    else:
+        # Ultimate fallback - placeholder
+        url = ""
+        page_url = f"concept:{concept_visuals.concept}"
+        caption = concept_visuals.concept
+        fname = ""
+
+    return VisualAsset(
+        kind="image",
+        file=fname,
+        url=url,
+        page_url=page_url,
+        caption=caption,
+        trigger=_trigger(sent),
+        position=round(position, 3),
+        # Store concept metadata for downstream use
+        extra={
+            "concept": concept_visuals.concept,
+            "motion_style": concept_visuals.motion_style,
+            "grade_emphasis": concept_visuals.grade_emphasis,
+            "subject_crossfade": concept_visuals.subject_crossfade,
+            "card_crossfade": concept_visuals.card_crossfade,
+            "music_mood": concept_visuals.music_mood,
+        },
+    )
+
+
+def assign_sentence_assets(
+    texts: list[str], *, used_concepts: set[str] | None = None, fetch_dir: Path | None = None
+) -> list[VisualAsset]:
+    """One concept-driven visual per sentence in ``texts``."""
+
+    if used_concepts is None:
+        used_concepts = set()
     all_sents: list[tuple[int, int, str]] = []
     for ti, text in enumerate(texts):
         sents = _sentences(text)
@@ -137,60 +169,26 @@ def assign_sentence_assets(
 
     assets: list[VisualAsset] = []
     for idx, (_ti, _si, sent) in enumerate(all_sents):
-        tokens = _tokens(sent)
-        scored = []
-        for motif in MOTIFS:
-            if motif.id in used:
-                continue
-            overlap = len(tokens & _MOTIF_TOKENS[motif.id])
-            penalty = 2 if motif.category == last_cat else 0
-            scored.append((overlap - penalty, overlap, motif.id, motif))
-        scored.sort(key=lambda item: (-item[0], item[2]))
-        best_score = scored[0][1] if scored else 0
-        best = scored[0][3] if scored else MOTIFS[idx % len(MOTIFS)]
-        used.add(best.id)
-        last_cat = best.category
+        concept_visuals = _select_concept_for_sentence(sent, used_concepts)
+        if concept_visuals is None:
+            concept_visuals = get_concept_visuals("default")
+
         position = idx / max(len(all_sents) - 1, 1) if len(all_sents) > 1 else 0.0
-        file_path = MOTIF_DIR / f"{best.id}.png"
-        url = f"file://{file_path.resolve()}"
-        page_url = f"motif:{best.id}"
-        caption = best.description
-        fname = file_path.name
-        # fallback to Pexels (darkened) when no good match or file missing
-        need_fetch = (best_score <= 0 and bool(tokens)) or not file_path.exists()
-        if need_fetch and fetch_dir is not None:
-            fetched = _pexels_fetch(sent[:120], fetch_dir, "")
-            if fetched is not None:
-                url = f"file://{fetched.resolve()}"
-                page_url = f"pexels:{fetched.name}"
-                caption = f"Dark visual for: {sent[:80]}"
-                fname = fetched.name
-        assets.append(
-            VisualAsset(
-                kind="image",
-                file=fname,
-                url=url,
-                page_url=page_url,
-                caption=caption,
-                trigger=_trigger(sent),
-                position=round(position, 3),
-            )
-        )
+        asset = _build_asset_from_concept(sent, concept_visuals, fetch_dir, position)
+        assets.append(asset)
+
     return assets
 
 
 def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
-    """Assign one motif image per sentence of every scene (and hook)."""
+    """Assign one concept-driven visual per sentence of every scene (and hook)."""
 
-    used: set[str] = set()
-    last_cat: str | None = None
+    used_concepts: set[str] = set()
     scenes: list[SceneAssets] = []
     fetch_dir = Path("output") / slug / "fetched"
 
     # hook gets its own visual (scene_index -1, consumed by render)
-    hook_assets = assign_sentence_assets([script.hook], used=used, last_cat=last_cat, fetch_dir=fetch_dir)
-    if hook_assets:
-        last_cat = hook_assets[-1].page_url.split(":")[-1].split("_")[0]
+    hook_assets = assign_sentence_assets([script.hook], used_concepts=used_concepts, fetch_dir=fetch_dir)
     scenes.append(
         SceneAssets(
             scene_index=-1,
@@ -201,12 +199,8 @@ def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
     )
 
     for index, scene in enumerate(script.scenes):
-        # derive last_cat from last used motif
-        if assets_prev := scenes[-1].assets:
-            mid = assets_prev[-1].page_url.split(":")[-1]
-            last_cat = mid.split("_")[0]
         sent_assets = assign_sentence_assets(
-            [scene.narration], used=used, last_cat=last_cat, fetch_dir=fetch_dir
+            [scene.narration], used_concepts=used_concepts, fetch_dir=fetch_dir
         )
         scenes.append(
             SceneAssets(
@@ -219,22 +213,23 @@ def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
     return AssetPack(
         slug=slug,
         topic=script.title,
-        article_title=f"motif library ({MOTIF_DIR})",
+        article_title="concept-driven visual metaphors",
         article_url="",
         scenes=scenes,
     )
 
 
-def choose_motifs(script: VideoScript) -> list[Motif]:
-    """Compatibility: one motif per scene (first sentence's pick)."""
+def choose_concepts(script: VideoScript) -> list[str]:
+    """Compatibility: extract primary concept per scene."""
     used: set[str] = set()
-    last_cat: str | None = None
-    result: list[Motif] = []
+    result: list[str] = []
     for scene in script.scenes:
-        assets = assign_sentence_assets([scene.narration], used=used, last_cat=last_cat)
-        if assets:
-            mid = assets[0].page_url.split(":")[-1]
-            motif = next((m for m in MOTIFS if m.id == mid), MOTIFS[0])
-            result.append(motif)
-            last_cat = motif.category
+        concepts = extract_concepts_from_text(scene.narration)
+        for c in concepts:
+            if c not in used:
+                used.add(c)
+                result.append(c)
+                break
+        else:
+            result.append("default")
     return result

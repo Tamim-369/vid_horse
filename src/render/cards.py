@@ -321,19 +321,26 @@ def _still_clip(
     length: float,
     credit: str | None = None,
     style: VideoStyle | None = None,
+    asset_cfg: dict | None = None,
 ) -> Path:
-    motion_pool = style.image.motion_pool if style else None
-    canvas_mult = style.image.canvas_multiplier if style else 4
-    motion_cfg = None
-    if style and tag in style.image.motions:
-        motion_cfg = style.image.motions[tag]
-    elif style and isinstance(tag, str):
-        # tag format: "card-slot" -> get style for slot
-        parts = [p for p in tag.split("-") if p.isdigit()]
-        if len(parts) >= 2:
-            slot = int(parts[1])
-            if slot in style.image.motions:
-                motion_cfg = style.image.motions[slot]
+    # Use asset-specific config if available, otherwise fall back to style
+    if asset_cfg:
+        motion_pool = asset_cfg.get("motion_pool")
+        motion_cfg = None
+        grade_emphasis = asset_cfg.get("grade_emphasis")
+    else:
+        motion_pool = style.image.motion_pool if style else None
+        canvas_mult = style.image.canvas_multiplier if style else 4
+        motion_cfg = None
+        grade_emphasis = None
+        if style and tag in style.image.motions:
+            motion_cfg = style.image.motions[tag]
+        elif style and isinstance(tag, str):
+            parts = [p for p in tag.split("-") if p.isdigit()]
+            if len(parts) >= 2:
+                slot = int(parts[1])
+                if slot in style.image.motions:
+                    motion_cfg = style.image.motions[slot]
 
     clip = work / f"clip-{tag}.mp4"
     if _is_video_file(source):
@@ -341,6 +348,21 @@ def _still_clip(
     frames = max(1, round(length * FPS))
     motion_style = _style_for(tag, motion_pool)
     tail = f"{_motion_filter(frames, motion_style, motion_cfg)}"
+
+    # Apply concept-specific color grade if specified
+    if grade_emphasis:
+        grade_map = {
+            "cold": "eq=contrast=1.15:saturation=0.15:brightness=-0.03:gamma=1.1,colorbalance=rs=-0.05:gs=-0.02:bs=0.08",
+            "noir": "eq=contrast=1.25:saturation=0.35:brightness=-0.08:gamma=1.15,noise=alls=18:allf=t,vignette=PI/3.0",
+            "raw": "eq=contrast=1.35:saturation=1.2:brightness=0.02:gamma=1.2,colorbalance=rs=0.15:gs=-0.1:bs=-0.15,vignette=PI/2.5",
+            "academic": "eq=contrast=1.1:saturation=0.55:brightness=-0.05:gamma=1.08,colorbalance=rs=0.12:gs=0.06:bs=-0.04,noise=alls=12:allf=t",
+            "tech": "eq=contrast=1.08:saturation=0.4:brightness=-0.02:gamma=1.05,colorbalance=rs=-0.08:gs=-0.04:bs=0.15",
+            "neutral": "",
+        }
+        grade_filter = grade_map.get(grade_emphasis, "")
+        if grade_filter:
+            tail = f"{tail},{grade_filter}"
+
     vf = f"{_cover_prep()},{tail}"
     if credit:
         vf = f"{vf},{credit}"
@@ -653,8 +675,22 @@ def _moving_still(
     if pairs is not None and len(pairs) < 2:
         pairs = None
 
-    motion_pool = style.image.motion_pool if style else None
-    subject_crossfade = style.image.subject_crossfade if style else _CROSSFADE
+    # Base config from style (global defaults)
+    base_motion_pool = style.image.motion_pool if style else list(range(24))
+    base_subject_crossfade = style.image.subject_crossfade if style else _CROSSFADE
+    base_card_crossfade = style.image.card_crossfade if style else _CROSSFADE
+
+    def _asset_config(asset):
+        """Extract concept-driven config from asset extra, falling back to style."""
+        extra = getattr(asset, "extra", {}) or {}
+        return {
+            "motion_style": extra.get("motion_style"),
+            "grade_emphasis": extra.get("grade_emphasis"),
+            "subject_crossfade": extra.get("subject_crossfade", base_subject_crossfade),
+            "card_crossfade": extra.get("card_crossfade", base_card_crossfade),
+            "motion_pool": extra.get("motion_pool", base_motion_pool),
+            "music_mood": extra.get("music_mood"),
+        }
 
     if pairs is None:
         scored = [asset for asset in visuals if asset.clip_score is not None]
@@ -665,15 +701,20 @@ def _moving_still(
         )
         source = _asset_source(primary, work, f"img-{index:02d}-0")
         credit = _credit_draw(primary, work, index, style=style)
-        return _still_clip(source, work, index, length, credit=credit, style=style)
+        cfg = _asset_config(primary)
+        return _still_clip(source, work, index, length, credit=credit, style=style, asset_cfg=cfg)
 
     arrivals = [moment for moment, _asset in pairs]
     subject_assets = [asset for _moment, asset in pairs]
     switches = arrivals[1:]
-    subject_lengths = [switches[0] + subject_crossfade]
-    subject_lengths += [
-        switches[j] + subject_crossfade - switches[j - 1] for j in range(1, len(switches))
-    ]
+
+    # Per-subject crossfade from concept config
+    subject_configs = [_asset_config(a) for a in subject_assets]
+    subject_lengths = [switches[0] + subject_configs[0]["subject_crossfade"]]
+    for j in range(1, len(switches)):
+        subject_lengths.append(
+            switches[j] + subject_configs[j]["subject_crossfade"] - switches[j - 1]
+        )
     subject_lengths.append(length - switches[-1])
 
     subpaths: list[Path] = []
@@ -685,10 +726,12 @@ def _moving_still(
                 source, work, tag, subject_lengths[slot],
                 credit=_credit_draw(asset, work, tag, style=style),
                 style=style,
+                asset_cfg=subject_configs[slot],
             )
         )
 
-    card_crossfade = style.image.card_crossfade if style else _CROSSFADE
+    # Card crossfade: use first subject's config or base
+    card_crossfade = subject_configs[0]["card_crossfade"] if subject_configs else base_card_crossfade
 
     args: list[str] = ["ffmpeg", "-y"]
     for path in subpaths:

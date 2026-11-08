@@ -342,6 +342,10 @@ class VisualAsset(BaseModel):
         default=None,
         description="Vision model reasoning for relevance decision.",
     )
+    extra: dict | None = Field(
+        default=None,
+        description="Additional metadata (concept, motion_style, grade_emphasis, crossfades, etc.).",
+    )
 
 
 class SceneAssets(BaseModel):
