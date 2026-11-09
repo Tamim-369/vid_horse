@@ -341,6 +341,7 @@ def render_black_style(
         # - Escape colons
         # - Escape unescaped single quotes
         safe = wrapped.replace(":", "\\:")
+        safe = safe.replace(",", "\\,")
         import re
         safe = re.sub(r"(?<!\\)'", "\\'", safe)
         print(f"DEBUG Overlay subtitle text sent to ffmpeg: {repr(safe)}")
@@ -465,6 +466,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     # - Escape colons
     # - Escape unescaped single quotes
     safe = wrapped.replace(":", "\\:")
+    safe = safe.replace(",", "\\,")
     import re
     safe = re.sub(r"(?<!\\)'", "\\'", safe)
     logger.debug(f"Overlay subtitle text sent to ffmpeg: {repr(safe)}")

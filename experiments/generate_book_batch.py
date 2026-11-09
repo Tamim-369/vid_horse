@@ -239,6 +239,8 @@ def main() -> None:
         if made >= args.limit:
             break
 
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
+    OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     qa_path = OUTPUT_ROOT / ("qa-" + datetime.now().strftime("%Y%m%d-%H%M%S") + ".md")
     qa_path.write_text("\n".join(_qa_lines(rows)), encoding="utf-8")
     print(f"generated {made} video(s); QA report -> {qa_path}")

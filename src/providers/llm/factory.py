@@ -199,7 +199,26 @@ def _build_ollama_cloud(settings: Settings) -> BaseLLMProvider:
     )
 
 
+def _build_openrouter(settings: Settings) -> BaseLLMProvider:
+    if not settings.openrouter_api_key:
+        raise ConfigurationError("OpenRouter API key not set. Set VIDEOAI_OPENROUTER_API_KEY.")
+    models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
+    if not models:
+        raise ConfigurationError("No OpenRouter models configured.")
+    cache = DiskCache(settings.cache_dir, enabled=settings.cache_enabled)
+    return OpenRouterProvider(
+        api_key=settings.openrouter_api_key,
+        models=models,
+        base_url=settings.openrouter_base_url,
+        temperature=settings.openrouter_temperature,
+        max_tokens=settings.openrouter_max_tokens,
+        timeout=settings.openrouter_timeout,
+        max_retries=settings.max_retries,
+        cache=cache,
+    )
+
+
 register_provider("ollama", _build_ollama)
 register_provider("groq", _build_groq_chain)
-register_provider("openrouter", _build_groq_chain)
+register_provider("openrouter", _build_openrouter)
 register_provider("ollama-cloud", _build_ollama_cloud)

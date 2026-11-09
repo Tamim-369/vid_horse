@@ -31,14 +31,14 @@ class Settings(BaseSettings):
         default="http://localhost:11434",
         validation_alias=AliasChoices("VIDEOAI_OLLAMA_HOST", "OLLAMA_HOST"),
     )
-    ollama_model: str = Field(default="gemma3:4b")
+    ollama_model: str = Field(default="phi4-mini:latest")
     ollama_num_ctx: int = Field(default=4096, gt=0)
     ollama_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     ollama_num_predict: int | None = Field(default=None, gt=0)
     ollama_repeat_penalty: float = Field(default=1.3, ge=0.0)
     ollama_repeat_last_n: int = Field(default=256, ge=0)
     ollama_keep_alive: str = Field(default="5m")
-    ollama_timeout: float = Field(default=600.0, gt=0)
+    ollama_timeout: float = Field(default=120.0, gt=0)
 
     # -- OpenRouter -----------------------------------------------------------
     openrouter_api_key: str | None = Field(
