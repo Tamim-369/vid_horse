@@ -337,6 +337,7 @@ def render_black_style(
         safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
         # Auto-wrap: split into multiple lines if text would be too wide
         safe = _wrap_subtitle_text(safe, fontsize)
+        print(f"DEBUG Overlay subtitle text sent to ffmpeg: {repr(safe)}")
         # No background box - just text with outline, centered
         vf = (
             f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
@@ -380,6 +381,7 @@ def render_black_style(
             for i in range(0, len(words_with_times), 2):
                 group = words_with_times[i:i+2]
                 group_text = " ".join(w for w, _s, _e in group)
+                print(f"DEBUG Subtitle group {i//2}: '{group_text}'")
                 group_start = group[0][1] - line_offset
                 group_end = group[-1][2] - line_offset
                 if group_start < 0:
@@ -443,9 +445,11 @@ def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
     char_width = fontsize * 0.52
     max_chars = max(10, int(max_width / char_width))
     if len(text) <= max_chars:
+        print(f"DEBUG Wrap: fits on one line: '{text}'")
         return text
     # Split into words and build lines
     words = text.split()
+    print(f"DEBUG Wrap: words: {words}")
     lines = []
     current = []
     current_len = 0
@@ -460,7 +464,9 @@ def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
             current_len = len(word) + 1
     if current:
         lines.append(" ".join(current))
-    return "\\n".join(lines)
+    result = "\\n".join(lines)
+    print(f"DEBUG Wrap: wrapped to {len(lines)} lines: {repr(result)}")
+    return result
 
 
 def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
@@ -471,6 +477,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
     # Auto-wrap: split into multiple lines if text would be too wide
     safe = _wrap_subtitle_text(safe, fontsize)
+    logger.debug(f"Overlay subtitle text sent to ffmpeg: {repr(safe)}")
     # No background box - just text with outline
     vf = (
         f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
