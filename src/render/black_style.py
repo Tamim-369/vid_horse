@@ -440,15 +440,49 @@ def render_black_style(
 
 
 def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
-    """Wrap subtitle text into multiple lines - max 2 words per line, stacked vertically."""
+    """Wrap subtitle text into multiple lines based on actual width.
+    
+    Estimates character width for Lato-Bold at given fontsize.
+    Packs words greedily; if a word pair exceeds max_width, splits into single words.
+    """
+    # Rough character width estimate for Lato-Bold: fontsize * 0.52 pixels
+    char_width = fontsize * 0.52
+    max_chars = max(10, int(max_width / char_width))
+    
     words = text.split()
     if len(words) <= 2:
+        # For 1-2 words, check if they fit together
+        if len(words) == 2:
+            combined = " ".join(words)
+            if len(combined) <= max_chars:
+                return text
+            # Too wide - split into 2 lines
+            return f"{words[0]}\\n{words[1]}"
         return text
-    # Group into pairs, each pair on its own line
+    
     lines = []
-    for i in range(0, len(words), 2):
-        pair = words[i:i+2]
-        lines.append(" ".join(pair))
+    i = 0
+    while i < len(words):
+        # Try to pack 2 words
+        if i + 1 < len(words):
+            pair = f"{words[i]} {words[i+1]}"
+            if len(pair) <= max_chars:
+                lines.append(pair)
+                i += 2
+                continue
+            # Pair too wide - check if single word fits
+            if len(words[i]) <= max_chars:
+                lines.append(words[i])
+                i += 1
+                continue
+            # Single word too wide - split the word
+            lines.append(words[i])
+            i += 1
+            continue
+        # Last word
+        lines.append(words[i])
+        i += 1
+    
     return "\\n".join(lines)
 
 
