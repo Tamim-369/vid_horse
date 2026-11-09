@@ -100,7 +100,7 @@ def _darken(src: Path, dst: Path) -> Path:
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-i", str(src),
-             "-vf", "eq=brightness=-0.10:contrast=1.12:saturation=0.72,curves=preset=darker",
+             "-vf", "eq=brightness=-0.15:contrast=1.15:saturation=0.65,curves=preset=darker",
              "-frames:v", "1", str(dst)],
             check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
         )
@@ -339,8 +339,37 @@ def _best_motifs(subject: str, top: int = 3, exclude: set[str] | None = None) ->
         return []
 
 
+_DARKEN_CACHE: dict[str, Path] = {}
+
+def _ensure_darkened(src: Path) -> Path:
+    """Ensure an image has the dark grade applied, cached by source hash."""
+    import hashlib
+    key = hashlib.sha256(src.read_bytes()).hexdigest()[:16]
+    if key in _DARKEN_CACHE:
+        return _DARKEN_CACHE[key]
+    
+    out_dir = Path("output/_darkened_cache")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = out_dir / f"{key}.jpg"
+    
+    if not out.exists() or out.stat().st_size == 0:
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", str(src),
+                 "-vf", "eq=brightness=-0.15:contrast=1.15:saturation=0.65,curves=preset=darker",
+                 "-frames:v", "1", str(out)],
+                check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+        except Exception:  # noqa: BLE001
+            _DARKEN_CACHE[key] = src
+            return src
+    
+    _DARKEN_CACHE[key] = out
+    return out
+
+
 def _download(url_or_path: str, fetch_dir: Path, tag: str = "c") -> Path | None:
-    """Download one candidate image, cached by URL hash."""
+    """Download one candidate image, cached by URL hash. Always returns darkened image."""
     fetch_dir.mkdir(parents=True, exist_ok=True)
     name = tag + hashlib.sha1(url_or_path.encode()).hexdigest()[:16] + ".jpg"
     raw = fetch_dir / ("raw-" + name)
@@ -517,6 +546,8 @@ def _build_asset_from_concept(
 
     if winner:
         source, path, clip, meta = winner
+        # Ensure ALL images get the dark treatment (motif, stock, generated)
+        path = _ensure_darkened(path)
         if source == "motif":
             mid = meta.get("motif")
             if mid:
