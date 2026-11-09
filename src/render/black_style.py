@@ -91,13 +91,27 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
 
     vf = f"{_cover_prep()},{tail}"
     out = work / f"asset-{tag}.mp4"
-    _run([
-        "ffmpeg", "-y", "-loop", "1", "-i", str(source),
-        "-vf", vf,
-        "-t", f"{length:.3f}", "-r", str(FPS),
-        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
-        "-crf", "20", str(out),
-    ])
+    
+    # Try zoompan first, fall back to static if it fails
+    try:
+        _run([
+            "ffmpeg", "-y", "-loop", "1", "-i", str(source),
+            "-vf", vf,
+            "-t", f"{length:.3f}", "-r", str(FPS),
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "20", str(out),
+        ])
+    except subprocess.CalledProcessError as e:
+        logger.warning(f"Zoompan failed for asset {tag}, falling back to static: {e}")
+        # Fallback: static image with just cover prep (no zoompan)
+        vf_fallback = f"{_cover_prep()}"
+        _run([
+            "ffmpeg", "-y", "-loop", "1", "-i", str(source),
+            "-vf", f"{_cover_prep()}",
+            "-t", f"{length:.3f}", "-r", str(FPS),
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "20", str(out),
+        ])
     return out
 
 
