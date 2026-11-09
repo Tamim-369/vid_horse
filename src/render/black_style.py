@@ -440,47 +440,47 @@ def render_black_style(
 
 
 def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
-    """Wrap subtitle text into multiple lines based on actual width.
+    """Wrap subtitle text - always 2 words per line, stacked vertically.
     
     Estimates character width for Lato-Bold at given fontsize.
-    Packs words greedily; if a word pair exceeds max_width, splits into single words.
+    Groups words in pairs (2 words per line). If pair too wide, splits to single words.
+    Never leaves a single word alone on screen - prefers 2 words per line.
     """
     # Rough character width estimate for Lato-Bold: fontsize * 0.52 pixels
     char_width = fontsize * 0.52
     max_chars = max(10, int(max_width / char_width))
     
     words = text.split()
-    if len(words) <= 2:
-        # For 1-2 words, check if they fit together
-        if len(words) == 2:
-            combined = " ".join(words)
-            if len(combined) <= max_chars:
-                return text
-            # Too wide - split into 2 lines
-            return f"{words[0]}\\n{words[1]}"
+    if not words:
         return text
     
     lines = []
     i = 0
     while i < len(words):
-        # Try to pack 2 words
+        # Always try to make 2-word lines
         if i + 1 < len(words):
             pair = f"{words[i]} {words[i+1]}"
             if len(pair) <= max_chars:
                 lines.append(pair)
                 i += 2
                 continue
-            # Pair too wide - check if single word fits
+            # Pair too wide - split into two single-word lines instead of one long line
             if len(words[i]) <= max_chars:
                 lines.append(words[i])
-                i += 1
-                continue
-            # Single word too wide - split the word
-            lines.append(words[i])
-            i += 1
+            else:
+                # Word too long, truncate or keep as-is
+                lines.append(words[i])
+            if len(words[i+1]) <= max_chars:
+                lines.append(words[i+1])
+            else:
+                lines.append(words[i+1])
+            i += 2
             continue
-        # Last word
-        lines.append(words[i])
+        # Last single word - try to merge with previous line if possible
+        if lines and len(lines[-1]) + 1 + len(words[i]) <= max_chars:
+            lines[-1] = lines[-1] + " " + words[i]
+        else:
+            lines.append(words[i])
         i += 1
     
     return "\\n".join(lines)
