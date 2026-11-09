@@ -436,36 +436,18 @@ def render_black_style(
 
 
 def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
-    """Wrap subtitle text into multiple lines if it exceeds max_width.
-
-    Estimates character width for Lato-Bold at given fontsize.
-    Returns text with \\n for ffmpeg multi-line drawtext.
-    """
-    # Rough character width estimate for Lato-Bold: fontsize * 0.52 pixels
-    char_width = fontsize * 0.52
-    max_chars = max(10, int(max_width / char_width))
-    if len(text) <= max_chars:
-        print(f"DEBUG Wrap: fits on one line: '{text}'")
-        return text
-    # Split into words and build lines
+    """Wrap subtitle text into multiple lines - max 2 words per line, stacked vertically."""
     words = text.split()
-    print(f"DEBUG Wrap: words: {words}")
+    print(f"DEBUG Wrap input: '{text}' -> words: {words}")
+    if len(words) <= 2:
+        return text
+    # Group into pairs, each pair on its own line
     lines = []
-    current = []
-    current_len = 0
-    for word in words:
-        wlen = len(word) + 1  # +1 for space
-        if current_len + wlen <= max_chars:
-            current.append(word)
-            current_len += wlen
-        else:
-            lines.append(" ".join(current))
-            current = [word]
-            current_len = len(word) + 1
-    if current:
-        lines.append(" ".join(current))
+    for i in range(0, len(words), 2):
+        pair = words[i:i+2]
+        lines.append(" ".join(pair))
     result = "\\n".join(lines)
-    print(f"DEBUG Wrap: wrapped to {len(lines)} lines: {repr(result)}")
+    print(f"DEBUG Wrap output: {repr(result)}")
     return result
 
 
