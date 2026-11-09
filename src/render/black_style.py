@@ -332,9 +332,11 @@ def render_black_style(
         return out
 
     def _overlay_subtitle_on_clip(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
-        """Burn a centered subtitle over a clip segment. Wraps at 2 words/line."""
+        """Burn a centered subtitle over a clip segment. Auto-wraps long text."""
         out = work / f"sub-{index:02d}.mp4"
         safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        # Auto-wrap: split into multiple lines if text would be too wide
+        safe = _wrap_subtitle_text(safe, fontsize)
         # No background box - just text with outline, centered
         vf = (
             f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
@@ -431,12 +433,44 @@ def render_black_style(
     return out_path
 
 
+def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
+    """Wrap subtitle text into multiple lines if it exceeds max_width.
+
+    Estimates character width for Lato-Bold at given fontsize.
+    Returns text with \\n for ffmpeg multi-line drawtext.
+    """
+    # Rough character width estimate for Lato-Bold: fontsize * 0.52 pixels
+    char_width = fontsize * 0.52
+    max_chars = max(10, int(max_width / char_width))
+    if len(text) <= max_chars:
+        return text
+    # Split into words and build lines
+    words = text.split()
+    lines = []
+    current = []
+    current_len = 0
+    for word in words:
+        wlen = len(word) + 1  # +1 for space
+        if current_len + wlen <= max_chars:
+            current.append(word)
+            current_len += wlen
+        else:
+            lines.append(" ".join(current))
+            current = [word]
+            current_len = len(word) + 1
+    if current:
+        lines.append(" ".join(current))
+    return "\\n".join(lines)
+
+
 def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
-    """Burn a centered subtitle (up to 2 words) over an existing clip."""
+    """Burn a centered subtitle over an existing clip."""
 
     out = work / f"sub-{index:02d}.mp4"
     # escape text for ffmpeg drawtext: backslash-escape colons, single quotes, backslashes
     safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    # Auto-wrap: split into multiple lines if text would be too wide
+    safe = _wrap_subtitle_text(safe, fontsize)
     # No background box - just text with outline
     vf = (
         f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
