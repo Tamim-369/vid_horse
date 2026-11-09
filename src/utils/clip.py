@@ -53,6 +53,12 @@ class ClipScorer:
             return True
         try:
             import open_clip
+            # load HF_TOKEN from .env for authenticated HF Hub requests
+            try:
+                from dotenv import load_dotenv
+                load_dotenv()
+            except ImportError:
+                pass
 
             if self._threads:
                 torch.set_num_threads(self._threads)

@@ -320,40 +320,99 @@ def render_black_style(
                 return a
         return None
 
+    def _trim_clip(src: Path, work: Path, index: int, start: float, dur: float) -> Path:
+        """Trim a clip to a specific time range."""
+        out = work / f"trim-{index:02d}.mp4"
+        _run([
+            "ffmpeg", "-y", "-ss", f"{start:.3f}", "-i", str(src),
+            "-t", f"{dur:.3f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-pix_fmt", "yuv420p", str(out),
+        ])
+        return out
+
+    def _overlay_subtitle_on_clip(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 60) -> Path:
+        """Burn a centered subtitle over a clip segment."""
+        out = work / f"sub-{index:02d}.mp4"
+        safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+        box_y = 1420
+        box_h = 230
+        vf = (
+            f"drawbox=x=0:y={box_y}:w=1080:h={box_h}:color=black@0.45:t=fill,"
+            f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
+            f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
+            f"x=(w-text_w)/2:y={box_y + box_h // 2}"
+        )
+        _run([
+            "ffmpeg", "-y", "-i", str(src),
+            "-vf", vf,
+            "-t", f"{length:.3f}", "-r", str(FPS),
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+            "-crf", "20", str(out),
+        ])
+        return out
+
+    # For each narration line, burn word-by-word subtitles using the
+    # word_lines from align_speech (which already has absolute timestamps).
+    clips = []
     for line_idx, (line, line_dur) in enumerate(zip(narration_lines_full, lengths)):
         if line_dur <= 0:
             continue
 
-        # Find concepts in this line
-        from blocks.concept_metaphors import extract_concepts_from_text
-        line_concepts = extract_concepts_from_text(line)
-
-        # Get key words in this line
-        line_key_words = []
-        for cue in cues:
-            if cue.start >= offsets[line_idx] - 0.5 and cue.end <= offsets[line_idx] + line_dur + 0.5:
-                for pop in cue.pops:
-                    line_key_words.append(pop.upper())
+        line_offset = offsets[line_idx]
+        line_end = line_offset + line_dur
 
         asset = _pick_asset_for_line(line_idx)
 
-        # Subtitle: up to 2 words for this line. Prefer the emphasis key
-        # words; otherwise the first two content words of the narration.
-        if line_key_words:
-            subtitle_text = " ".join(line_key_words[:2])
-        else:
-            _sw = [w for w in line.split() if w.lower().strip(".,!?") not in ("the", "a", "an", "of", "to", "and", "is", "are", "was", "in", "on", "at", "for", "with", "that", "this", "it", "its", "you", "your")]
-            subtitle_text = " ".join(_sw[:2])
-
-        # Base clip for this line
+        # Base visual clip for this line (image or black)
         if asset is not None and asset.url:
-            base_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", min(line_dur, 6.0), style_cfg)
+            base_clip = _asset_clip(asset, out_path.parent / "render-work", f"{len(clips)}", line_dur, style_cfg)
         else:
-            base_clip = _black_frame(out_path.parent / "render-work", len(clips), min(line_dur, 6.0))
+            base_clip = _black_frame(out_path.parent / "render-work", len(clips), line_dur)
 
-        # Burn the subtitle over the base clip for the whole line
-        if subtitle_text.strip():
-            base_clip = _overlay_subtitle(base_clip, out_path.parent / "render-work", len(clips), subtitle_text, min(line_dur, 6.0), style_cfg.subtitle.fontsize)
+        # Get word timings for this line from align_speech
+        words_with_times = word_lines[line_idx] if line_idx < len(word_lines) else []
+
+        # Burn subtitles word-by-word (groups of 2 words for readability)
+        if words_with_times:
+            segment_clips = []
+            last_end = 0.0
+            for i in range(0, len(words_with_times), 2):
+                group = words_with_times[i:i+2]
+                group_text = " ".join(w for w, _s, _e in group)
+                group_start = group[0][1] - line_offset
+                group_end = group[-1][2] - line_offset
+                if group_start < 0:
+                    group_start = 0.0
+                if group_end > line_dur:
+                    group_end = line_dur
+                if group_end - group_start < 0.1:
+                    continue
+                if group_start > last_end:
+                    gap = group_start - last_end
+                    segment_clips.append(
+                        _trim_clip(base_clip, out_path.parent / "render-work", len(clips) + len(segment_clips), last_end, gap)
+                    )
+                segment_clips.append(
+                    _overlay_subtitle_on_clip(
+                        _trim_clip(base_clip, out_path.parent / "render-work", len(clips) + len(segment_clips), group_start, group_end - group_start),
+                        out_path.parent / "render-work",
+                        len(clips) + len(segment_clips),
+                        group_text,
+                        group_end - group_start,
+                        style_cfg.subtitle.fontsize
+                    )
+                )
+                last_end = group_end
+            if last_end < line_dur:
+                segment_clips.append(
+                    _trim_clip(base_clip, out_path.parent / "render-work", len(clips) + len(segment_clips), last_end, line_dur - last_end)
+                )
+            clips.extend(segment_clips)
+            continue
+
+        # No word timings: fall back to full line with single subtitle
+        base_clip = _overlay_subtitle(base_clip, out_path.parent / "render-work", len(clips), line, line_dur, style_cfg.subtitle.fontsize)
         clips.append(base_clip)
 
     # Build final video
@@ -378,19 +437,16 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     """Burn a centered subtitle (up to 2 words) over an existing clip."""
 
     out = work / f"sub-{index:02d}.mp4"
-    safe = text.replace("'", "\\'").replace('"', '\\"')
-    draw = (
-        f"text='{safe}':fontcolor=white:fontsize={fontsize}:"
-        f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
-        f"x=(w-text_w)/2:y=h*0.78,"
-        f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill"
-    )
-    # ffmpeg drawtext + box; use -vf with both filters
+    # escape text for ffmpeg drawtext: backslash-escape colons, single quotes, backslashes
+    safe = text.replace("\\", "\\\\").replace(":", "\:").replace("'", "\'")
+    # 1080x1920 fixed resolution - hardcode box position for reliability
+    box_y = 1420  # 1920 * 0.74
+    box_h = 230   # 1920 * 0.12
     vf = (
-        f"drawbox=x=0:y=h*0.74:w=w:h=h*0.12:color=black@0.45:t=fill,"
+        f"drawbox=x=0:y={box_y}:w=1080:h={box_h}:color=black@0.45:t=fill,"
         f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
         f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
-        f"x=(w-text_w)/2:y=h*0.76"
+        f"x=(w-text_w)/2:y={box_y + box_h // 2}"
     )
     _run([
         "ffmpeg", "-y", "-i", str(src),
