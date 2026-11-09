@@ -44,7 +44,7 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 106) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 74) -> Path:
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
@@ -113,7 +113,7 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 106) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 74) -> Path:
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
@@ -331,11 +331,11 @@ def render_black_style(
         ])
         return out
 
-    def _overlay_subtitle_on_clip(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 60) -> Path:
-        """Burn a centered subtitle over a clip segment."""
+    def _overlay_subtitle_on_clip(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
+        """Burn a centered subtitle over a clip segment. Wraps at 2 words/line."""
         out = work / f"sub-{index:02d}.mp4"
         safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        # No background box - just text with outline
+        # No background box - just text with outline, centered
         vf = (
             f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
             f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
@@ -431,7 +431,7 @@ def render_black_style(
     return out_path
 
 
-def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 60) -> Path:
+def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
     """Burn a centered subtitle (up to 2 words) over an existing clip."""
 
     out = work / f"sub-{index:02d}.mp4"

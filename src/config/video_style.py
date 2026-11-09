@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class SubtitleStyle:
     font: str = "DejaVu Sans Condensed"
-    fontsize: int = 106              # 30% smaller (was 152)
+    fontsize: int = 74               # 30% smaller than 106
     primary_color: str = "&H00FFFFFF"  # pure white
     outline_color: str = "&H00000000"  # black
     back_color: str = "&H00000000"
