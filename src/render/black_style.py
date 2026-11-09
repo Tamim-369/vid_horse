@@ -91,27 +91,13 @@ def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -
 
     vf = f"{_cover_prep()},{tail}"
     out = work / f"asset-{tag}.mp4"
-    
-    # Try zoompan first, fall back to static if it fails
-    try:
-        _run([
-            "ffmpeg", "-y", "-loop", "1", "-i", str(source),
-            "-vf", vf,
-            "-t", f"{length:.3f}", "-r", str(FPS),
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
-            "-crf", "20", str(out),
-        ])
-    except subprocess.CalledProcessError as e:
-        logger.warning(f"Zoompan failed for asset {tag}, falling back to static: {e}")
-        # Fallback: static image with just cover prep (no zoompan)
-        vf_fallback = f"{_cover_prep()}"
-        _run([
-            "ffmpeg", "-y", "-loop", "1", "-i", str(source),
-            "-vf", f"{_cover_prep()}",
-            "-t", f"{length:.3f}", "-r", str(FPS),
-            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
-            "-crf", "20", str(out),
-        ])
+    _run([
+        "ffmpeg", "-y", "-loop", "1", "-i", str(source),
+        "-vf", vf,
+        "-t", f"{length:.3f}", "-r", str(FPS),
+        "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
+        "-crf", "20", str(out),
+    ])
     return out
 
 
@@ -350,9 +336,11 @@ def render_black_style(
         out = work / f"sub-{index:02d}.mp4"
         # Wrap first, then escape for ffmpeg drawtext
         wrapped = _wrap_subtitle_text(text, fontsize)
-        # Escape for ffmpeg: backslash, colon, single quote (but not already escaped)
-        safe = wrapped.replace("\\", "\\\\").replace(":", "\\:")
-        # Only escape unescaped single quotes
+        # Escape for ffmpeg drawtext: 
+        # - Don't escape backslashes (needed for \n newlines)
+        # - Escape colons
+        # - Escape unescaped single quotes
+        safe = wrapped.replace(":", "\\:")
         import re
         safe = re.sub(r"(?<!\\)'", "\\'", safe)
         print(f"DEBUG Overlay subtitle text sent to ffmpeg: {repr(safe)}")
@@ -454,49 +442,15 @@ def render_black_style(
 
 
 def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
-    """Wrap subtitle text - always 2 words per line, stacked vertically.
-    
-    Estimates character width for Lato-Bold at given fontsize.
-    Groups words in pairs (2 words per line). If pair too wide, splits to single words.
-    Never leaves a single word alone on screen - prefers 2 words per line.
-    """
-    # Rough character width estimate for Lato-Bold: fontsize * 0.52 pixels
-    char_width = fontsize * 0.52
-    max_chars = max(10, int(max_width / char_width))
-    
+    """Wrap subtitle text into multiple lines - max 2 words per line, stacked vertically."""
     words = text.split()
-    if not words:
+    if len(words) <= 2:
         return text
-    
+    # Group into pairs, each pair on its own line
     lines = []
-    i = 0
-    while i < len(words):
-        # Always try to make 2-word lines
-        if i + 1 < len(words):
-            pair = f"{words[i]} {words[i+1]}"
-            if len(pair) <= max_chars:
-                lines.append(pair)
-                i += 2
-                continue
-            # Pair too wide - split into two single-word lines instead of one long line
-            if len(words[i]) <= max_chars:
-                lines.append(words[i])
-            else:
-                # Word too long, truncate or keep as-is
-                lines.append(words[i])
-            if len(words[i+1]) <= max_chars:
-                lines.append(words[i+1])
-            else:
-                lines.append(words[i+1])
-            i += 2
-            continue
-        # Last single word - try to merge with previous line if possible
-        if lines and len(lines[-1]) + 1 + len(words[i]) <= max_chars:
-            lines[-1] = lines[-1] + " " + words[i]
-        else:
-            lines.append(words[i])
-        i += 1
-    
+    for i in range(0, len(words), 2):
+        pair = words[i:i+2]
+        lines.append(" ".join(pair))
     return "\\n".join(lines)
 
 
@@ -506,8 +460,11 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     out = work / f"sub-{index:02d}.mp4"
     # Wrap first, then escape for ffmpeg drawtext
     wrapped = _wrap_subtitle_text(text, fontsize)
-    # Escape for ffmpeg: backslash, colon, single quote (but not already escaped)
-    safe = wrapped.replace("\\", "\\\\").replace(":", "\\:")
+    # Escape for ffmpeg drawtext: 
+    # - Don't escape backslashes (needed for \n newlines)
+    # - Escape colons
+    # - Escape unescaped single quotes
+    safe = wrapped.replace(":", "\\:")
     import re
     safe = re.sub(r"(?<!\\)'", "\\'", safe)
     logger.debug(f"Overlay subtitle text sent to ffmpeg: {repr(safe)}")
