@@ -334,9 +334,13 @@ def render_black_style(
     def _overlay_subtitle_on_clip(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
         """Burn a centered subtitle over a clip segment. Auto-wraps long text."""
         out = work / f"sub-{index:02d}.mp4"
-        safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        # Auto-wrap: split into multiple lines if text would be too wide
-        safe = _wrap_subtitle_text(safe, fontsize)
+        # Wrap first, then escape for ffmpeg drawtext
+        wrapped = _wrap_subtitle_text(text, fontsize)
+        # Escape for ffmpeg: backslash, colon, single quote (but not already escaped)
+        safe = wrapped.replace("\\", "\\\\").replace(":", "\\:")
+        # Only escape unescaped single quotes
+        import re
+        safe = re.sub(r"(?<!\\)'", "\\'", safe)
         print(f"DEBUG Overlay subtitle text sent to ffmpeg: {repr(safe)}")
         # No background box - just text with outline, centered
         vf = (
@@ -438,7 +442,6 @@ def render_black_style(
 def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
     """Wrap subtitle text into multiple lines - max 2 words per line, stacked vertically."""
     words = text.split()
-    print(f"DEBUG Wrap input: '{text}' -> words: {words}")
     if len(words) <= 2:
         return text
     # Group into pairs, each pair on its own line
@@ -446,19 +449,20 @@ def _wrap_subtitle_text(text: str, fontsize: int, max_width: int = 980) -> str:
     for i in range(0, len(words), 2):
         pair = words[i:i+2]
         lines.append(" ".join(pair))
-    result = "\\n".join(lines)
-    print(f"DEBUG Wrap output: {repr(result)}")
-    return result
+    return "\\n".join(lines)
 
 
 def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: float, fontsize: int = 74) -> Path:
     """Burn a centered subtitle over an existing clip."""
 
     out = work / f"sub-{index:02d}.mp4"
-    # escape text for ffmpeg drawtext: backslash-escape colons, single quotes, backslashes
-    safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-    # Auto-wrap: split into multiple lines if text would be too wide
-    safe = _wrap_subtitle_text(safe, fontsize)
+    # Wrap first, then escape for ffmpeg drawtext
+    wrapped = _wrap_subtitle_text(text, fontsize)
+    # Escape for ffmpeg: backslash, colon, single quote (but not already escaped)
+    safe = wrapped.replace("\\", "\\\\").replace(":", "\\:")
+    import re
+    safe = re.sub(r"(?<!\\)'", "\\'", safe)
+    logger.debug(f"Overlay subtitle text sent to ffmpeg: {repr(safe)}")
     logger.debug(f"Overlay subtitle text sent to ffmpeg: {repr(safe)}")
     # No background box - just text with outline
     vf = (
