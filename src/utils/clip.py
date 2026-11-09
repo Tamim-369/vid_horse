@@ -63,6 +63,10 @@ class ClipScorer:
             if self._threads:
                 torch.set_num_threads(self._threads)
                 torch.set_num_interop_threads(1)
+            else:
+                # Default to single thread to avoid OOM on laptops
+                torch.set_num_threads(1)
+                torch.set_num_interop_threads(1)
             self._model, _, self._preprocess = open_clip.create_model_and_transforms(
                 "ViT-B-32", pretrained="laion2b_s34b_b79k"
             )

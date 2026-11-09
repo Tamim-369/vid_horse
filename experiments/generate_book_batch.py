@@ -15,6 +15,7 @@ chunks stay retryable in the ledger (they never consume a unit).
 
 from __future__ import annotations
 
+import gc
 import argparse
 import json
 import re
@@ -219,6 +220,10 @@ def main() -> None:
                 state = "abandoned" if abandoned else "failed (retryable next run)"
                 print(f"[skip] {lesson.name}: {exc} [{state}]")
                 failures.append(f"{lesson.name}: {exc}")
+                gc.collect()
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
                 break  # same lesson returns first next iteration; avoid tight loop
             rows.append(row)
             made += 1
@@ -226,6 +231,11 @@ def main() -> None:
                 f"[ok] {slug} <- {lesson.name} ({row['seconds']}s) "
                 f"grounding={row['grounding']} weak={row['weak']}/{row['clipd']}"
             )
+            # Aggressive cleanup to prevent OOM on laptops
+            gc.collect()
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
         if made >= args.limit:
             break
 

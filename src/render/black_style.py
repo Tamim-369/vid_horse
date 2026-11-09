@@ -44,7 +44,7 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 152) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 106) -> Path:
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
@@ -113,7 +113,7 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 152) -> Path:
+def _word_flash(work: Path, index: int, word: str, length: float, fontsize: int = 106) -> Path:
     """Black screen with single word/phrase centered in white."""
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
@@ -222,7 +222,7 @@ def render_black_style(
 
     word_lines, cues = align_speech(
         narration_lines, wavs, offsets, line_ends,
-        model_size=get_settings().subtitle_whisper_model,
+        model_size="tiny.en",
     )
 
     # Load music (variety: pick a track per video from the shelf so we never
@@ -335,13 +335,11 @@ def render_black_style(
         """Burn a centered subtitle over a clip segment."""
         out = work / f"sub-{index:02d}.mp4"
         safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
-        box_y = 1420
-        box_h = 230
+        # No background box - just text with outline
         vf = (
-            f"drawbox=x=0:y={box_y}:w=1080:h={box_h}:color=black@0.45:t=fill,"
             f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
             f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
-            f"x=(w-text_w)/2:y={box_y + box_h // 2}"
+            f"x=(w-text_w)/2:y=(h-text_h)/2"
         )
         _run([
             "ffmpeg", "-y", "-i", str(src),
@@ -438,15 +436,12 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
 
     out = work / f"sub-{index:02d}.mp4"
     # escape text for ffmpeg drawtext: backslash-escape colons, single quotes, backslashes
-    safe = text.replace("\\", "\\\\").replace(":", "\:").replace("'", "\'")
-    # 1080x1920 fixed resolution - hardcode box position for reliability
-    box_y = 1420  # 1920 * 0.74
-    box_h = 230   # 1920 * 0.12
+    safe = text.replace("\\", "\\\\").replace(":", "\\:").replace("'", "\\'")
+    # No background box - just text with outline
     vf = (
-        f"drawbox=x=0:y={box_y}:w=1080:h={box_h}:color=black@0.45:t=fill,"
         f"drawtext=text='{safe}':fontcolor=white:fontsize={fontsize}:"
         f"fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:"
-        f"x=(w-text_w)/2:y={box_y + box_h // 2}"
+        f"x=(w-text_w)/2:y=(h-text_h)/2"
     )
     _run([
         "ffmpeg", "-y", "-i", str(src),
@@ -465,7 +460,7 @@ def _overlay_subtitle(src: Path, work: Path, index: int, text: str, length: floa
     return out
 
 
-def _word_flash(work, index, word, length, fontsize=152):
+def _word_flash(work, index, word, length, fontsize=106):
     out = work / f"flash-{index:02d}.mp4"
     safe_word = word.replace("'", "\\'").replace('"', '\\"')
     draw = f"text='{safe_word}':fontcolor=white:fontsize={fontsize}:fontfile=/usr/share/fonts/truetype/lato/Lato-Bold.ttf:x=(w-text_w)/2:y=(h-text_h)/2"

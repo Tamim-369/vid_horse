@@ -247,8 +247,9 @@ def _whisper_model(model_size: str, device: str):
     key = (model_size, device)
     with _WHISPER_LOCK:
         if key not in _WHISPER_CACHE:
+            # Use tiny.en for lower memory (39M params vs 74M for base.en)
             _WHISPER_CACHE[key] = WhisperModel(
-                model_size, device=device, compute_type="int8"
+                model_size, device=device, compute_type="int8", cpu_threads=1
             )
     return _WHISPER_CACHE[key]
 
@@ -289,7 +290,7 @@ def align_speech(
     offsets: list[float],
     line_ends: list[float] | None = None,
     *,
-    model_size: str = "base.en",
+    model_size: str = "tiny.en",
     device: str = "cpu",
 ) -> tuple[list[list[tuple[str, float, float]]], list[Cue]]:
     """Transcribe the voice and return both word timings and subtitle cues.
@@ -333,7 +334,7 @@ def align_cues(
     offsets: list[float],
     line_ends: list[float] | None = None,
     *,
-    model_size: str = "base.en",
+    model_size: str = "tiny.en",
     device: str = "cpu",
 ) -> list[Cue]:
     """Transcribe the voice segments and map their word cues onto the timeline."""
