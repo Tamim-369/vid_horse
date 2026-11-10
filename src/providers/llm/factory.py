@@ -218,7 +218,68 @@ def _build_openrouter(settings: Settings) -> BaseLLMProvider:
     )
 
 
+# OpenRouter -> Groq (multi-key) -> Ollama chain
+def _build_openrouter_chain(settings: Settings) -> BaseLLMProvider:
+    """Build the full chain: OpenRouter -> Groq (multi-key) -> Ollama."""
+    cache = DiskCache(settings.cache_dir, enabled=settings.cache_enabled)
+
+    # 1. OpenRouter primary
+    if not settings.openrouter_api_key:
+        raise ConfigurationError("OpenRouter API key not set. Set VIDEOAI_OPENROUTER_API_KEY.")
+    or_models = [m.strip() for m in settings.openrouter_models.split(",") if m.strip()]
+    if not or_models:
+        raise ConfigurationError("No OpenRouter models configured.")
+    openrouter = OpenRouterProvider(
+        api_key=settings.openrouter_api_key,
+        models=or_models,
+        base_url=settings.openrouter_base_url,
+        temperature=settings.openrouter_temperature,
+        max_tokens=settings.openrouter_max_tokens,
+        timeout=settings.openrouter_timeout,
+        max_retries=settings.max_retries,
+        cache=cache,
+    )
+
+    # 2. Groq with multiple keys as fallback
+    keys = settings.groq_api_keys
+    if not keys:
+        raise ConfigurationError(
+            "No Groq API keys found. Set GROQ_API_KEY (single mode) or the "
+            "numbered GROQ_API_KEY_FIRST..GROQ_API_KEY_FOURTH (pool mode)."
+        )
+    groq = GroqProvider(
+        model=settings.groq_model,
+        api_keys=keys,
+        base_url=settings.groq_base_url,
+        temperature=settings.groq_temperature,
+        max_tokens=settings.groq_max_tokens,
+        timeout=settings.groq_timeout,
+        max_retries=settings.max_retries,
+        cache=cache,
+    )
+
+    # 3. Ollama as final fallback
+    ollama = OllamaProvider(
+        model=settings.ollama_model,
+        host=settings.ollama_host,
+        num_ctx=settings.ollama_num_ctx,
+        temperature=settings.ollama_temperature,
+        max_tokens=settings.ollama_num_predict,
+        repeat_penalty=settings.ollama_repeat_penalty,
+        repeat_last_n=settings.ollama_repeat_last_n,
+        keep_alive=settings.ollama_keep_alive,
+        timeout=settings.ollama_timeout,
+        max_retries=settings.max_retries,
+        cache=cache,
+    )
+
+    # Chain: OpenRouter -> Groq -> Ollama
+    groq_tier = FallbackLLMProvider(primary=groq, fallback=ollama, cache=cache)
+    return FallbackLLMProvider(primary=openrouter, fallback=groq_tier, cache=cache)
+
+
 register_provider("ollama", _build_ollama)
 register_provider("groq", _build_groq_chain)
 register_provider("openrouter", _build_openrouter)
+register_provider("openrouter-chain", _build_openrouter_chain)
 register_provider("ollama-cloud", _build_ollama_cloud)

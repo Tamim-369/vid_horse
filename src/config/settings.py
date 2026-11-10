@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     )
 
     # -- Ollama -------------------------------------------------------------
-    llm_provider: str = Field(default="ollama")
+    llm_provider: str = Field(default="openrouter-chain")
     ollama_host: str = Field(
         default="http://localhost:11434",
         validation_alias=AliasChoices("VIDEOAI_OLLAMA_HOST", "OLLAMA_HOST"),
