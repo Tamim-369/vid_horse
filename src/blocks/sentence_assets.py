@@ -239,15 +239,8 @@ def _generate_on_demand(subject: str) -> str | None:
     global _on_demand_generated, _motif_state
     if _on_demand_generated >= _ON_DEMAND_CAP:
         return None
-    key = os.getenv("POLLINATIONS_API_KEY")
-    if not key:
-        try:
-            from dotenv import load_dotenv
-
-            load_dotenv()
-            key = os.getenv("POLLINATIONS_API_KEY")
-        except ImportError:
-            pass
+    from config.settings import get_settings
+    key = get_settings().pollinations_api_key
     if not key:
         return None
     import time

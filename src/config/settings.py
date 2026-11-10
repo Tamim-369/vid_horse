@@ -59,6 +59,22 @@ class Settings(BaseSettings):
             "VIDEOAI_OLLAMA_CLOUD_API_KEY", "OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"
         ),
     )
+    # -- Pollinations --------------------------------------------------------
+    pollinations_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("POLLINATIONS_API_KEY"),
+    )
+    # -- Pexels / Pixels -----------------------------------------------------
+    pixels_api_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("PIXELS_API_KEY", "PEXELS_API_KEY"),
+    )
+    # -- HF Token ------------------------------------------------------------
+    hf_token: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HF_TOKEN"),
+    )
+    # -- Ollama Cloud --------------------------------------------------------
     ollama_cloud_host: str = Field(
         default="https://ollama.com/v1",
         validation_alias=AliasChoices("VIDEOAI_OLLAMA_CLOUD_HOST", "OLLAMA_CLOUD_HOST"),
