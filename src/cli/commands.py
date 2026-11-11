@@ -115,7 +115,7 @@ def lesson_pick_cmd(
     if ledger.is_taken(lesson_path):
         _fail(f"Lesson already taken: {lesson_file}")
 
-    context_paths = neighbours(lesson_path, count=context)
+    context_paths = neighbours(lesson_path, count=max(context, 3), ledger=ledger)
 
     console.print(f"[cyan]Picking lesson from:[/cyan] {lesson_file}")
     idea = pick_lesson(llm, lesson_path, context_paths=context_paths, ledger=ledger)
@@ -158,7 +158,7 @@ def lesson_script_cmd(
     if ledger.is_taken(lesson_path):
         _fail(f"Lesson already taken: {lesson_file}")
 
-    context_paths = neighbours(lesson_path, count=context)
+    context_paths = neighbours(lesson_path, count=max(context, 3), ledger=ledger)
 
     console.print(f"[cyan]Picking lesson...[/cyan]")
     idea = pick_lesson(llm, lesson_path, context_paths=context_paths, ledger=ledger)
@@ -310,7 +310,7 @@ def lesson_produce_cmd(
     if ledger.is_taken(lesson_path):
         _fail(f"Lesson already taken: {lesson_file}")
 
-    context_paths = neighbours(lesson_path, count=context)
+    context_paths = neighbours(lesson_path, count=max(context, 3), ledger=ledger)
 
     if not output:
         import re
@@ -580,7 +580,7 @@ def auto_cmd(
             try:
                 # 1. Pick lesson
                 console.print(f"  [1/5] Picking lesson...")
-                idea = pick_lesson(llm, lesson_path, context_paths=neighbours(lesson_path), ledger=ledger)
+                idea = pick_lesson(llm, lesson_path, context_paths=neighbours(lesson_path, ledger=ledger), ledger=ledger)
 
                 # 2. Write script
                 console.print(f"  [2/5] Writing script...")

@@ -288,10 +288,14 @@ class ScriptEngineBlock:
         max_scene_retries: int = 2,
         retriever: RAGRetriever | None = None,
     ) -> None:
+        from config import get_settings
+
         self._llm = llm
         self._target_seconds = target_seconds
         self._max_scene_retries = max_scene_retries
         self._retriever = retriever
+        settings = get_settings()
+        self._writer_model = settings.ollama_writer_model or settings.ollama_model
 
     def run(
         self,
@@ -321,16 +325,25 @@ class ScriptEngineBlock:
         total_words = int(self._target_seconds * wps)
         per_scene = max(6, total_words // len(beats))
 
+        wm = self._writer_model
+
         # Generate payoff first, then hook referencing it.
-        payoff_beat = beats[5] if len(beats) >= 6 else beats[-1]
-        payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12, source_text=source_text, concepts=_CONCEPT_KEYS)
+        payoff_idx = 5 if len(beats) >= 6 else len(beats) - 1
+        payoff_beat = beats[payoff_idx]
+        payoff_raw = write_scene(
+            self._llm, payoff_beat, fs, [], 12,
+            source_text=source_text, concepts=_CONCEPT_KEYS,
+            plan=beats, beat_index=payoff_idx, model=wm,
+        )
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
         if not payoff_narr or _is_placeholder(payoff_narr):
             payoff_narr = _clean_speech(payoff_beat)
         payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
-        if "?" in payoff_narr:
+        if "?" in payoff_narr or len(payoff_narr.split()) > 16:
             # the payoff closes the loop as a statement, never another question
-            condensed = condense_line(self._llm, payoff_narr, 12, statement=True)
+            condensed = condense_line(
+                self._llm, payoff_narr, 12, statement=True, model=wm,
+            )
             if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
                 payoff_narr = condensed
                 logger.info("payoff condensed into a statement")
@@ -370,7 +383,8 @@ class ScriptEngineBlock:
         hook_beat = beats[0]
         hook_narr, _hook_vis = _parse_scene(
             write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
-                        source_text=source_text, concepts=_CONCEPT_KEYS)
+                        source_text=source_text, concepts=_CONCEPT_KEYS,
+                        plan=beats, beat_index=0, model=wm)
         )
         hook_narr = _clean_hook(hook_narr)
         # mechanical clamps only (they never invent content)
@@ -380,7 +394,8 @@ class ScriptEngineBlock:
             # be a question (dark-psychology openers ask)
             hook_narr, _hook_vis = _parse_scene(
                 write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
-                            source_text=source_text, concepts=_CONCEPT_KEYS)
+                            source_text=source_text, concepts=_CONCEPT_KEYS,
+                            plan=beats, beat_index=0, model=wm)
             )
             hook_narr = _clean_hook(hook_narr)
             hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
@@ -402,6 +417,7 @@ class ScriptEngineBlock:
             narr = ""
             vis = ""
             feedback: list[str] = []
+            beat_idx = i + 1
             # the line right after the hook is still prime attention time:
             # no warm-up, no recap, straight into the proof
             base_beat = (
@@ -415,11 +431,16 @@ class ScriptEngineBlock:
                     write_beat = (
                         base_beat + f" (Your previous attempt was rejected: "
                         f"{'; '.join(feedback)}. Fix it: write 1-2 complete "
-                        "STATEMENTS that add NEW information from the source. "
+                        "STATEMENTS that add NEW information from the source and "
+                        "continue naturally from the previous line. "
                         "No question mark in a statement line.)"
                     )
                 try:
-                    raw = write_scene(self._llm, write_beat, fs, narrations, target, source_text=source_text, concepts=_CONCEPT_KEYS)
+                    raw = write_scene(
+                        self._llm, write_beat, fs, narrations, target,
+                        source_text=source_text, concepts=_CONCEPT_KEYS,
+                        plan=beats, beat_index=beat_idx, model=wm,
+                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("scene %d write failed: %s", i, exc)
                     attempt += 1
@@ -430,11 +451,16 @@ class ScriptEngineBlock:
                     feedback = ["empty or placeholder output"]
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
-                # rescue pass: rewrite-to-length is a transformation task
-                # small models handle well, unlike free generation
+                # rescue pass: only when seriously off-length or when a
+                # statement slot contains a question. Aggressive condense
+                # breaks flow, so prefer letting polish smooth minor drift.
                 wc = len(narr.split())
-                if wc < target - 3 or wc > target + 3 or (i > 0 and "?" in narr):
-                    condensed = condense_line(self._llm, narr, target, statement=(i > 0))
+                if wc < max(4, target - 5) or wc > target + 6 or (i > 0 and "?" in narr):
+                    condensed = condense_line(
+                        self._llm, narr, target, statement=(i > 0),
+                        previous=narrations[-1] if narrations else "",
+                        model=wm,
+                    )
                     if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
                         logger.info("scene %d condensed %d -> %d words", i, wc, len(condensed.split()))
                         narr = condensed
@@ -491,7 +517,9 @@ class ScriptEngineBlock:
         # falls back to the original lines on any validation failure)
         raw_lines = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
         hook_before_polish = hook_narr
-        polished = polish_script_lines(self._llm, raw_lines, context_note=context_note)
+        polished = polish_script_lines(
+            self._llm, raw_lines, context_note=context_note, model=wm,
+        )
         if polished != raw_lines:
             logger.info(
                 "polish pass rewrote %d/%d lines",

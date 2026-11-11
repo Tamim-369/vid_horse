@@ -375,7 +375,17 @@ def render_black_style(
                     alt = _pool_pick(asset.file)
                     if alt is not None:
                         asset = alt
-                base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
+                try:
+                    base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
+                except Exception as exc:  # noqa: BLE001 - a broken asset must
+                    # never blank the screen: fall back to a pool image
+                    logger.warning("asset clip failed for %s (%s); pool fallback", asset.file, exc)
+                    alt = _pool_pick(asset.file)
+                    if alt is not None:
+                        asset = alt
+                        base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
+                    else:
+                        base = _black_frame(work, f"img-{tag}", seg_dur)
                 shown_files.add(asset.file)
                 last_file = asset.file
             else:

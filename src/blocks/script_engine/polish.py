@@ -24,16 +24,21 @@ logger = logging.getLogger(__name__)
 SYSTEM = (
     "You are a dialogue editor for a spoken short-form video (ONE narrator "
     "talking to ONE viewer — 'you'). You receive the script's lines in "
-    "order. Rewrite EACH line so the whole thing reads and SOUNDS like "
-    "natural spoken English by one person: contractions, normal sentence "
-    "rhythm, lines that connect to what came before (small bridges like "
-    "'And that is exactly why...' or 'Here is the strange part —' are "
-    "welcome). Fix telegraph-style fragments into complete sentences. Keep "
-    "the plain dark edge of the voice — never soften a line into friendly "
-    "self-help coaching, never add hype or exclamation marks. But the "
-    "darkness is confident insider knowledge, NOT horror: never "
-    "fear-monger, never threaten, never doom-laden imagery; the viewer "
-    "stays intrigued and in control, never scared.\n"
+    "order. Your main job: make the whole thing ONE connected argument. "
+    "Each line must flow naturally into the next — continue the same "
+    "thread, use small bridges when needed ('And that's how...', 'So when "
+    "this happens...', 'That's why...'), and carry the viewer forward. "
+    "Fix abrupt jumps, repeated ideas, and telegraph-style fragments into "
+    "complete, natural spoken sentences. Keep the voice calm, confident, "
+    "quietly gripping — like a sharp friend sharing a secret. Never "
+    "theatrical, never hype, never fear-mongering, never scary. The "
+    "viewer stays intrigued and in control.\n"
+    "PLAIN WORDS: the book's wording must become everyday speech. Replace "
+    "bookish words — 'individuals' → 'people', 'do not' → 'don't', "
+    "'utilize' → 'use', 'possess' → 'have', 'numerous' → 'many', "
+    "'fellow' → 'the people around you', 'conduct' → 'behave'. If a word "
+    "wouldn't be said out loud to a friend, swap it for the everyday "
+    "word. Same meaning, roughly same length.\n"
     "SPECIAL RULE FOR LINE 1: it is the HOOK — the attention-grabber. "
     "Polish it ONLY for grammar and flow. NEVER add a bridge, opener or "
     "connector to it (it must not start with 'And', 'So', 'Here is', "
@@ -79,6 +84,7 @@ def polish_script_lines(
     lines: list[str],
     *,
     context_note: str = "",
+    model: str | None = None,
 ) -> list[str]:
     """Rewrite all lines as natural spoken prose; returns the polished list.
 
@@ -95,11 +101,15 @@ def polish_script_lines(
         LLMMessage(role="system", content=SYSTEM),
         LLMMessage(
             role="user",
-            content=f"Script lines:\n{numbered}{context}\nPolish every line. Output JSON.",
+            content=(
+                f"Script lines:\n{numbered}{context}\n"
+                "Polish every line so they form one connected, flowing script. "
+                "Output JSON."
+            ),
         ),
     ]
     try:
-        out = llm.complete_json(msgs, _PolishedScript, temperature=0.4)
+        out = llm.complete_json(msgs, _PolishedScript, temperature=0.35, model=model)
     except (LLMError, BlockError, Exception) as exc:  # noqa: BLE001
         logger.warning("polish pass skipped: %s", exc)
         return lines

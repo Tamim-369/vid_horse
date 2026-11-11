@@ -160,20 +160,27 @@ def next_untaken(
 
 def neighbours(
     path: Path,
-    count: int = 2,
+    count: int = 3,
     after: int = 1,
+    ledger: TakenLedger | None = None,
 ) -> list[Path]:
     """Nearby lesson files of the same book part, for continuity context.
 
-    ``count`` parts before the target plus ``after`` parts following it
-    (the part *after* the target matters: if the target turns out
-    fragmentary, the agent can still see where the chapter is heading).
+    Always reads at least ``count`` parts before the target (default 3) so
+    the agent has enough material to understand and pick a lesson, plus
+    ``after`` parts following it. If any earlier part in this book section
+    already produced a video, one extra previous part is included so the
+    agent can see that continuity (used parts are labeled context-only by
+    the picker and never become the lesson source).
     """
 
     siblings = sorted(p for p in path.parent.glob("*.txt") if p.is_file())
     index = siblings.index(path)
+    before = max(count, 3)
+    if ledger is not None and any(ledger.is_taken(p) for p in siblings[:index]):
+        before += 1
     return (
-        siblings[max(0, index - count) : index]
+        siblings[max(0, index - before) : index]
         + siblings[index + 1 : index + 1 + after]
     )
 
