@@ -12,6 +12,7 @@ from blocks.script_engine.polish import polish_script_lines
 from blocks.script_engine.validators import (
     check_claims,
     grounding_score,
+    repeats_previous,
     validate_pov,
     validate_scene,
 )
@@ -388,14 +389,23 @@ class ScriptEngineBlock:
             attempt = 0
             narr = ""
             vis = ""
+            feedback: list[str] = []
             # the line right after the hook is still prime attention time:
             # no warm-up, no recap, straight into the proof
-            write_beat = (
+            base_beat = (
                 beat + " (This follows the hook — go straight at the viewer, "
                 "no warm-up, no recapping the hook, keep the tension.)"
                 if i == 0 else beat
             )
             while attempt < self._max_scene_retries:
+                write_beat = base_beat
+                if feedback:
+                    write_beat = (
+                        base_beat + f" (Your previous attempt was rejected: "
+                        f"{'; '.join(feedback)}. Fix it: write 1-2 complete "
+                        "STATEMENTS that add NEW information from the source. "
+                        "No question mark in a statement line.)"
+                    )
                 try:
                     raw = write_scene(self._llm, write_beat, fs, narrations, target, source_text=source_text, concepts=_CONCEPT_KEYS)
                 except Exception as exc:  # noqa: BLE001
@@ -405,19 +415,25 @@ class ScriptEngineBlock:
                 narr, vis = _parse_scene(raw)
                 if not narr or _is_placeholder(narr):
                     attempt += 1
+                    feedback = ["empty or placeholder output"]
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
-                res = validate_scene(narr, target)
+                res = validate_scene(narr, target, allow_question=(i == 0))
                 if _is_incomplete(narr):
                     res.ok = False
                     res.issues.append("incomplete/cut-off narration")
+                if repeats_previous(narr, narrations):
+                    res.ok = False
+                    res.issues.append("repeats an earlier line - add NEW information")
                 if not res.ok:
                     attempt += 1
+                    feedback = res.issues
                     logger.info("scene %d retry: %s", i, res.issues)
                     continue
                 pov = validate_pov([narr])
                 if not pov.ok:
                     attempt += 1
+                    feedback = pov.issues
                     logger.info("scene %d retry (POV): %s", i, pov.issues)
                     continue
                 break

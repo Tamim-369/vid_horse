@@ -27,12 +27,26 @@ def word_count(text: str) -> int:
     return len(text.split())
 
 
-def validate_scene(narration: str, target_words: int, tolerance: int = 2) -> ValidationResult:
+def validate_scene(
+    narration: str,
+    target_words: int,
+    tolerance: int = 2,
+    *,
+    allow_question: bool = False,
+) -> ValidationResult:
     r = ValidationResult()
     wc = word_count(narration)
     if wc < target_words - tolerance or wc > target_words + tolerance:
         r.ok = False
         r.issues.append(f"word count {wc}, need {target_words}±{tolerance}")
+    # question-mark policy: the hook may ask, the line after it may ask
+    # once; everything later must be statements (no question bank)
+    if not allow_question and "?" in narration:
+        r.ok = False
+        r.issues.append("statement line contains a question mark")
+    elif allow_question and narration.count("?") > 1:
+        r.ok = False
+        r.issues.append("more than one question mark in this line")
     # banned end word
     last = narration.strip().rstrip(".!?").split()[-1].lower() if narration.strip() else ""
     if last in BANNED_END_WORDS:
@@ -71,6 +85,29 @@ def validate_hook_payoff(hook: str, outro: str) -> ValidationResult:
         r.ok = False
         r.issues.append("payoff does not reference hook")
     return r
+
+
+def repeats_previous(narration: str, previous: list[str], threshold: float = 0.6) -> bool:
+    """True when a line's content words heavily overlap an earlier line.
+
+    The small model loves to ask the same question four times with tiny
+    wording changes; this catches that mechanically.
+    """
+
+    def content_words(t: str) -> set[str]:
+        return {w for w in re.findall(r"[a-z']+", t.lower()) if w not in _STOPWORDS}
+
+    cur = content_words(narration)
+    if not cur:
+        return False
+    for prev in previous:
+        pw = content_words(prev)
+        if not pw:
+            continue
+        overlap = len(cur & pw) / min(len(cur), len(pw))
+        if overlap >= threshold:
+            return True
+    return False
 
 
 def check_claims(script_text: str, fact_sheet: str) -> list[str]:
