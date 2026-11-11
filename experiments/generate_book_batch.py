@@ -24,6 +24,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+from config import setup_logging
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from blocks.lesson_picker import chapter_of, neighbours, next_untaken, pick_lesson
@@ -34,6 +36,7 @@ from blocks.script_engine.validators import grounding_score
 from blocks.script_generation import render_markdown
 from config.settings import get_settings
 from providers.llm import create_llm_provider
+from utils import computing
 from utils.ledger import TakenLedger
 
 BOOKS_ROOT = Path("content/psychology_books")
@@ -183,9 +186,34 @@ def main() -> None:
     parser.add_argument("book_dir", nargs="?", default=None)
     parser.add_argument("--limit", type=int, default=10, help="Max videos this run.")
     parser.add_argument("--seconds", type=int, default=45)
+    parser.add_argument(
+        "--max-temp",
+        type=float,
+        default=78.0,
+        help="Refuse to start when the CPU is at/above this (deg C). "
+        "The box thermal-trips at ~88C and idles hot; all-core bursts "
+        "kill it in under a minute.",
+    )
     args = parser.parse_args()
 
+    # thermal gate: cool down first, or refuse — a hardware trip cuts power
+    # instantly and can corrupt work
+    temp = computing.cpu_temp_c()
+    if temp is not None:
+        print(f"[thermal] CPU at {temp:.0f}C (limit {args.max_temp:.0f}C)")
+        if temp >= args.max_temp:
+            print("[thermal] waiting up to 5 min for the CPU to cool...")
+            if not computing.wait_for_cool(soft_c=args.max_temp - 6.0, timeout_s=300.0):
+                temp = computing.cpu_temp_c() or 0.0
+                print(
+                    f"[thermal] STILL {temp:.0f}C — refusing to run. Clean the "
+                    "fan/heatsink and retry; the machine will power off under "
+                    "an all-core load at this temperature."
+                )
+                raise SystemExit(1)
+
     settings = get_settings()
+    setup_logging("INFO")
     llm = create_llm_provider(settings)
     ledger = TakenLedger()
     engine = ScriptEngineBlock(llm, target_seconds=args.seconds)

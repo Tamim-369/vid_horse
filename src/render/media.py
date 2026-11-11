@@ -51,8 +51,15 @@ def _font() -> str | None:
 
 
 def _duration(wav_path: Path) -> float:
-    info = torchaudio.info(str(wav_path))
-    return info.num_frames / info.sample_rate
+    # torchaudio >= 2.1 uses torchaudio.info, older uses torchaudio.backend
+    try:
+        info = torchaudio.info(str(wav_path))
+        return info.num_frames / info.sample_rate
+    except AttributeError:
+        # Fallback for older torchaudio
+        import soundfile as sf
+        info = sf.info(str(wav_path))
+        return info.frames / info.samplerate
 
 
 def _no_back_to_back(cards: list[list[VisualAsset]]) -> None:

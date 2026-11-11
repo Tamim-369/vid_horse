@@ -1,0 +1,188 @@
+{
+  "diag_01": {
+    "id": "diag_01",
+    "name": "Income inequality pyramid",
+    "description": "Wealth pyramid: tiny top 1% glowing gold, massive base struggling, stark divide",
+    "category": "societal_diagrams"
+  },
+  "diag_02": {
+    "id": "diag_02",
+    "name": "Wealth distribution chart",
+    "description": "Bar chart: 1% owns 50% wealth, 90% fights for crumbs, logarithmic scale",
+    "category": "societal_diagrams"
+  },
+  "diag_03": {
+    "id": "diag_03",
+    "name": "Gender pay gap visual",
+    "description": "Two identical workers, male getting full dollar, female getting 82 cents",
+    "category": "societal_diagrams"
+  },
+  "diag_04": {
+    "id": "diag_04",
+    "name": "Racial wealth gap",
+    "description": "Generational wealth transfer: white family compounding, Black family reset to zero",
+    "category": "societal_diagrams"
+  },
+  "diag_05": {
+    "id": "diag_05",
+    "name": "Political polarization",
+    "description": "Two circles drifting apart, overlap shrinking, 'us vs them' polarization",
+    "category": "societal_diagrams"
+  },
+  "diag_06": {
+    "id": "diag_06",
+    "name": "Media ownership concentration",
+    "description": "Network diagram: 6 corporations owning 90% media, arrows to outlets",
+    "category": "societal_diagrams"
+  },
+  "diag_07": {
+    "id": "diag_07",
+    "name": "Lobbying money flow",
+    "description": "Money pipe from corporations to politicians, legislation output, corruption cycle",
+    "category": "societal_diagrams"
+  },
+  "diag_08": {
+    "id": "diag_08",
+    "name": "School-to-prison pipeline",
+    "description": "Flowchart: underfunded schools → zero tolerance → juvenile detention → adult prison",
+    "category": "societal_diagrams"
+  },
+  "diag_09": {
+    "id": "diag_09",
+    "name": "Housing cost vs wage",
+    "description": "Diverging lines: housing costs exponential, wages flat, gap widening",
+    "category": "societal_diagrams"
+  },
+  "diag_10": {
+    "id": "diag_10",
+    "name": "Healthcare access map",
+    "description": "Map: dark areas = no hospitals, bright = elite care, zip code determines lifespan",
+    "category": "societal_diagrams"
+  },
+  "diag_11": {
+    "id": "diag_11",
+    "name": "Algorithmic bias",
+    "description": "Facial recognition: white male 99% accurate, Black female 65%, discrimination coded",
+    "category": "societal_diagrams"
+  },
+  "diag_12": {
+    "id": "diag_12",
+    "name": "Climate justice",
+    "description": "Map: Global North emissions, Global South consequences, inverted responsibility",
+    "category": "societal_diagrams"
+  },
+  "diag_13": {
+    "id": "diag_13",
+    "name": "Union membership decline",
+    "description": "Line graph: union density falling 1950-present, wages stagnating in parallel",
+    "category": "societal_diagrams"
+  },
+  "diag_14": {
+    "id": "diag_14",
+    "name": "Student debt crisis",
+    "description": "Ballooning debt bubble, degrees devaluing, generation delayed adulthood",
+    "category": "societal_diagrams"
+  },
+  "diag_15": {
+    "id": "diag_15",
+    "name": "Retirement insecurity",
+    "description": "Three-legged stool broken: pension gone, Social Security threatened, 401k gambling",
+    "category": "societal_diagrams"
+  },
+  "diag_16": {
+    "id": "diag_16",
+    "name": "Digital divide",
+    "description": "Split screen: high-speed fiber vs no internet, education/opportunity gap",
+    "category": "societal_diagrams"
+  },
+  "diag_17": {
+    "id": "diag_17",
+    "name": "Food desert map",
+    "description": "Map: green = fresh food, red = only convenience stores, nutrition by zip code",
+    "category": "societal_diagrams"
+  },
+  "diag_18": {
+    "id": "diag_18",
+    "name": "Maternal mortality race",
+    "description": "Bar chart: Black women 3x mortality rate, systemic bias in healthcare",
+    "category": "societal_diagrams"
+  },
+  "diag_19": {
+    "id": "diag_19",
+    "name": "Mass incarceration",
+    "description": "Bar chart: US 4% world population, 25% prisoners, racial disproportionality",
+    "category": "societal_diagrams"
+  },
+  "diag_20": {
+    "id": "diag_20",
+    "name": "Surveillance capitalism",
+    "description": "Data flow: every click → profile → prediction → behavior modification → profit",
+    "category": "societal_diagrams"
+  },
+  "diag_21": {
+    "id": "diag_21",
+    "name": "Generational wealth transfer",
+    "description": "Family tree: compounding assets vs starting from zero each generation",
+    "category": "societal_diagrams"
+  },
+  "diag_22": {
+    "id": "diag_22",
+    "name": "Corporate tax avoidance",
+    "description": "Flowchart: profits → tax havens → public services starved → inequality",
+    "category": "societal_diagrams"
+  },
+  "diag_23": {
+    "id": "diag_23",
+    "name": "Disability employment gap",
+    "description": "Chart: employment rate by disability status, systemic barriers visualized",
+    "category": "societal_diagrams"
+  },
+  "diag_24": {
+    "id": "diag_24",
+    "name": "LGBTQ+ rights patchwork",
+    "description": "Map: rights vary by state/country, human rights as geography lottery",
+    "category": "societal_diagrams"
+  },
+  "diag_25": {
+    "id": "diag_25",
+    "name": "Ageism in hiring",
+    "description": "Resume stack: 'overqualified' stamp on 50+, 'lacks experience' on 20s",
+    "category": "societal_diagrams"
+  },
+  "diag_26": {
+    "id": "diag_26",
+    "name": "Rent burden crisis",
+    "description": "Heat map: % income to rent, red zones = 50%+ income, working homeless",
+    "category": "societal_diagrams"
+  },
+  "diag_27": {
+    "id": "diag_27",
+    "name": "Police violence disparity",
+    "description": "Chart: deaths per capita by race, unarmed, accountability near zero",
+    "category": "societal_diagrams"
+  },
+  "diag_28": {
+    "id": "diag_28",
+    "name": "Voter suppression map",
+    "description": "Map: polling places closed, ID laws, gerrymandered districts, democracy erosion",
+    "category": "societal_diagrams"
+  },
+  "diag_29": {
+    "id": "diag_29",
+    "name": "Pharma pricing",
+    "description": "Graph: R&D cost vs price markup, insulin $6 to make $300 to buy",
+    "category": "societal_diagrams"
+  },
+  "diag_29b": {
+    "id": "diag_29b",
+    "name": "Mental health access",
+    "description": "Map: therapist deserts, insurance barriers, crisis lines overwhelmed",
+    "category": "societal_diagrams"
+  },
+  "diag_30": {
+    "id": "diag_30",
+    "name": "Intersectionality matrix",
+    "description": "Venn diagram: race × gender × class × sexuality = compounding disadvantage",
+    "category": "societal_diagrams"
+  }
+}

@@ -60,6 +60,14 @@ assets/rag.sqlite3
 assets/motifs_pollinations/*.png
 
 assets/psycology_books/*
+assets/psychology_motifs/*
+# ...except the catalogs: they document every generated image and are
+# expensive to rebuild (descriptions.json is the persistent AI-description store)
+!assets/psychology_motifs/manifest.json
+!assets/psychology_motifs/descriptions.json
+
+# Music bed lead-in measurements (auto-generated cache)
+assets/music/.lead_in.json
 
 # Extracted book lesson chunks (regenerate)
 content/

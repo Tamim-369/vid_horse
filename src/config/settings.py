@@ -25,40 +25,47 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # -- Ollama -------------------------------------------------------------
-    llm_provider: str = Field(default="openrouter-chain")
+    # -- Local LLM (Ollama) -------------------------------------------------
+    llm_provider: str = Field(default="ollama")
     ollama_host: str = Field(
         default="http://localhost:11434",
         validation_alias=AliasChoices("VIDEOAI_OLLAMA_HOST", "OLLAMA_HOST"),
     )
-    ollama_model: str = Field(default="phi4-mini:latest")
-    ollama_num_ctx: int = Field(default=4096, gt=0)
+    # Role-routed local models (all <=4B, already pulled):
+    #   reader/writer/reviewer -> ollama_model        (gemma3:4b: reads book
+    #       chunks, reasons about lessons, writes and reviews scripts)
+    #   decision -> ollama_decision_model             (d3:2b: fast yes/no and
+    #       pick-one judgements; also the vision judge via vision_decision_model)
+    #   assets -> ollama_asset_model                  (gemma3:1b: which asset
+    #       goes into which sentence; flip to d3:2b to test it in this role)
+    ollama_model: str = Field(default="gemma3:4b")
+    ollama_decision_model: str = Field(
+        default="d3:2b",
+        validation_alias=AliasChoices(
+            "VIDEOAI_OLLAMA_DECISION_MODEL", "OLLAMA_DECISION_MODEL"
+        ),
+    )
+    ollama_asset_model: str = Field(
+        default="gemma3:1b",
+        validation_alias=AliasChoices(
+            "VIDEOAI_OLLAMA_ASSET_MODEL", "OLLAMA_ASSET_MODEL"
+        ),
+    )
+    ollama_num_ctx: int = Field(default=2048, gt=0)
+    ollama_num_thread: int = Field(
+        default=4,
+        description="CPU threads per ollama request. Limit to 4 to prevent thermal shutdown.",
+    )
     ollama_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
     ollama_num_predict: int | None = Field(default=None, gt=0)
     ollama_repeat_penalty: float = Field(default=1.3, ge=0.0)
     ollama_repeat_last_n: int = Field(default=256, ge=0)
-    ollama_keep_alive: str = Field(default="5m")
+    ollama_keep_alive: str = Field(
+        default="30s",
+        description="Unload the model quickly after use to free RAM.",
+    )
     ollama_timeout: float = Field(default=120.0, gt=0)
 
-    # -- OpenRouter -----------------------------------------------------------
-    openrouter_api_key: str | None = Field(
-        default=None, validation_alias=AliasChoices("OPENROUTER_API_KEY")
-    )
-    openrouter_models: str = Field(
-        default="openrouter/free,nvidia/nemotron-3-ultra-550b-a55b:free,nvidia/nemotron-3.5-super-vl:free,nvidia/nemotron-3.5-lightning:free,google/gemma-4-26b-a4b-it:free,google/gemma-4-31b-it:free,recursive/flint-v1.0:free,xingchen-agi/xing4.0-29b-a4b:free"
-    )
-    openrouter_base_url: str = Field(default="https://openrouter.ai/api/v1")
-    openrouter_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    openrouter_max_tokens: int | None = Field(default=None, gt=0)
-    openrouter_timeout: float = Field(default=120.0, gt=0)
-
-    # -- Ollama Cloud --------------------------------------------------------
-    ollama_cloud_api_key: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices(
-            "VIDEOAI_OLLAMA_CLOUD_API_KEY", "OLLAMA_CLOUD_API_KEY", "OLLAMA_API_KEY"
-        ),
-    )
     # -- Pollinations --------------------------------------------------------
     pollinations_api_key: str | None = Field(
         default=None,
@@ -73,42 +80,6 @@ class Settings(BaseSettings):
     hf_token: str | None = Field(
         default=None,
         validation_alias=AliasChoices("HF_TOKEN"),
-    )
-    # -- Ollama Cloud --------------------------------------------------------
-    ollama_cloud_host: str = Field(
-        default="https://ollama.com/v1",
-        validation_alias=AliasChoices("VIDEOAI_OLLAMA_CLOUD_HOST", "OLLAMA_CLOUD_HOST"),
-    )
-    ollama_cloud_models: str = Field(
-        default="gemma4:31b,gpt-oss:120b,gpt-oss:20b,nemotron-3-nano:30b,nemotron-3-super,nemotron-3-ultra",
-        validation_alias=AliasChoices("VIDEOAI_OLLAMA_CLOUD_MODELS", "OLLAMA_CLOUD_MODELS"),
-    )
-    ollama_cloud_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    ollama_cloud_max_tokens: int | None = Field(default=None, gt=0)
-    ollama_cloud_timeout: float = Field(default=120.0, gt=0)
-    ollama_cloud_fallback_to_local: bool = Field(default=True)
-
-    # -- Groq ---------------------------------------------------------------
-    groq_model: str = Field(default="openai/gpt-oss-120b")
-    groq_base_url: str = Field(default="https://api.groq.com/openai/v1")
-    groq_temperature: float = Field(default=0.7, ge=0.0, le=2.0)
-    groq_max_tokens: int | None = Field(default=None, gt=0)
-    groq_timeout: float = Field(default=120.0, gt=0)
-    groq_key_mode: Literal["single", "pool"] = Field(default="pool")
-    groq_api_key: str | None = Field(
-        default=None, validation_alias=AliasChoices("GROQ_API_KEY")
-    )
-    groq_api_key_first: str | None = Field(
-        default=None, validation_alias=AliasChoices("GROQ_API_KEY_FIRST")
-    )
-    groq_api_key_second: str | None = Field(
-        default=None, validation_alias=AliasChoices("GROQ_API_KEY_SECOND")
-    )
-    groq_api_key_third: str | None = Field(
-        default=None, validation_alias=AliasChoices("GROQ_API_KEY_THIRD")
-    )
-    groq_api_key_fourth: str | None = Field(
-        default=None, validation_alias=AliasChoices("GROQ_API_KEY_FOURTH")
     )
 
     # -- Reliability --------------------------------------------------------
@@ -159,6 +130,15 @@ class Settings(BaseSettings):
     asset_thumb_width: int = Field(default=1280, gt=0)
     asset_min_score: int = Field(default=1, ge=1, le=9)
     asset_judge: str = Field(default="d3", validation_alias=AliasChoices("ASSET_JUDGE"))
+    # "llm": the ollama_asset_model decides which candidate image goes into
+    # which sentence (CLIP only pre-filters); "ask": d3-style yes/no decision
+    # model via ollama_decision_model; "clip": pure CLIP scoring.
+    asset_sentence_chooser: str = Field(
+        default="llm",
+        validation_alias=AliasChoices(
+            "VIDEOAI_ASSET_SENTENCE_CHOOSER", "ASSET_SENTENCE_CHOOSER"
+        ),
+    )
 
     # -- Caching / output ---------------------------------------------------
     cache_enabled: bool = Field(default=True)
@@ -225,25 +205,6 @@ class Settings(BaseSettings):
         default=False,
         validation_alias=AliasChoices("AUTO_PUBLISH"),
     )
-
-    @property
-    def groq_api_keys(self) -> list[str]:
-        """The Groq keys to use, in rotation order.
-
-        ``pool`` mode prefers the numbered ``GROQ_API_KEY_*`` keys and falls
-        back to ``GROQ_API_KEY``; ``single`` mode uses only ``GROQ_API_KEY``.
-        """
-
-        if self.groq_key_mode == "single":
-            return [self.groq_api_key] if self.groq_api_key else []
-        candidates = [
-            self.groq_api_key_first,
-            self.groq_api_key_second,
-            self.groq_api_key_third,
-            self.groq_api_key_fourth,
-            self.groq_api_key,
-        ]
-        return [key for key in candidates if key]
 
 
 @lru_cache

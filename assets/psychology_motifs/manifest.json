@@ -1,0 +1,1226 @@
+{
+  "generated_at": 1794364816.147721,
+  "style": "dark cinematic noir psychological thriller, 9:16 vertical, near-black gradient, heavy vignette, film grain, centered subject, high contrast, shallow depth of field, colored accent rim light (cyan/amber/magenta), photorealistic 8k, no text, no watermark, no logos, original composition, unsettling atmosphere",
+  "resolution": "1080x1920",
+  "model": "flux",
+  "categories": {
+    "archetypes": {
+      "description": "",
+      "count": 20,
+      "images": [
+        {
+          "id": "arch_01",
+          "filename": "arch_01.png",
+          "usage": "Use for: archetypes - arch_01"
+        },
+        {
+          "id": "arch_02",
+          "filename": "arch_02.png",
+          "usage": "Use for: archetypes - arch_02"
+        },
+        {
+          "id": "arch_03",
+          "filename": "arch_03.png",
+          "usage": "Use for: archetypes - arch_03"
+        },
+        {
+          "id": "arch_04",
+          "filename": "arch_04.png",
+          "usage": "Use for: archetypes - arch_04"
+        },
+        {
+          "id": "arch_05",
+          "filename": "arch_05.png",
+          "usage": "Use for: archetypes - arch_05"
+        },
+        {
+          "id": "arch_06",
+          "filename": "arch_06.png",
+          "usage": "Use for: archetypes - arch_06"
+        },
+        {
+          "id": "arch_07",
+          "filename": "arch_07.png",
+          "usage": "Use for: archetypes - arch_07"
+        },
+        {
+          "id": "arch_08",
+          "filename": "arch_08.png",
+          "usage": "Use for: archetypes - arch_08"
+        },
+        {
+          "id": "arch_09",
+          "filename": "arch_09.png",
+          "usage": "Use for: archetypes - arch_09"
+        },
+        {
+          "id": "arch_10",
+          "filename": "arch_10.png",
+          "usage": "Use for: archetypes - arch_10"
+        },
+        {
+          "id": "arch_11",
+          "filename": "arch_11.png",
+          "usage": "Use for: archetypes - arch_11"
+        },
+        {
+          "id": "arch_12",
+          "filename": "arch_12.png",
+          "usage": "Use for: archetypes - arch_12"
+        },
+        {
+          "id": "arch_13",
+          "filename": "arch_13.png",
+          "usage": "Use for: archetypes - arch_13"
+        },
+        {
+          "id": "arch_14",
+          "filename": "arch_14.png",
+          "usage": "Use for: archetypes - arch_14"
+        },
+        {
+          "id": "arch_15",
+          "filename": "arch_15.png",
+          "usage": "Use for: archetypes - arch_15"
+        },
+        {
+          "id": "arch_16",
+          "filename": "arch_16.png",
+          "usage": "Use for: archetypes - arch_16"
+        },
+        {
+          "id": "arch_17",
+          "filename": "arch_17.png",
+          "usage": "Use for: archetypes - arch_17"
+        },
+        {
+          "id": "arch_18",
+          "filename": "arch_18.png",
+          "usage": "Use for: archetypes - arch_18"
+        },
+        {
+          "id": "arch_19",
+          "filename": "arch_19.png",
+          "usage": "Use for: archetypes - arch_19"
+        },
+        {
+          "id": "arch_20",
+          "filename": "arch_20.png",
+          "usage": "Use for: archetypes - arch_20"
+        }
+      ]
+    },
+    "body_language": {
+      "description": "Body language, power dynamics, postures, gestures",
+      "count": 1,
+      "images": [
+        {
+          "id": "body_20",
+          "filename": "body_20.png",
+          "usage": "Use for: body_language - body_20"
+        }
+      ]
+    },
+    "characters_archetypes": {
+      "description": "Societal archetypes - politicians, CEOs, healers, tricksters, tyrants, nurturers, scapegoats, survivors",
+      "count": 25,
+      "images": [
+        {
+          "id": "arch_01",
+          "filename": "arch_01.png",
+          "usage": "Use for: characters_archetypes - arch_01"
+        },
+        {
+          "id": "arch_02",
+          "filename": "arch_02.png",
+          "usage": "Use for: characters_archetypes - arch_02"
+        },
+        {
+          "id": "arch_03",
+          "filename": "arch_03.png",
+          "usage": "Use for: characters_archetypes - arch_03"
+        },
+        {
+          "id": "arch_04",
+          "filename": "arch_04.png",
+          "usage": "Use for: characters_archetypes - arch_04"
+        },
+        {
+          "id": "arch_05",
+          "filename": "arch_05.png",
+          "usage": "Use for: characters_archetypes - arch_05"
+        },
+        {
+          "id": "arch_06",
+          "filename": "arch_06.png",
+          "usage": "Use for: characters_archetypes - arch_06"
+        },
+        {
+          "id": "arch_07",
+          "filename": "arch_07.png",
+          "usage": "Use for: characters_archetypes - arch_07"
+        },
+        {
+          "id": "arch_08",
+          "filename": "arch_08.png",
+          "usage": "Use for: characters_archetypes - arch_08"
+        },
+        {
+          "id": "arch_09",
+          "filename": "arch_09.png",
+          "usage": "Use for: characters_archetypes - arch_09"
+        },
+        {
+          "id": "arch_10",
+          "filename": "arch_10.png",
+          "usage": "Use for: characters_archetypes - arch_10"
+        },
+        {
+          "id": "arch_11",
+          "filename": "arch_11.png",
+          "usage": "Use for: characters_archetypes - arch_11"
+        },
+        {
+          "id": "arch_12",
+          "filename": "arch_12.png",
+          "usage": "Use for: characters_archetypes - arch_12"
+        },
+        {
+          "id": "arch_13",
+          "filename": "arch_13.png",
+          "usage": "Use for: characters_archetypes - arch_13"
+        },
+        {
+          "id": "arch_14",
+          "filename": "arch_14.png",
+          "usage": "Use for: characters_archetypes - arch_14"
+        },
+        {
+          "id": "arch_15",
+          "filename": "arch_15.png",
+          "usage": "Use for: characters_archetypes - arch_15"
+        },
+        {
+          "id": "arch_16",
+          "filename": "arch_16.png",
+          "usage": "Use for: characters_archetypes - arch_16"
+        },
+        {
+          "id": "arch_17",
+          "filename": "arch_17.png",
+          "usage": "Use for: characters_archetypes - arch_17"
+        },
+        {
+          "id": "arch_18",
+          "filename": "arch_18.png",
+          "usage": "Use for: characters_archetypes - arch_18"
+        },
+        {
+          "id": "arch_19",
+          "filename": "arch_19.png",
+          "usage": "Use for: characters_archetypes - arch_19"
+        },
+        {
+          "id": "arch_20",
+          "filename": "arch_20.png",
+          "usage": "Use for: characters_archetypes - arch_20"
+        },
+        {
+          "id": "arch_21",
+          "filename": "arch_21.png",
+          "usage": "Use for: characters_archetypes - arch_21"
+        },
+        {
+          "id": "arch_22",
+          "filename": "arch_22.png",
+          "usage": "Use for: characters_archetypes - arch_22"
+        },
+        {
+          "id": "arch_23",
+          "filename": "arch_23.png",
+          "usage": "Use for: characters_archetypes - arch_23"
+        },
+        {
+          "id": "arch_24",
+          "filename": "arch_24.png",
+          "usage": "Use for: characters_archetypes - arch_24"
+        },
+        {
+          "id": "arch_25",
+          "filename": "arch_25.png",
+          "usage": "Use for: characters_archetypes - arch_25"
+        }
+      ]
+    },
+    "crowd_scenes": {
+      "description": "Crowd scenarios - protests, queues, rallies, shops, festivals, evacuations, voting lines",
+      "count": 20,
+      "images": [
+        {
+          "id": "crowd_01",
+          "filename": "crowd_01.png",
+          "usage": "Use for: crowd_scenes - crowd_01"
+        },
+        {
+          "id": "crowd_02",
+          "filename": "crowd_02.png",
+          "usage": "Use for: crowd_scenes - crowd_02"
+        },
+        {
+          "id": "crowd_03",
+          "filename": "crowd_03.png",
+          "usage": "Use for: crowd_scenes - crowd_03"
+        },
+        {
+          "id": "crowd_04",
+          "filename": "crowd_04.png",
+          "usage": "Use for: crowd_scenes - crowd_04"
+        },
+        {
+          "id": "crowd_05",
+          "filename": "crowd_05.png",
+          "usage": "Use for: crowd_scenes - crowd_05"
+        },
+        {
+          "id": "crowd_06",
+          "filename": "crowd_06.png",
+          "usage": "Use for: crowd_scenes - crowd_06"
+        },
+        {
+          "id": "crowd_07",
+          "filename": "crowd_07.png",
+          "usage": "Use for: crowd_scenes - crowd_07"
+        },
+        {
+          "id": "crowd_08",
+          "filename": "crowd_08.png",
+          "usage": "Use for: crowd_scenes - crowd_08"
+        },
+        {
+          "id": "crowd_09",
+          "filename": "crowd_09.png",
+          "usage": "Use for: crowd_scenes - crowd_09"
+        },
+        {
+          "id": "crowd_10",
+          "filename": "crowd_10.png",
+          "usage": "Use for: crowd_scenes - crowd_10"
+        },
+        {
+          "id": "crowd_11",
+          "filename": "crowd_11.png",
+          "usage": "Use for: crowd_scenes - crowd_11"
+        },
+        {
+          "id": "crowd_12",
+          "filename": "crowd_12.png",
+          "usage": "Use for: crowd_scenes - crowd_12"
+        },
+        {
+          "id": "crowd_13",
+          "filename": "crowd_13.png",
+          "usage": "Use for: crowd_scenes - crowd_13"
+        },
+        {
+          "id": "crowd_14",
+          "filename": "crowd_14.png",
+          "usage": "Use for: crowd_scenes - crowd_14"
+        },
+        {
+          "id": "crowd_15",
+          "filename": "crowd_15.png",
+          "usage": "Use for: crowd_scenes - crowd_15"
+        },
+        {
+          "id": "crowd_16",
+          "filename": "crowd_16.png",
+          "usage": "Use for: crowd_scenes - crowd_16"
+        },
+        {
+          "id": "crowd_17",
+          "filename": "crowd_17.png",
+          "usage": "Use for: crowd_scenes - crowd_17"
+        },
+        {
+          "id": "crowd_18",
+          "filename": "crowd_18.png",
+          "usage": "Use for: crowd_scenes - crowd_18"
+        },
+        {
+          "id": "crowd_19",
+          "filename": "crowd_19.png",
+          "usage": "Use for: crowd_scenes - crowd_19"
+        },
+        {
+          "id": "crowd_20",
+          "filename": "crowd_20.png",
+          "usage": "Use for: crowd_scenes - crowd_20"
+        }
+      ]
+    },
+    "environments": {
+      "description": "Environments, rooms, architectural spaces",
+      "count": 20,
+      "images": [
+        {
+          "id": "env_01",
+          "filename": "env_01.png",
+          "usage": "Use for: environments - env_01"
+        },
+        {
+          "id": "env_02",
+          "filename": "env_02.png",
+          "usage": "Use for: environments - env_02"
+        },
+        {
+          "id": "env_03",
+          "filename": "env_03.png",
+          "usage": "Use for: environments - env_03"
+        },
+        {
+          "id": "env_04",
+          "filename": "env_04.png",
+          "usage": "Use for: environments - env_04"
+        },
+        {
+          "id": "env_05",
+          "filename": "env_05.png",
+          "usage": "Use for: environments - env_05"
+        },
+        {
+          "id": "env_06",
+          "filename": "env_06.png",
+          "usage": "Use for: environments - env_06"
+        },
+        {
+          "id": "env_07",
+          "filename": "env_07.png",
+          "usage": "Use for: environments - env_07"
+        },
+        {
+          "id": "env_08",
+          "filename": "env_08.png",
+          "usage": "Use for: environments - env_08"
+        },
+        {
+          "id": "env_09",
+          "filename": "env_09.png",
+          "usage": "Use for: environments - env_09"
+        },
+        {
+          "id": "env_10",
+          "filename": "env_10.png",
+          "usage": "Use for: environments - env_10"
+        },
+        {
+          "id": "env_11",
+          "filename": "env_11.png",
+          "usage": "Use for: environments - env_11"
+        },
+        {
+          "id": "env_12",
+          "filename": "env_12.png",
+          "usage": "Use for: environments - env_12"
+        },
+        {
+          "id": "env_13",
+          "filename": "env_13.png",
+          "usage": "Use for: environments - env_13"
+        },
+        {
+          "id": "env_14",
+          "filename": "env_14.png",
+          "usage": "Use for: environments - env_14"
+        },
+        {
+          "id": "env_15",
+          "filename": "env_15.png",
+          "usage": "Use for: environments - env_15"
+        },
+        {
+          "id": "env_16",
+          "filename": "env_16.png",
+          "usage": "Use for: environments - env_16"
+        },
+        {
+          "id": "env_17",
+          "filename": "env_17.png",
+          "usage": "Use for: environments - env_17"
+        },
+        {
+          "id": "env_18",
+          "filename": "env_18.png",
+          "usage": "Use for: environments - env_18"
+        },
+        {
+          "id": "env_19",
+          "filename": "env_19.png",
+          "usage": "Use for: environments - env_19"
+        },
+        {
+          "id": "env_20",
+          "filename": "env_20.png",
+          "usage": "Use for: environments - env_20"
+        }
+      ]
+    },
+    "face_expressions": {
+      "description": "Facial expressions - both men and women, micro-expressions, stares, skepticism, realization, manipulation",
+      "count": 20,
+      "images": [
+        {
+          "id": "face_01",
+          "filename": "face_01.png",
+          "usage": "Use for: face_expressions - face_01"
+        },
+        {
+          "id": "face_02",
+          "filename": "face_02.png",
+          "usage": "Use for: face_expressions - face_02"
+        },
+        {
+          "id": "face_03",
+          "filename": "face_03.png",
+          "usage": "Use for: face_expressions - face_03"
+        },
+        {
+          "id": "face_04",
+          "filename": "face_04.png",
+          "usage": "Use for: face_expressions - face_04"
+        },
+        {
+          "id": "face_05",
+          "filename": "face_05.png",
+          "usage": "Use for: face_expressions - face_05"
+        },
+        {
+          "id": "face_06",
+          "filename": "face_06.png",
+          "usage": "Use for: face_expressions - face_06"
+        },
+        {
+          "id": "face_07",
+          "filename": "face_07.png",
+          "usage": "Use for: face_expressions - face_07"
+        },
+        {
+          "id": "face_08",
+          "filename": "face_08.png",
+          "usage": "Use for: face_expressions - face_08"
+        },
+        {
+          "id": "face_09",
+          "filename": "face_09.png",
+          "usage": "Use for: face_expressions - face_09"
+        },
+        {
+          "id": "face_10",
+          "filename": "face_10.png",
+          "usage": "Use for: face_expressions - face_10"
+        },
+        {
+          "id": "face_11",
+          "filename": "face_11.png",
+          "usage": "Use for: face_expressions - face_11"
+        },
+        {
+          "id": "face_12",
+          "filename": "face_12.png",
+          "usage": "Use for: face_expressions - face_12"
+        },
+        {
+          "id": "face_13",
+          "filename": "face_13.png",
+          "usage": "Use for: face_expressions - face_13"
+        },
+        {
+          "id": "face_14",
+          "filename": "face_14.png",
+          "usage": "Use for: face_expressions - face_14"
+        },
+        {
+          "id": "face_15",
+          "filename": "face_15.png",
+          "usage": "Use for: face_expressions - face_15"
+        },
+        {
+          "id": "face_16",
+          "filename": "face_16.png",
+          "usage": "Use for: face_expressions - face_16"
+        },
+        {
+          "id": "face_17",
+          "filename": "face_17.png",
+          "usage": "Use for: face_expressions - face_17"
+        },
+        {
+          "id": "face_18",
+          "filename": "face_18.png",
+          "usage": "Use for: face_expressions - face_18"
+        },
+        {
+          "id": "face_19",
+          "filename": "face_19.png",
+          "usage": "Use for: face_expressions - face_19"
+        },
+        {
+          "id": "face_20",
+          "filename": "face_20.png",
+          "usage": "Use for: face_expressions - face_20"
+        }
+      ]
+    },
+    "healing_recovery": {
+      "description": "Recovery, integration, growth, recovery symbols",
+      "count": 20,
+      "images": [
+        {
+          "id": "heal_01",
+          "filename": "heal_01.png",
+          "usage": "Use for: healing_recovery - heal_01"
+        },
+        {
+          "id": "heal_02",
+          "filename": "heal_02.png",
+          "usage": "Use for: healing_recovery - heal_02"
+        },
+        {
+          "id": "heal_03",
+          "filename": "heal_03.png",
+          "usage": "Use for: healing_recovery - heal_03"
+        },
+        {
+          "id": "heal_04",
+          "filename": "heal_04.png",
+          "usage": "Use for: healing_recovery - heal_04"
+        },
+        {
+          "id": "heal_05",
+          "filename": "heal_05.png",
+          "usage": "Use for: healing_recovery - heal_05"
+        },
+        {
+          "id": "heal_06",
+          "filename": "heal_06.png",
+          "usage": "Use for: healing_recovery - heal_06"
+        },
+        {
+          "id": "heal_07",
+          "filename": "heal_07.png",
+          "usage": "Use for: healing_recovery - heal_07"
+        },
+        {
+          "id": "heal_08",
+          "filename": "heal_08.png",
+          "usage": "Use for: healing_recovery - heal_08"
+        },
+        {
+          "id": "heal_09",
+          "filename": "heal_09.png",
+          "usage": "Use for: healing_recovery - heal_09"
+        },
+        {
+          "id": "heal_10",
+          "filename": "heal_10.png",
+          "usage": "Use for: healing_recovery - heal_10"
+        },
+        {
+          "id": "heal_11",
+          "filename": "heal_11.png",
+          "usage": "Use for: healing_recovery - heal_11"
+        },
+        {
+          "id": "heal_12",
+          "filename": "heal_12.png",
+          "usage": "Use for: healing_recovery - heal_12"
+        },
+        {
+          "id": "heal_13",
+          "filename": "heal_13.png",
+          "usage": "Use for: healing_recovery - heal_13"
+        },
+        {
+          "id": "heal_14",
+          "filename": "heal_14.png",
+          "usage": "Use for: healing_recovery - heal_14"
+        },
+        {
+          "id": "heal_15",
+          "filename": "heal_15.png",
+          "usage": "Use for: healing_recovery - heal_15"
+        },
+        {
+          "id": "heal_16",
+          "filename": "heal_16.png",
+          "usage": "Use for: healing_recovery - heal_16"
+        },
+        {
+          "id": "heal_17",
+          "filename": "heal_17.png",
+          "usage": "Use for: healing_recovery - heal_17"
+        },
+        {
+          "id": "heal_18",
+          "filename": "heal_18.png",
+          "usage": "Use for: healing_recovery - heal_18"
+        },
+        {
+          "id": "heal_19",
+          "filename": "heal_19.png",
+          "usage": "Use for: healing_recovery - heal_19"
+        },
+        {
+          "id": "heal_20",
+          "filename": "heal_20.png",
+          "usage": "Use for: healing_recovery - heal_20"
+        }
+      ]
+    },
+    "manipulation_tactics": {
+      "description": "Control mechanisms, manipulation, gaslighting, tactics",
+      "count": 21,
+      "images": [
+        {
+          "id": "manip_01",
+          "filename": "manip_01.png",
+          "usage": "Use for: manipulation_tactics - manip_01"
+        },
+        {
+          "id": "manip_02",
+          "filename": "manip_02.png",
+          "usage": "Use for: manipulation_tactics - manip_02"
+        },
+        {
+          "id": "manip_03",
+          "filename": "manip_03.png",
+          "usage": "Use for: manipulation_tactics - manip_03"
+        },
+        {
+          "id": "manip_04",
+          "filename": "manip_04.png",
+          "usage": "Use for: manipulation_tactics - manip_04"
+        },
+        {
+          "id": "manip_05",
+          "filename": "manip_05.png",
+          "usage": "Use for: manipulation_tactics - manip_05"
+        },
+        {
+          "id": "manip_06",
+          "filename": "manip_06.png",
+          "usage": "Use for: manipulation_tactics - manip_06"
+        },
+        {
+          "id": "manip_07",
+          "filename": "manip_07.png",
+          "usage": "Use for: manipulation_tactics - manip_07"
+        },
+        {
+          "id": "manip_08",
+          "filename": "manip_08.png",
+          "usage": "Use for: manipulation_tactics - manip_08"
+        },
+        {
+          "id": "manip_09",
+          "filename": "manip_09.png",
+          "usage": "Use for: manipulation_tactics - manip_09"
+        },
+        {
+          "id": "manip_10",
+          "filename": "manip_10.png",
+          "usage": "Use for: manipulation_tactics - manip_10"
+        },
+        {
+          "id": "manip_11",
+          "filename": "manip_11.png",
+          "usage": "Use for: manipulation_tactics - manip_11"
+        },
+        {
+          "id": "manip_12",
+          "filename": "manip_12.png",
+          "usage": "Use for: manipulation_tactics - manip_12"
+        },
+        {
+          "id": "manip_13",
+          "filename": "manip_13.png",
+          "usage": "Use for: manipulation_tactics - manip_13"
+        },
+        {
+          "id": "manip_14",
+          "filename": "manip_14.png",
+          "usage": "Use for: manipulation_tactics - manip_14"
+        },
+        {
+          "id": "manip_15",
+          "filename": "manip_15.png",
+          "usage": "Use for: manipulation_tactics - manip_15"
+        },
+        {
+          "id": "manip_16",
+          "filename": "manip_16.png",
+          "usage": "Use for: manipulation_tactics - manip_16"
+        },
+        {
+          "id": "manip_16b",
+          "filename": "manip_16b.png",
+          "usage": "Use for: manipulation_tactics - manip_16b"
+        },
+        {
+          "id": "manip_17",
+          "filename": "manip_17.png",
+          "usage": "Use for: manipulation_tactics - manip_17"
+        },
+        {
+          "id": "manip_18",
+          "filename": "manip_18.png",
+          "usage": "Use for: manipulation_tactics - manip_18"
+        },
+        {
+          "id": "manip_19",
+          "filename": "manip_19.png",
+          "usage": "Use for: manipulation_tactics - manip_19"
+        },
+        {
+          "id": "manip_20",
+          "filename": "manip_20.png",
+          "usage": "Use for: manipulation_tactics - manip_20"
+        }
+      ]
+    },
+    "societal_diagrams": {
+      "description": "Data visualizations - inequality, discrimination, politics, economics, both genders",
+      "count": 31,
+      "images": [
+        {
+          "id": "diag_01",
+          "name": "Income inequality pyramid",
+          "description": "Wealth pyramid: tiny top 1% glowing gold, massive base struggling, stark divide",
+          "filename": "diag_01.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_02",
+          "name": "Wealth distribution chart",
+          "description": "Bar chart: 1% owns 50% wealth, 90% fights for crumbs, logarithmic scale",
+          "filename": "diag_02.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_03",
+          "name": "Gender pay gap visual",
+          "description": "Two identical workers, male getting full dollar, female getting 82 cents",
+          "filename": "diag_03.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_04",
+          "name": "Racial wealth gap",
+          "description": "Generational wealth transfer: white family compounding, Black family reset to zero",
+          "filename": "diag_04.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_05",
+          "name": "Political polarization",
+          "description": "Two circles drifting apart, overlap shrinking, 'us vs them' polarization",
+          "filename": "diag_05.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_06",
+          "name": "Media ownership concentration",
+          "description": "Network diagram: 6 corporations owning 90% media, arrows to outlets",
+          "filename": "diag_06.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_07",
+          "name": "Lobbying money flow",
+          "description": "Money pipe from corporations to politicians, legislation output, corruption cycle",
+          "filename": "diag_07.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_08",
+          "name": "School-to-prison pipeline",
+          "description": "Flowchart: underfunded schools \u2192 zero tolerance \u2192 juvenile detention \u2192 adult prison",
+          "filename": "diag_08.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_09",
+          "name": "Housing cost vs wage",
+          "description": "Diverging lines: housing costs exponential, wages flat, gap widening",
+          "filename": "diag_09.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_10",
+          "name": "Healthcare access map",
+          "description": "Map: dark areas = no hospitals, bright = elite care, zip code determines lifespan",
+          "filename": "diag_10.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_11",
+          "name": "Algorithmic bias",
+          "description": "Facial recognition: white male 99% accurate, Black female 65%, discrimination coded",
+          "filename": "diag_11.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_12",
+          "name": "Climate justice",
+          "description": "Map: Global North emissions, Global South consequences, inverted responsibility",
+          "filename": "diag_12.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_13",
+          "name": "Union membership decline",
+          "description": "Line graph: union density falling 1950-present, wages stagnating in parallel",
+          "filename": "diag_13.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_14",
+          "name": "Student debt crisis",
+          "description": "Ballooning debt bubble, degrees devaluing, generation delayed adulthood",
+          "filename": "diag_14.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_15",
+          "name": "Retirement insecurity",
+          "description": "Three-legged stool broken: pension gone, Social Security threatened, 401k gambling",
+          "filename": "diag_15.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_16",
+          "name": "Digital divide",
+          "description": "Split screen: high-speed fiber vs no internet, education/opportunity gap",
+          "filename": "diag_16.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_17",
+          "name": "Food desert map",
+          "description": "Map: green = fresh food, red = only convenience stores, nutrition by zip code",
+          "filename": "diag_17.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_18",
+          "name": "Maternal mortality race",
+          "description": "Bar chart: Black women 3x mortality rate, systemic bias in healthcare",
+          "filename": "diag_18.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_19",
+          "name": "Mass incarceration",
+          "description": "Bar chart: US 4% world population, 25% prisoners, racial disproportionality",
+          "filename": "diag_19.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_20",
+          "name": "Surveillance capitalism",
+          "description": "Data flow: every click \u2192 profile \u2192 prediction \u2192 behavior modification \u2192 profit",
+          "filename": "diag_20.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_21",
+          "name": "Generational wealth transfer",
+          "description": "Family tree: compounding assets vs starting from zero each generation",
+          "filename": "diag_21.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_22",
+          "name": "Corporate tax avoidance",
+          "description": "Flowchart: profits \u2192 tax havens \u2192 public services starved \u2192 inequality",
+          "filename": "diag_22.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_23",
+          "name": "Disability employment gap",
+          "description": "Chart: employment rate by disability status, systemic barriers visualized",
+          "filename": "diag_23.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_24",
+          "name": "LGBTQ+ rights patchwork",
+          "description": "Map: rights vary by state/country, human rights as geography lottery",
+          "filename": "diag_24.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_25",
+          "name": "Ageism in hiring",
+          "description": "Resume stack: 'overqualified' stamp on 50+, 'lacks experience' on 20s",
+          "filename": "diag_25.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_26",
+          "name": "Rent burden crisis",
+          "description": "Heat map: % income to rent, red zones = 50%+ income, working homeless",
+          "filename": "diag_26.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_27",
+          "name": "Police violence disparity",
+          "description": "Chart: deaths per capita by race, unarmed, accountability near zero",
+          "filename": "diag_27.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_28",
+          "name": "Voter suppression map",
+          "description": "Map: polling places closed, ID laws, gerrymandered districts, democracy erosion",
+          "filename": "diag_28.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_29",
+          "name": "Pharma pricing",
+          "description": "Graph: R&D cost vs price markup, insulin $6 to make $300 to buy",
+          "filename": "diag_29.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_29b",
+          "name": "Mental health access",
+          "description": "Map: therapist deserts, insurance barriers, crisis lines overwhelmed",
+          "filename": "diag_29b.png",
+          "category": "societal_diagrams"
+        },
+        {
+          "id": "diag_30",
+          "name": "Intersectionality matrix",
+          "description": "Venn diagram: race \u00d7 gender \u00d7 class \u00d7 sexuality = compounding disadvantage",
+          "filename": "diag_30.png",
+          "category": "societal_diagrams"
+        }
+      ]
+    },
+    "surveillance_tech": {
+      "description": "CCTV, thermal, biometric, monitoring, tech",
+      "count": 20,
+      "images": [
+        {
+          "id": "surv_01",
+          "filename": "surv_01.png",
+          "usage": "Use for: surveillance_tech - surv_01"
+        },
+        {
+          "id": "surv_02",
+          "filename": "surv_02.png",
+          "usage": "Use for: surveillance_tech - surv_02"
+        },
+        {
+          "id": "surv_03",
+          "filename": "surv_03.png",
+          "usage": "Use for: surveillance_tech - surv_03"
+        },
+        {
+          "id": "surv_04",
+          "filename": "surv_04.png",
+          "usage": "Use for: surveillance_tech - surv_04"
+        },
+        {
+          "id": "surv_05",
+          "filename": "surv_05.png",
+          "usage": "Use for: surveillance_tech - surv_05"
+        },
+        {
+          "id": "surv_06",
+          "filename": "surv_06.png",
+          "usage": "Use for: surveillance_tech - surv_06"
+        },
+        {
+          "id": "surv_07",
+          "filename": "surv_07.png",
+          "usage": "Use for: surveillance_tech - surv_07"
+        },
+        {
+          "id": "surv_08",
+          "filename": "surv_08.png",
+          "usage": "Use for: surveillance_tech - surv_08"
+        },
+        {
+          "id": "surv_09",
+          "filename": "surv_09.png",
+          "usage": "Use for: surveillance_tech - surv_09"
+        },
+        {
+          "id": "surv_10",
+          "filename": "surv_10.png",
+          "usage": "Use for: surveillance_tech - surv_10"
+        },
+        {
+          "id": "surv_11",
+          "filename": "surv_11.png",
+          "usage": "Use for: surveillance_tech - surv_11"
+        },
+        {
+          "id": "surv_12",
+          "filename": "surv_12.png",
+          "usage": "Use for: surveillance_tech - surv_12"
+        },
+        {
+          "id": "surv_13",
+          "filename": "surv_13.png",
+          "usage": "Use for: surveillance_tech - surv_13"
+        },
+        {
+          "id": "surv_14",
+          "filename": "surv_14.png",
+          "usage": "Use for: surveillance_tech - surv_14"
+        },
+        {
+          "id": "surv_15",
+          "filename": "surv_15.png",
+          "usage": "Use for: surveillance_tech - surv_15"
+        },
+        {
+          "id": "surv_16",
+          "filename": "surv_16.png",
+          "usage": "Use for: surveillance_tech - surv_16"
+        },
+        {
+          "id": "surv_17",
+          "filename": "surv_17.png",
+          "usage": "Use for: surveillance_tech - surv_17"
+        },
+        {
+          "id": "surv_18",
+          "filename": "surv_18.png",
+          "usage": "Use for: surveillance_tech - surv_18"
+        },
+        {
+          "id": "surv_19",
+          "filename": "surv_19.png",
+          "usage": "Use for: surveillance_tech - surv_19"
+        },
+        {
+          "id": "surv_20",
+          "filename": "surv_20.png",
+          "usage": "Use for: surveillance_tech - surv_20"
+        }
+      ]
+    },
+    "text_overlays": {
+      "description": "Typography, written text, redacted documents, overlays",
+      "count": 20,
+      "images": [
+        {
+          "id": "text_01",
+          "filename": "text_01.png",
+          "usage": "Use for: text_overlays - text_01"
+        },
+        {
+          "id": "text_02",
+          "filename": "text_02.png",
+          "usage": "Use for: text_overlays - text_02"
+        },
+        {
+          "id": "text_03",
+          "filename": "text_03.png",
+          "usage": "Use for: text_overlays - text_03"
+        },
+        {
+          "id": "text_04",
+          "filename": "text_04.png",
+          "usage": "Use for: text_overlays - text_04"
+        },
+        {
+          "id": "text_05",
+          "filename": "text_05.png",
+          "usage": "Use for: text_overlays - text_05"
+        },
+        {
+          "id": "text_06",
+          "filename": "text_06.png",
+          "usage": "Use for: text_overlays - text_06"
+        },
+        {
+          "id": "text_07",
+          "filename": "text_07.png",
+          "usage": "Use for: text_overlays - text_07"
+        },
+        {
+          "id": "text_08",
+          "filename": "text_08.png",
+          "usage": "Use for: text_overlays - text_08"
+        },
+        {
+          "id": "text_09",
+          "filename": "text_09.png",
+          "usage": "Use for: text_overlays - text_09"
+        },
+        {
+          "id": "text_10",
+          "filename": "text_10.png",
+          "usage": "Use for: text_overlays - text_10"
+        },
+        {
+          "id": "text_11",
+          "filename": "text_11.png",
+          "usage": "Use for: text_overlays - text_11"
+        },
+        {
+          "id": "text_12",
+          "filename": "text_12.png",
+          "usage": "Use for: text_overlays - text_12"
+        },
+        {
+          "id": "text_13",
+          "filename": "text_13.png",
+          "usage": "Use for: text_overlays - text_13"
+        },
+        {
+          "id": "text_14",
+          "filename": "text_14.png",
+          "usage": "Use for: text_overlays - text_14"
+        },
+        {
+          "id": "text_15",
+          "filename": "text_15.png",
+          "usage": "Use for: text_overlays - text_15"
+        },
+        {
+          "id": "text_16",
+          "filename": "text_16.png",
+          "usage": "Use for: text_overlays - text_16"
+        },
+        {
+          "id": "text_17",
+          "filename": "text_17.png",
+          "usage": "Use for: text_overlays - text_17"
+        },
+        {
+          "id": "text_18",
+          "filename": "text_18.png",
+          "usage": "Use for: text_overlays - text_18"
+        },
+        {
+          "id": "text_19",
+          "filename": "text_19.png",
+          "usage": "Use for: text_overlays - text_19"
+        },
+        {
+          "id": "text_20",
+          "filename": "text_20.png",
+          "usage": "Use for: text_overlays - text_20"
+        }
+      ]
+    }
+  }
+}

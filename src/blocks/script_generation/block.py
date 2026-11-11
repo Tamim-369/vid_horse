@@ -61,7 +61,6 @@ class ScriptGenerationBlock(Block):
         *,
         temperature: float = 0.6,
         max_attempts: int = 2,
-        race: int = 0,
         words_per_second: float = 2.5,
         chunk_size: int = 3,
         scene_count: int = 10,
@@ -74,7 +73,6 @@ class ScriptGenerationBlock(Block):
         self._llm = llm
         self._temperature = temperature
         self._max_attempts = max(1, max_attempts)
-        self._race = max(0, race)
         self._words_per_second = words_per_second
         self._chunk_size = max(1, chunk_size)
         self._scene_count = max(3, scene_count)
@@ -262,7 +260,6 @@ class ScriptGenerationBlock(Block):
             temperature=self._temperature,
             corrective=corrective_instruction,
             label="script",
-            race=self._race,
         )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 
+from blocks.concept_metaphors import CONCEPT_VISUALS, extract_concepts_from_text
 from blocks.script_engine.beats import generate_beats
 from blocks.script_engine.facts import generate_fact_sheet
 from blocks.script_engine.polish import polish_script_lines
@@ -22,6 +23,12 @@ from ingestion.retriever import RAGRetriever
 logger = logging.getLogger(__name__)
 
 BEAT_NAMES = ["hook", "situation", "mechanism", "turn", "action", "payoff"]
+
+# Asset-aware writing: the writer must pick VISUAL hints from the same
+# concept vocabulary the asset agent uses, and weaving a concept's plain
+# phrase into the narration lets the asset agent lock onto that concept.
+_CONCEPT_KEYS: list[str] = sorted(CONCEPT_VISUALS)
+_CONCEPT_KEY_BY_NORM = {k.replace("_", " "): k for k in _CONCEPT_KEYS}
 
 
 _REASONING_MARKERS = re.compile(
@@ -106,13 +113,21 @@ def _parse_scene(raw: str) -> tuple[str, str]:
     if m2:
         # keep only the first line: free models echo instructions after it
         vis = m2.group(1).strip().splitlines()[0].strip()
-        vis = re.sub(r"[*_<>`]", "", vis).strip()
-    # remove any leaked VISUAL/VISION from narration
+        # strip markdown emphasis/code marks; keep '_' (concept-key delimiter)
+        vis = re.sub(r"[*<>`]", "", vis).strip()
+    # remove any leaked VISUAL/VISION/FOMO labels from narration
     narr = re.sub(r"\s*VIS(?:UAL|ION):.*", "", narr, flags=re.I | re.S).strip()
+    narr = re.sub(r"\s*FOMO\s*:.*", "", narr, flags=re.I | re.S).strip()
     if not narr:
         narr = raw.strip()
     narr = _clean_speech(narr)
     narr = _ensure_complete(narr)
+    # a concept key (with or without underscores) is valid at any length and
+    # must be checked BEFORE _clean_speech (which strips underscores);
+    # snap it to the canonical key the asset agent knows
+    vis_key = _CONCEPT_KEY_BY_NORM.get(vis.lower().replace("_", " ").strip())
+    if vis_key is not None:
+        return narr, vis_key
     vis = _clean_speech(vis)
     # a visual is a 2-4 word image query; anything longer is leaked narration
     if len(vis.split()) > 5:
@@ -307,26 +322,47 @@ class ScriptEngineBlock:
 
         # Generate payoff first, then hook referencing it.
         payoff_beat = beats[5] if len(beats) >= 6 else beats[-1]
-        payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12, source_text=source_text)
+        payoff_raw = write_scene(self._llm, payoff_beat, fs, [], 12, source_text=source_text, concepts=_CONCEPT_KEYS)
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
         if not payoff_narr or _is_placeholder(payoff_narr):
             payoff_narr = _clean_speech(payoff_beat)
         payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
 
+        def _clean_hook(text: str) -> str:
+            """Strip JSON-like prefixes like {Question} from hook text."""
+            if not text:
+                return text
+            text = text.strip()
+            # Remove {Question} prefix and similar patterns
+            import re
+            text = re.sub(r'^\{[^}]+\}\s*', '', text)
+            text = re.sub(r'^\[[^\]]+\]\s*', '', text)
+            text = re.sub(r'^["\']\s*', '', text)
+            text = re.sub(r'\s*["\']$', '', text)
+            return text.strip()
+
         hook_beat = beats[0]
-        hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10, source_text=source_text)
+        hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10, source_text=source_text, concepts=_CONCEPT_KEYS)
         hook_narr, _hook_vis = _parse_scene(hook_raw)
+        # Clean JSON-like prefixes from hook
+        hook_narr = _clean_hook(hook_narr)
         if not hook_narr or _is_placeholder(hook_narr):
             hook_narr = _clean_speech(hook_beat)
         # hooks must be short and COMPLETE
         if len(hook_narr.split()) > 12 or _is_incomplete(hook_narr):
             logger.info("hook needs fix (len=%d incomplete=%s); retrying", len(hook_narr.split()), _is_incomplete(hook_narr))
-            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off)", fs, [payoff_narr], 10, source_text=source_text)
+            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off, NO JSON, no {Question} prefix)", fs, [payoff_narr], 10, source_text=source_text, concepts=_CONCEPT_KEYS)
             retry_narr, _retry_vis = _parse_scene(hook_raw)
+            retry_narr = _clean_hook(retry_narr)
             if retry_narr and not _is_placeholder(retry_narr) and len(retry_narr.split()) <= 14 and not _is_incomplete(retry_narr):
                 hook_narr = retry_narr
             else:
                 hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
+        
+        # Final fallback: if hook still has JSON-like content, use a simple template
+        if _is_placeholder(hook_narr) or len(hook_narr.split()) > 12 or _is_incomplete(hook_narr) or '{' in hook_narr or 'Question' in hook_narr:
+            logger.warning("Hook still invalid after retries, using fallback template")
+            hook_narr = f"Ever wonder why {fs.concept.lower()} affects us all?"
 
         # Generate middle scenes.
         middle_beats = beats[1:5]
@@ -340,7 +376,7 @@ class ScriptEngineBlock:
             vis = ""
             while attempt < self._max_scene_retries:
                 try:
-                    raw = write_scene(self._llm, beat, fs, narrations, target, source_text=source_text)
+                    raw = write_scene(self._llm, beat, fs, narrations, target, source_text=source_text, concepts=_CONCEPT_KEYS)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("scene %d write failed: %s", i, exc)
                     attempt += 1
@@ -367,7 +403,12 @@ class ScriptEngineBlock:
             if not narr or _is_placeholder(narr):
                 narr = _clean_speech(beat)
                 vis = ""
-            visual = vis or beat
+            visual = vis or ""
+            if not visual or _is_placeholder(visual):
+                # small models often skip the VISUAL line; bind the visual to
+                # the concept vocabulary the asset agent matches on
+                found = extract_concepts_from_text(narr)
+                visual = found[0] if found else beat
             if len(visual.split()) > 5:
                 visual = _visual_keywords(visual)
             if not visual or _is_placeholder(visual) or _same_text(narr, visual):

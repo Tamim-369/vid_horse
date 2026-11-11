@@ -140,9 +140,7 @@ class VoiceOver:
         if model is None:
             from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-            model = ChatterboxTurboTTS.from_pretrained(
-                device=self._device, nano=True
-            )
+            model = ChatterboxTurboTTS.from_pretrained(device=self._device)
             self._local.model = model
         return model
 

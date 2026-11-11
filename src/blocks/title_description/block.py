@@ -14,9 +14,8 @@ from .schema import TitlePack
 class TitleDescriptionBlock(Block):
     name = "title_description"
 
-    def __init__(self, llm: LLMProvider, *, race: int = 0) -> None:
+    def __init__(self, llm: LLMProvider) -> None:
         self._llm = llm
-        self._race = race
 
     def run(self, script: VideoScript, topic: str = "") -> TitlePack:
 

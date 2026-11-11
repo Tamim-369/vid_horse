@@ -165,8 +165,26 @@ def _transcribe_words(
     words: list[str] = []
     starts: list[float] = []
     ends: list[float] = []
-    metadata = torchaudio.info(str(wav))
-    audio_end = metadata.num_frames / metadata.sample_rate
+    # torchaudio >= 2.1 uses torchaudio.info, older uses torchaudio.backend
+    try:
+        metadata = torchaudio.info(str(wav))
+    except AttributeError:
+        import soundfile as sf
+        metadata = sf.info(str(wav))
+    # Handle different metadata object structures (torchaudio vs soundfile)
+    if hasattr(metadata, 'num_frames'):
+        frames = metadata.num_frames
+        rate = metadata.sample_rate
+    elif hasattr(metadata, 'frames'):
+        frames = metadata.frames
+        rate = metadata.samplerate
+    elif isinstance(metadata, tuple) and len(metadata) >= 2:
+        frames = metadata[0]
+        rate = metadata[1]
+    else:
+        frames = 0
+        rate = 1
+    audio_end = frames / rate
     seen: list[str] = []
     accepted_end = 0.0
     for segment in segments:

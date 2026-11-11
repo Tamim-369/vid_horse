@@ -30,6 +30,7 @@ class OllamaProvider(BaseLLMProvider):
         model: str,
         host: str = "http://localhost:11434",
         num_ctx: int = 4096,
+        num_thread: int | None = None,
         temperature: float = 0.7,
         max_tokens: int | None = None,
         repeat_penalty: float = 1.3,
@@ -49,6 +50,7 @@ class OllamaProvider(BaseLLMProvider):
         )
         self._host = host
         self._num_ctx = num_ctx
+        self._num_thread = num_thread
         self._repeat_penalty = repeat_penalty
         self._repeat_last_n = repeat_last_n
         self._keep_alive = keep_alive
@@ -73,6 +75,10 @@ class OllamaProvider(BaseLLMProvider):
     ) -> str:
         chat_options = {key: value for key, value in options.items() if key != "model"}
         chat_options["num_ctx"] = self._num_ctx
+        if self._num_thread:
+            # cap CPU threads: an all-core burst trips thermal shutdown on
+            # a laptop with degraded cooling
+            chat_options["num_thread"] = self._num_thread
         chat_options["repeat_penalty"] = self._repeat_penalty
         chat_options["repeat_last_n"] = self._repeat_last_n
 

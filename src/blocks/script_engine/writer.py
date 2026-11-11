@@ -11,24 +11,41 @@ from core.models import FactSheet
 logger = logging.getLogger(__name__)
 
 SYSTEM = (
-    "You write ONE short-form scene of a mini-lesson teaching a real book's "
-    "idea. You are a sharp, calm dark-psychology teacher talking to ONE smart "
-    "viewer. Voice: clear-eyed, a little unsettling because you see the "
-    "pattern plainly — like someone quietly pointing out the trap before it "
-    "snaps. Never theatrical, never a horror narrator. Grim honesty, simple "
-    "words. Spoken aloud: short, natural sentences, one idea per scene. "
-    "You may draw on the book's ideas and phrasing (this lesson teaches that "
-    "book), but rewrite for speech — no dense archaic sentences read aloud "
-    "verbatim. Do not drift to internet-psychology clichés not in the "
-    "provided facts. "
-    "Every sentence must be COMPLETE — no trailing off, no fragments, no "
-    "unfinished thoughts (never end on 'when...', 'and you...', 'because...'). "
-    "Use concrete everyday examples with generic roles (a colleague, a "
-    "bystander, a friend, someone) — NEVER personal names. "
-    "No headings, no bullets, no quotes. Second person 'you/your' only; NEVER "
-    "'I/me/my/we/us/our'. Assets assigned separately — VISUAL is only a hint. "
-    "Output only narration and a VISUAL line.\n"
-    "    VISUAL: (hint, 2 words)"
+    "You write ONE short-form scene of a dark-psychology video built on a "
+    "real book's idea. You talk to ONE viewer. Your goal is FOMO: the "
+    "viewer must feel they NEED to know this or they are missing out while "
+    "other people quietly use these tricks on them. "
+    "The dark power is in WHAT you say and HOW you say it — not in fancy "
+    "words. HARD RULE: small everyday words, short sentences, one idea per "
+    "sentence, no complex sentence structures. No semicolons, no nested "
+    "clauses, no em-dash chains. Say the uncomfortable thing calmly, like "
+    "someone showing the viewer the strings other people pull on them. "
+    "Never theatrical, never a horror narrator, never hype. "
+    "REAL-WORLD EXAMPLES: ground scenes in real, well-known psychology — "
+    "named experiments, common practices, or events (e.g. Milgram's "
+    "obedience experiments, Asch's conformity lines, the Stanford prison "
+    "experiment, door-to-door foot-in-the-door sales, cult love-bombing, "
+    "hotel-towel social-proof signs). Describe them in simple words. NEVER "
+    "invent statistics, percentages, or exact numbers; say any number in "
+    "plain words the source supports or drop the number. Never say "
+    "'studies show' or 'research shows'. "
+    "Every sentence must be COMPLETE — no trailing off, no fragments "
+    "(never end on 'when...', 'and you...', 'because...'). Never end a "
+    "line on a filler tag like 'watch', 'notice', 'beware', 'stay alert'. "
+    "Second person 'you/your' only; NEVER 'I/me/my/we/us/our'. No headings, "
+    "no bullets, no quotes. Assets are assigned separately.\n"
+    "OUTPUT CONTRACT: output EXACTLY two lines, nothing else —\n"
+    "NARRATION: <the spoken text>\n"
+    "VISUAL: <one concept key>\n"
+    "Never output any other label or field (no 'FOMO:', no 'HOOK:', no "
+    "'SCENE:', no 'GOAL:'). The words 'fear of missing out' belong inside "
+    "the narration only if they fit it naturally.\n"
+    "VISUAL RULE (REQUIRED): the last line is 'VISUAL: ' plus ONE concept "
+    "key copied from the provided concept list — the key whose image best "
+    "fits this scene. A reply without a VISUAL line is a failure. When it "
+    "fits naturally, also use the concept's plain phrase inside the "
+    "narration (e.g. 'social proof', 'foot in the door', 'gaslighting', "
+    "'missing out')."
 )
 
 
@@ -39,15 +56,21 @@ def write_scene(
     previous: list[str],
     target_words: int,
     source_text: str = "",
+    concepts: list[str] | None = None,
 ) -> str:
     prev = "\n".join(previous) if previous else "(none)"
     source = ""
     if source_text:
         source = (
-            "\nSOURCE BOOK EXCERPT (draw the scene's language and idea from "
-            "this; say what it says, in your own speaking voice):\n"
+            "\nSOURCE BOOK EXCERPT (draw the scene's idea from this; say "
+            "what it says, in your own speaking voice):\n"
             f"'''\n{source_text[:1600]}\n'''\n"
         )
+    vocab = ""
+    if concepts:
+        vocab = "CONCEPT LIST (VISUAL must be exactly one of these keys): " + (
+            ", ".join(concepts)
+        ) + "\n"
     msgs = [
         LLMMessage(role="system", content=SYSTEM),
         LLMMessage(
@@ -57,11 +80,15 @@ def write_scene(
                 f"Concept: {fact_sheet.concept}\n"
                 f"Mechanism: {fact_sheet.mechanism}\n"
                 f"Counter-move: {fact_sheet.counter_move}\n"
+                f"{vocab}"
                 f"Previous lines:\n{prev}\n"
                 f"{source}"
                 f"Write the scene in {target_words} words (±2). "
-                "End with a natural advantage line, no filler tags. "
-                "Format: NARRATION: <text>\nVISUAL: <query>"
+                "Make the viewer feel they are missing out if they look "
+                "away. End with a natural advantage line, no filler tags. "
+                "Your last line MUST be a VISUAL line with one concept key "
+                "from the list. "
+                "Format: NARRATION: <text>\nVISUAL: <one concept key>"
             ),
         ),
     ]

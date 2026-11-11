@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import struct
+import subprocess
 from pathlib import Path
 
 import torch
@@ -110,6 +113,66 @@ def _shelf() -> dict:
         return {"tracks": [], "roles": {}}
 
 
+_LEAD_IN_CACHE = Path("assets/music/.lead_in.json")
+
+
+def _track_start(path: Path, *, win: float = 0.25, scan: float = 12.0, tol_db: float = 5.0) -> float:
+    """Offset (seconds) where a track reaches audible level (cached per file).
+
+    "Empty phase" isn't digital silence — several bed tracks open with a
+    fade-in 15-25dB below their steady level, which reads as nothing once
+    the voice ducks the bed. We measure the track's steady RMS (median of
+    the second half of the scan, so the fade-in can't skew it) and skip
+    ahead until it's within ``tol_db`` of that.
+    """
+    cache: dict = {}
+    try:
+        cache = json.loads(_LEAD_IN_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    key = f"start:{path.name}"
+    if key in cache:
+        return float(cache[key])
+
+    start = 0.0
+    try:
+        proc = subprocess.run(
+            ["ffmpeg", "-v", "error", "-t", f"{scan:.1f}", "-i", str(path),
+             "-f", "s16le", "-ac", "1", "-ar", "8000", "-"],
+            capture_output=True, check=True,
+        )
+        data = proc.stdout
+        w = int(8000 * win)
+        dbs: list[float] = []
+        for i in range(0, len(data) - w * 2 + 1, w * 2):
+            chunk = data[i:i + w * 2]
+            n = len(chunk) // 2
+            vals = struct.unpack(f"<{n}h", chunk)
+            rms = math.sqrt(sum(v * v for v in vals) / n) / 32768.0
+            dbs.append(20 * math.log10(rms) if rms > 0 else -100.0)
+        if len(dbs) >= 4:
+            from statistics import median
+            # steady level from the second half: the fade-in can't drag it down
+            steady = median(dbs[len(dbs) // 2:])
+            threshold = steady - tol_db
+            for i, db in enumerate(dbs):
+                if db >= threshold:
+                    # land a window before the threshold so the first
+                    # audible swell isn't clipped mid-rise
+                    start = min(max(0.0, (i - 1) * win), scan / 2)
+                    break
+    except (subprocess.CalledProcessError, OSError, ValueError) as error:
+        logger.warning("Track-start detection failed for %s: %s", path.name, error)
+
+    cache[key] = round(start, 2)
+    try:
+        _LEAD_IN_CACHE.write_text(json.dumps(cache, indent=1), encoding="utf-8")
+    except OSError:
+        pass
+    logger.info("Track start for %s: %.2fs", path.name, start)
+    return start
+
+
 def _track_gain(shelf: dict, track_name: str) -> tuple[Path, float]:
     entry = next(
         (
@@ -143,19 +206,12 @@ def _pick_music(
     plan = script.music
     if plan is not None:
         return _track_gain(_shelf(), _role_track(plan.base_role))
-    if any("original horror story" in note.lower() for note in script.source_notes):
-        lane = "horror"
-    elif genre == "cosmic":
-        lane = "cosmic"
-    else:
-        lane = "conspiracy"
-    track = {"file": MUSIC.name, "gain_db": 0.0}
-    shelf = _shelf()
-    for entry in shelf.get("tracks", []):
-        if lane in (entry.get("genres") or []):
-            track = entry
-            break
-    return _track_gain(shelf, track["file"])
+    # Plan-less legacy path: classify the script's content by keyword and
+    # resolve the matching role track — never a blind genre guess.
+    from blocks.music.director import classify_text_to_role
+    full_text = " ".join([script.hook, *(s.narration for s in script.scenes), script.outro])
+    role = classify_text_to_role(full_text)
+    return _track_gain(_shelf(), _role_track(role))
 
 
 def _role_track(
@@ -242,9 +298,11 @@ def _build_bed(
     chains: list[str] = []
     for index, (path, gain, w_start, w_end) in enumerate(windows):
         args += ["-stream_loop", "-1", "-i", str(path)]
+        # Skip the track's quiet fade-in so the bed starts inside music
+        lead = _track_start(path)
         chains.append(
             f"[{index}:a]aformat=sample_rates=44100:channel_layouts=stereo,"
-            f"atrim=start={w_start:.3f}:end={w_end:.3f},volume={gain:.3f}[s{index}]"
+            f"atrim=start={w_start + lead:.3f}:end={w_end + lead:.3f},volume={gain:.3f}[s{index}]"
         )
     label = "s0"
     for index in range(1, len(windows)):
