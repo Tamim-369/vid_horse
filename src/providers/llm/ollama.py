@@ -98,6 +98,14 @@ class OllamaProvider(BaseLLMProvider):
             raise LLMError(f"Ollama request failed: {exc}") from exc
 
         content = _extract_content(response)
+        if not content and getattr(getattr(response, "message", None), "thinking", None):
+            # reasoning model spent the whole budget thinking; disable
+            # thinking and ask once more so we get actual content
+            try:
+                response = self._client.chat(**{**kwargs, "think": False})
+            except Exception as exc:  # noqa: BLE001 - normalise client errors
+                raise LLMError(f"Ollama request failed: {exc}") from exc
+            content = _extract_content(response)
         if not content:
             raise LLMError("Ollama returned an empty response")
         return content

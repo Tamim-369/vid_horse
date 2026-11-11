@@ -16,6 +16,8 @@ from blocks.script_engine.validators import (
     validate_scene,
 )
 from blocks.script_engine.writer import write_scene
+from config.settings import get_settings
+from core.errors import BlockError, LLMError
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
 from ingestion.retriever import RAGRetriever
@@ -291,6 +293,8 @@ class ScriptEngineBlock:
         self._target_seconds = target_seconds
         self._max_scene_retries = max_scene_retries
         self._retriever = retriever
+        # optional stronger model for the hook call only (env: VIDEOAI_HOOK_MODEL)
+        self._hook_model = get_settings().hook_model or None
 
     def run(
         self,
@@ -329,40 +333,65 @@ class ScriptEngineBlock:
         payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
 
         def _clean_hook(text: str) -> str:
-            """Strip JSON-like prefixes like {Question} from hook text."""
+            """Strip JSON-like prefixes/labels like {Question} from hook text."""
             if not text:
                 return text
             text = text.strip()
-            # Remove {Question} prefix and similar patterns
-            import re
             text = re.sub(r'^\{[^}]+\}\s*', '', text)
             text = re.sub(r'^\[[^\]]+\]\s*', '', text)
             text = re.sub(r'^["\']\s*', '', text)
             text = re.sub(r'\s*["\']$', '', text)
             return text.strip()
 
+        def _hook_ok(text: str) -> bool:
+            return (
+                bool(text)
+                and not _is_placeholder(text)
+                and 4 <= len(text.split()) <= 14
+                and not _is_incomplete(text)
+            )
+
+        # ONE hook call, written with the attention principles baked into
+        # the writer's HOOK MODE. No separate agents, no template fallback.
+        # If the upgraded hook model itself fails (e.g. cloud quota), fall
+        # back to the regular writer model rather than losing the video.
         hook_beat = beats[0]
-        hook_raw = write_scene(self._llm, hook_beat, fs, [payoff_narr], 10, source_text=source_text, concepts=_CONCEPT_KEYS)
-        hook_narr, _hook_vis = _parse_scene(hook_raw)
-        # Clean JSON-like prefixes from hook
+
+        def _write_hook():
+            try:
+                return write_scene(
+                    self._llm, hook_beat, fs, [payoff_narr], 10,
+                    source_text=source_text, concepts=_CONCEPT_KEYS,
+                    mode="hook", model=self._hook_model,
+                )
+            except (BlockError, LLMError) as exc:
+                if self._hook_model:
+                    logger.warning(
+                        "hook model '%s' failed (%s); falling back to writer model",
+                        self._hook_model, exc,
+                    )
+                    return write_scene(
+                        self._llm, hook_beat, fs, [payoff_narr], 10,
+                        source_text=source_text, concepts=_CONCEPT_KEYS,
+                        mode="hook", model=None,
+                    )
+                raise
+
+        hook_narr, _hook_vis = _parse_scene(_write_hook())
         hook_narr = _clean_hook(hook_narr)
-        if not hook_narr or _is_placeholder(hook_narr):
-            hook_narr = _clean_speech(hook_beat)
-        # hooks must be short and COMPLETE
-        if len(hook_narr.split()) > 12 or _is_incomplete(hook_narr):
-            logger.info("hook needs fix (len=%d incomplete=%s); retrying", len(hook_narr.split()), _is_incomplete(hook_narr))
-            hook_raw = write_scene(self._llm, hook_beat + " (write ONE complete short sentence, 8-12 words, no trailing off, NO JSON, no {Question} prefix)", fs, [payoff_narr], 10, source_text=source_text, concepts=_CONCEPT_KEYS)
-            retry_narr, _retry_vis = _parse_scene(hook_raw)
-            retry_narr = _clean_hook(retry_narr)
-            if retry_narr and not _is_placeholder(retry_narr) and len(retry_narr.split()) <= 14 and not _is_incomplete(retry_narr):
-                hook_narr = retry_narr
-            else:
-                hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
-        
-        # Final fallback: if hook still has JSON-like content, use a simple template
-        if _is_placeholder(hook_narr) or len(hook_narr.split()) > 12 or _is_incomplete(hook_narr) or '{' in hook_narr or 'Question' in hook_narr:
-            logger.warning("Hook still invalid after retries, using fallback template")
-            hook_narr = f"Ever wonder why {fs.concept.lower()} affects us all?"
+        # mechanical clamps only (they never invent content)
+        hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
+        if not _hook_ok(hook_narr):
+            # single retry on hard constraints only
+            hook_narr, _hook_vis = _parse_scene(_write_hook())
+            hook_narr = _clean_hook(hook_narr)
+            hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
+        if not _hook_ok(hook_narr):
+            # last resort: the beat itself, spoken plainly (never a generic
+            # template — that reads as canned)
+            hook_narr = _ensure_complete(_first_sentence(
+                _clean_speech(hook_beat), max_words=12))
+            logger.warning("hook fallback used beat text: %s", hook_narr)
 
         # Generate middle scenes.
         middle_beats = beats[1:5]
@@ -374,9 +403,16 @@ class ScriptEngineBlock:
             attempt = 0
             narr = ""
             vis = ""
+            # the line right after the hook is still prime attention time:
+            # no warm-up, no recap, straight into the proof
+            write_beat = (
+                beat + " (This follows the hook — go straight at the viewer, "
+                "no warm-up, no recapping the hook, keep the tension.)"
+                if i == 0 else beat
+            )
             while attempt < self._max_scene_retries:
                 try:
-                    raw = write_scene(self._llm, beat, fs, narrations, target, source_text=source_text, concepts=_CONCEPT_KEYS)
+                    raw = write_scene(self._llm, write_beat, fs, narrations, target, source_text=source_text, concepts=_CONCEPT_KEYS)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("scene %d write failed: %s", i, exc)
                     attempt += 1
@@ -432,6 +468,7 @@ class ScriptEngineBlock:
         # spoken prose (fixes telegraph fragments and scene-to-scene seams;
         # falls back to the original lines on any validation failure)
         raw_lines = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
+        hook_before_polish = hook_narr
         polished = polish_script_lines(self._llm, raw_lines, context_note=context_note)
         if polished != raw_lines:
             logger.info(
@@ -439,6 +476,11 @@ class ScriptEngineBlock:
                 sum(1 for a, b in zip(raw_lines, polished) if a != b),
                 len(raw_lines),
             )
+        # the hook is the attention asset: if polish turned it into a
+        # fragment/placeholder, restore the pre-polish line
+        if not _hook_ok(polished[0]) and _hook_ok(hook_before_polish):
+            logger.info("polish mangled the hook; restoring original")
+            polished[0] = hook_before_polish
         hook_narr, *polished_scenes, payoff_narr = polished
         for scene, beat, narr in zip(scenes, scene_beats, polished_scenes):
             # a line that is STILL a fragment or placeholder after polish
