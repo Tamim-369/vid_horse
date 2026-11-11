@@ -337,6 +337,10 @@ class ScriptEngineBlock:
             text = re.sub(r'^\[[^\]]+\]\s*', '', text)
             text = re.sub(r'^["\']\s*', '', text)
             text = re.sub(r'\s*["\']$', '', text)
+            # markdown/emphasis noise the small model leaks into hooks
+            text = text.replace("*", "").replace("…", "...")
+            text = re.sub(r'\.{3,}', '', text)  # spoken pauses read as noise
+            text = re.sub(r'\s+', ' ', text).strip()
             return text.strip()
 
         def _hook_ok(text: str) -> bool:
