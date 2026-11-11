@@ -16,8 +16,6 @@ from blocks.script_engine.validators import (
     validate_scene,
 )
 from blocks.script_engine.writer import write_scene
-from config.settings import get_settings
-from core.errors import BlockError, LLMError
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
 from ingestion.retriever import RAGRetriever
@@ -293,8 +291,6 @@ class ScriptEngineBlock:
         self._target_seconds = target_seconds
         self._max_scene_retries = max_scene_retries
         self._retriever = retriever
-        # optional stronger model for the hook call only (env: VIDEOAI_HOOK_MODEL)
-        self._hook_model = get_settings().hook_model or None
 
     def run(
         self,
@@ -351,39 +347,24 @@ class ScriptEngineBlock:
                 and not _is_incomplete(text)
             )
 
-        # ONE hook call, written with the attention principles baked into
-        # the writer's HOOK MODE. No separate agents, no template fallback.
-        # If the upgraded hook model itself fails (e.g. cloud quota), fall
-        # back to the regular writer model rather than losing the video.
+        # The hook is the writer's first regular call. There is no dedicated
+        # hook writer or hook mode: the same writer writes every line, with
+        # the attention craft built into its system prompt. It sees the
+        # payoff first so the opening can promise it without giving it away.
         hook_beat = beats[0]
-
-        def _write_hook():
-            try:
-                return write_scene(
-                    self._llm, hook_beat, fs, [payoff_narr], 10,
-                    source_text=source_text, concepts=_CONCEPT_KEYS,
-                    mode="hook", model=self._hook_model,
-                )
-            except (BlockError, LLMError) as exc:
-                if self._hook_model:
-                    logger.warning(
-                        "hook model '%s' failed (%s); falling back to writer model",
-                        self._hook_model, exc,
-                    )
-                    return write_scene(
-                        self._llm, hook_beat, fs, [payoff_narr], 10,
-                        source_text=source_text, concepts=_CONCEPT_KEYS,
-                        mode="hook", model=None,
-                    )
-                raise
-
-        hook_narr, _hook_vis = _parse_scene(_write_hook())
+        hook_narr, _hook_vis = _parse_scene(
+            write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
+                        source_text=source_text, concepts=_CONCEPT_KEYS)
+        )
         hook_narr = _clean_hook(hook_narr)
         # mechanical clamps only (they never invent content)
         hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
         if not _hook_ok(hook_narr):
             # single retry on hard constraints only
-            hook_narr, _hook_vis = _parse_scene(_write_hook())
+            hook_narr, _hook_vis = _parse_scene(
+                write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
+                            source_text=source_text, concepts=_CONCEPT_KEYS)
+            )
             hook_narr = _clean_hook(hook_narr)
             hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
         if not _hook_ok(hook_narr):

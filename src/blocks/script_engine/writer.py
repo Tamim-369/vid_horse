@@ -20,7 +20,26 @@ SYSTEM = (
     "sentence, no complex sentence structures. No semicolons, no nested "
     "clauses, no em-dash chains. Say the uncomfortable thing calmly, like "
     "someone showing the viewer the strings other people pull on them. "
-    "Never theatrical, never a horror narrator, never hype. "
+    "Never theatrical, never a horror narrator, never hype.\n"
+    "ATTENTION CRAFT (apply it in every line, never mention it):\n"
+    "1. ATTENTION IS THE PRODUCT. The first three seconds decide whether "
+    "the viewer stays; every later line must earn the next one. An opening "
+    "line must open a loop the viewer NEEDS closed: something they believe "
+    "or do right now that they can't explain, or a hidden move someone is "
+    "running on them at this exact moment.\n"
+    "2. Direct callout beats a generic question. 'You are being persuaded "
+    "right now.' beats 'Have you ever wondered...'.\n"
+    "3. Concrete over abstract: one real experiment, one specific moment, "
+    "one scene the viewer can picture. If a named real example fits in a "
+    "few words, use it.\n"
+    "4. State the stake: what it costs the viewer RIGHT NOW — being used, "
+    "fooled, controlled, left behind while others quietly exploit this.\n"
+    "5. BANNED openings: 'Have you ever', 'What if I told you', 'Did you "
+    "know', 'Everyone knows', 'Let me ask you', 'Ever wonder', 'Imagine "
+    "this', 'You won't believe'. No warm-up, no throat-clearing.\n"
+    "6. Keep tension between lines: no recapping what was just said, no "
+    "'as I mentioned', no softening. Calm delivery is what makes it "
+    "land — never louder, never hype.\n"
     "REAL-WORLD EXAMPLES: ground scenes in real, well-known psychology — "
     "named experiments, common practices, or events (e.g. Milgram's "
     "obedience experiments, Asch's conformity lines, the Stanford prison "
@@ -49,30 +68,6 @@ SYSTEM = (
 )
 
 
-HOOK_RULES = (
-    "\nHOOK MODE — you are writing the VERY FIRST line of the video. The "
-    "first three seconds decide whether the viewer stays or swipes. "
-    "Craft principles (apply them, never mention them):\n"
-    "1. Open a loop the viewer NEEDS closed: name something they believe "
-    "or do right now that they can't explain, or a hidden move someone is "
-    "running on them at this exact moment.\n"
-    "2. Direct callout beats a generic question. 'You are being persuaded "
-    "right now.' beats 'Have you ever wondered...'.\n"
-    "3. Concrete over abstract: one real experiment, one specific moment, "
-    "one scene you can picture. If a named real example fits in a few "
-    "words, use it.\n"
-    "4. State the stake: what it costs them RIGHT NOW — being used, "
-    "fooled, controlled, left behind while others quietly exploit this.\n"
-    "5. BANNED openings (auto-fail): 'Have you ever', 'What if I told "
-    "you', 'Did you know', 'Everyone knows', 'Let me ask you', 'Ever "
-    "wonder', 'Imagine this', 'You won't believe'. No warm-up, no "
-    "throat-clearing.\n"
-    "6. ONE complete sentence, 8-12 words, small plain words, second "
-    "person. No hype, no theater, no fragments. Say it calmly — that is "
-    "what makes it land.\n"
-)
-
-
 def write_scene(
     llm: LLMProvider,
     beat: str,
@@ -81,8 +76,6 @@ def write_scene(
     target_words: int,
     source_text: str = "",
     concepts: list[str] | None = None,
-    mode: str = "scene",
-    model: str | None = None,
 ) -> str:
     prev = "\n".join(previous) if previous else "(none)"
     source = ""
@@ -97,44 +90,32 @@ def write_scene(
         vocab = "CONCEPT LIST (VISUAL must be exactly one of these keys): " + (
             ", ".join(concepts)
         ) + "\n"
-    system = SYSTEM + (HOOK_RULES if mode == "hook" else "")
-    if mode == "hook":
-        ask = (
-            f"Beat: {beat}\n"
-            f"Concept: {fact_sheet.concept}\n"
-            f"Mechanism: {fact_sheet.mechanism}\n"
-            f"Payoff the video builds toward: {previous[0] if previous else ''}\n"
-            f"{vocab}"
-            f"{source}"
-            f"Write ONLY the opening hook line in {target_words} words "
-            "(±2) following the HOOK MODE principles above. The hook must "
-            "promise the payoff without giving it away. "
-            "Your last line MUST be a VISUAL line with one concept key "
-            "from the list. "
-            "Format: NARRATION: <text>\nVISUAL: <one concept key>"
-        )
-    else:
-        ask = (
-            f"Beat: {beat}\n"
-            f"Concept: {fact_sheet.concept}\n"
-            f"Mechanism: {fact_sheet.mechanism}\n"
-            f"Counter-move: {fact_sheet.counter_move}\n"
-            f"{vocab}"
-            f"Previous lines:\n{prev}\n"
-            f"{source}"
-            f"Write the scene in {target_words} words (±2). "
-            "Make the viewer feel they are missing out if they look "
-            "away. End with a natural advantage line, no filler tags. "
-            "Your last line MUST be a VISUAL line with one concept key "
-            "from the list. "
-            "Format: NARRATION: <text>\nVISUAL: <one concept key>"
-        )
     msgs = [
-        LLMMessage(role="system", content=system),
-        LLMMessage(role="user", content=ask),
+        LLMMessage(role="system", content=SYSTEM),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Beat: {beat}\n"
+                f"Concept: {fact_sheet.concept}\n"
+                f"Mechanism: {fact_sheet.mechanism}\n"
+                f"Counter-move: {fact_sheet.counter_move}\n"
+                f"{vocab}"
+                f"Previous lines:\n{prev}\n"
+                f"{source}"
+                f"Write the scene in {target_words} words (±2). "
+                "If this is the video's FIRST line, it is the hook: apply "
+                "the attention-craft rules at full strength and promise the "
+                "payoff without giving it away. Make the viewer feel they "
+                "are missing out if they look away. End with a natural "
+                "advantage line, no filler tags. "
+                "Your last line MUST be a VISUAL line with one concept key "
+                "from the list. "
+                "Format: NARRATION: <text>\nVISUAL: <one concept key>"
+            ),
+        ),
     ]
     try:
-        raw = llm.complete(msgs, temperature=0.6, max_tokens=200, model=model)
+        raw = llm.complete(msgs, temperature=0.6, max_tokens=200)
         return raw.strip()
     except (LLMError, BlockError) as exc:
         raise BlockError(f"Scene write failed: {exc}") from exc

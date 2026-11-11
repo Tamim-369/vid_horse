@@ -51,9 +51,6 @@ class Settings(BaseSettings):
             "VIDEOAI_OLLAMA_ASSET_MODEL", "OLLAMA_ASSET_MODEL"
         ),
     )
-    # Optional stronger model for the ONE hook call (the video's first line
-    # decides whether the viewer stays). Empty = use ollama_model for hooks.
-    hook_model: str = Field(default="")
     ollama_num_ctx: int = Field(default=2048, gt=0)
     ollama_num_thread: int = Field(
         default=4,
