@@ -6,7 +6,9 @@ Editing logic:
 - Subtitles are word-timed: cues are groups of words (max 2 stacked rows),
   burned with drawtext `enable` windows — ONE ffmpeg encode per segment, so
   no flicker, no drift, no per-word re-encodes.
-- No image → black card (the intended style beat), never a repeated image.
+- Missing/unusable image -> random different image from the motif pool
+  (never the same image twice in a row); blank card only if the pool is
+  empty.
 - Music bed per video from music assets.
 """
 
@@ -288,6 +290,34 @@ def render_black_style(
         ]
         line_assets[-1] = leftover
 
+    # Fallback pool: every motif image that actually exists on disk. When a
+    # line has no usable assigned asset — or its file went missing — we pull
+    # a RANDOM image from here instead of showing a blank card. The screen
+    # must never be imageless, and never show the same image twice in a row.
+    import random as _random
+
+    from core.models import VisualAsset
+
+    pool: list[VisualAsset] = []
+    assets_root = Path("assets/psychology_motifs")
+    if assets_root.exists():
+        for p in sorted(assets_root.rglob("*.png")):
+            pool.append(VisualAsset(
+                kind="image",
+                file=p.name,
+                url=f"file://{p.resolve()}",
+                page_url=f"fallback:{p.parent.name}/{p.name}",
+                caption="",
+            ))
+
+    def _pool_pick(forbidden: str | None) -> VisualAsset | None:
+        cands = [a for a in pool if a.file != forbidden] if forbidden else pool
+        if not cands:
+            cands = pool  # single-image pool: better a repeat than a blank
+        return _random.choice(cands) if cands else None
+
+    last_file: str | None = None
+
     # ------------------------------------------------------------------
     # Build clips: per line -> per asset window -> ONE encode per window
     # with all subtitle cues burned via enable windows.
@@ -315,7 +345,11 @@ def render_black_style(
         fresh = [a for a in deduped if a.file not in shown_files]
         seq = fresh if fresh else deduped
         if not seq:
-            seq = [None]  # black card — the style's default beat
+            # never a blank screen: pull a random pool image (different
+            # from the one just shown); black card only if the whole pool
+            # is empty
+            pick = _pool_pick(last_file)
+            seq = [pick] if pick is not None else [None]
 
         bounds = [line_dur * i / len(seq) for i in range(len(seq) + 1)]
 
@@ -335,8 +369,15 @@ def render_black_style(
             ]
 
             if asset is not None:
+                # never the same image twice in a row, even inside a
+                # repeated shown-image sequence
+                if asset.file == last_file:
+                    alt = _pool_pick(asset.file)
+                    if alt is not None:
+                        asset = alt
                 base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
                 shown_files.add(asset.file)
+                last_file = asset.file
             else:
                 base = _black_frame(work, f"img-{tag}", seg_dur)
 

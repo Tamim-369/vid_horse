@@ -43,6 +43,10 @@ SYSTEM = (
     "5. Keep tension between lines: no recapping what was just said, no "
     "'as I mentioned', no softening, no hype or clickbait energy. Calm "
     "delivery is what makes it land — never louder.\n"
+    "6. QUESTION OPENERS BELONG TO THE FIRST LINE ONLY. After the hook, "
+    "state, reveal and assert — do not stack question after question. At "
+    "most ONE other question in the entire script, and only if it hits "
+    "harder than a statement would.\n"
     "REAL-WORLD EXAMPLES: ground scenes in real, well-known psychology — "
     "named experiments, common practices, or events (e.g. Milgram's "
     "obedience experiments, Asch's conformity lines, the Stanford prison "
@@ -86,7 +90,7 @@ def write_scene(
         source = (
             "\nSOURCE BOOK EXCERPT (draw the scene's idea from this; say "
             "what it says, in your own speaking voice):\n"
-            f"'''\n{source_text[:1600]}\n'''\n"
+            f"'''\n{source_text[:2600]}\n'''\n"
         )
     vocab = ""
     if concepts:

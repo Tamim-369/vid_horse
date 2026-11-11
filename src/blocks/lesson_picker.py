@@ -107,6 +107,9 @@ def pick_lesson(
         raise BlockError(f"lesson picking failed: {exc}") from exc
     if not idea.topic.strip() or not idea.lesson.strip():
         raise BlockError(f"no teachable idea in: {lesson_path.name}")
+    # The script engine must see the FULL target text, not just the short
+    # supporting quotes — a starved writer pads the script with questions.
+    idea = idea.model_copy(update={"source_chunks": [target, *idea.source_chunks]})
     logger.info("picked lesson idea '%s' from %s", idea.topic, lesson_path.name)
     return idea
 
