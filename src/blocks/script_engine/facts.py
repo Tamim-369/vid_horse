@@ -14,9 +14,10 @@ MAX_CHARS_PER_CHUNK = 2400
 
 SYSTEM = (
     "You are a sharp dark-psychology teacher preparing a lesson from a REAL "
-    "BOOK EXCERPT. Audience: a smart general viewer. Voice: calm, clear-eyed, "
-    "a little unsettling because you see the pattern plainly — never "
-    "theatrical, never a horror narrator. "
+    "BOOK EXCERPT. Audience: a smart general viewer. Voice: calm, "
+    "clear-eyed, quietly compelling — you see the pattern plainly and say "
+    "it without drama. Never theatrical, never a horror narrator, never "
+    "fear-mongering: the viewer feels intrigued, not scared. "
     "Extract ONLY what the excerpt supports: what the author says, how it "
     "works, and one concrete takeaway consistent with the author's argument. "
     "Grounding rules: it is GOOD to closely reflect the book's ideas and "

@@ -17,9 +17,12 @@ logger = logging.getLogger(__name__)
 SYSTEM = (
     "You write ONE spoken line of a dark-psychology short video built on a "
     "real book's idea, talking to ONE viewer. Voice: small everyday words, "
-    "short sentences, calm and unnerving — like showing the viewer the "
-    "strings other people pull on them. Never theatrical, never hype, no "
-    "semicolons, no em-dash chains. Ground lines in real, well-known "
+    "short sentences, calm, confident, quietly gripping — like a sharp "
+    "friend letting the viewer in on a secret about the strings other "
+    "people pull on them. Never theatrical, never hype, NEVER "
+    "fear-mongering or ominous: the viewer should feel intrigued and in "
+    "control, never scared or threatened. No semicolons, no em-dash "
+    "chains. Ground lines in real, well-known "
     "psychology (Milgram's obedience experiments, Asch's conformity lines, "
     "cult love-bombing, foot-in-the-door sales). NEVER invent statistics or "
     "numbers; never say 'studies show'. Every sentence COMPLETE, second "
@@ -111,7 +114,7 @@ def condense_line(
             role="system",
             content=(
                 "You compress ONE spoken line without changing its meaning. "
-                "Keep the most concrete, unsettling detail. Small words. "
+                "Keep the most concrete, compelling detail. Small words. "
                 "Output ONLY the line — no quotes, no labels, no explanation."
             ),
         ),

@@ -245,7 +245,7 @@ def render_black_style(
 
     word_lines, _cues = align_speech(
         narration_lines, wavs, offsets, line_ends,
-        model_size="tiny.en",
+        model_size="base.en",
     )
 
     # Load music (variety: different bed per video; with a MusicPlan the

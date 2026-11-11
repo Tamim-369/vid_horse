@@ -250,7 +250,74 @@ def _transcribe_words(
             len(words),
             len(line.split()),
         )
+    # The screen must show what is SPOKEN, and the script defines that:
+    # whisper only supplies timing. Misheard tokens used to end up on
+    # screen (or got dropped as hallucinations, leaving subtitle gaps).
+    # Anchor on matching tokens and interpolate the script's own words
+    # onto the heard timeline instead.
+    retimed = _retime_to_script(line, words, starts, ends)
+    if retimed is not None:
+        return retimed
     return words, starts, ends
+
+
+def _retime_to_script(
+    line: str, words: list[str], starts: list[float], ends: list[float]
+) -> tuple[list[str], list[float], list[float]] | None:
+    """Map the SCRIPT's own words onto whisper's heard timeline.
+
+    Returns ``(script_words, starts, ends)`` or ``None`` when there is no
+    usable anchor at all (caller keeps whisper's raw output then).
+    """
+
+    import difflib
+
+    raw_tokens = line.split()
+    n = len(raw_tokens)
+    if n == 0 or not words or not starts or len(starts) != len(words):
+        return None
+    script_tokens = [w.strip(".,!?;:'\"").lower() for w in raw_tokens]
+    heard = [w.strip().lower().strip(".,!?;:'\"") for w in words]
+    sm = difflib.SequenceMatcher(None, script_tokens, heard, autojunk=False)
+    timed: dict[int, tuple[float, float]] = {}
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            for k in range(i2 - i1):
+                timed[i1 + k] = (starts[j1 + k], ends[j1 + k])
+    if len(timed) < max(1, n // 3):
+        # too little overlap to anchor on - keep whisper's raw output
+        return None
+    out_s: list[float] = []
+    out_e: list[float] = []
+    anchors = sorted(timed)
+    for i in range(n):
+        if i in timed:
+            out_s.append(timed[i][0])
+            out_e.append(timed[i][1])
+            continue
+        prev = max((a for a in anchors if a < i), default=None)
+        nxt = min((a for a in anchors if a > i), default=None)
+        if prev is not None and nxt is not None:
+            lo, hi = timed[prev][1], timed[nxt][0]
+            frac = (i - prev) / (nxt - prev)
+            t = lo + frac * (hi - lo)
+            out_s.append(t)
+            out_e.append(t)
+        elif prev is None:
+            # before the first anchor: extend backwards with uniform rhythm
+            first_s, first_e = timed[anchors[0]]
+            step = max(0.12, first_e - first_s)
+            t = max(0.0, first_s - (anchors[0] - i) * step)
+            out_s.append(t)
+            out_e.append(t + step)
+        else:
+            # after the last anchor: extend forwards with uniform rhythm
+            last_s, last_e = timed[anchors[-1]]
+            step = max(0.12, last_e - last_s)
+            t = last_e + (i - anchors[-1]) * step
+            out_s.append(t)
+            out_e.append(t + step)
+    return raw_tokens, out_s, out_e
 
 
 _WHISPER_CACHE: dict[tuple[str, str], object] = {}
@@ -265,7 +332,6 @@ def _whisper_model(model_size: str, device: str):
     key = (model_size, device)
     with _WHISPER_LOCK:
         if key not in _WHISPER_CACHE:
-            # Use tiny.en for lower memory (39M params vs 74M for base.en)
             _WHISPER_CACHE[key] = WhisperModel(
                 model_size, device=device, compute_type="int8", cpu_threads=1
             )
@@ -308,7 +374,7 @@ def align_speech(
     offsets: list[float],
     line_ends: list[float] | None = None,
     *,
-    model_size: str = "tiny.en",
+    model_size: str = "base.en",
     device: str = "cpu",
 ) -> tuple[list[list[tuple[str, float, float]]], list[Cue]]:
     """Transcribe the voice and return both word timings and subtitle cues.
@@ -352,7 +418,7 @@ def align_cues(
     offsets: list[float],
     line_ends: list[float] | None = None,
     *,
-    model_size: str = "tiny.en",
+    model_size: str = "base.en",
     device: str = "cpu",
 ) -> list[Cue]:
     """Transcribe the voice segments and map their word cues onto the timeline."""
