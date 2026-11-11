@@ -16,7 +16,7 @@ from blocks.script_engine.validators import (
     validate_pov,
     validate_scene,
 )
-from blocks.script_engine.writer import write_scene
+from blocks.script_engine.writer import condense_line, write_scene
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
 from ingestion.retriever import RAGRetriever
@@ -328,6 +328,12 @@ class ScriptEngineBlock:
         if not payoff_narr or _is_placeholder(payoff_narr):
             payoff_narr = _clean_speech(payoff_beat)
         payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
+        if "?" in payoff_narr:
+            # the payoff closes the loop as a statement, never another question
+            condensed = condense_line(self._llm, payoff_narr, 12, statement=True)
+            if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
+                payoff_narr = condensed
+                logger.info("payoff condensed into a statement")
 
         def _clean_hook(text: str) -> str:
             """Strip JSON-like prefixes/labels like {Question} from hook text."""
@@ -345,12 +351,17 @@ class ScriptEngineBlock:
             return text.strip()
 
         def _hook_ok(text: str) -> bool:
+            # dark-psychology openers are questions; a strong statement
+            # callout is tolerated only as a fallback
             return (
                 bool(text)
                 and not _is_placeholder(text)
                 and 4 <= len(text.split()) <= 14
                 and not _is_incomplete(text)
             )
+
+        def _hook_form_ok(text: str) -> bool:
+            return "?" in text
 
         # The hook is the writer's first regular call. There is no dedicated
         # hook writer or hook mode: the same writer writes every line, with
@@ -364,8 +375,9 @@ class ScriptEngineBlock:
         hook_narr = _clean_hook(hook_narr)
         # mechanical clamps only (they never invent content)
         hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
-        if not _hook_ok(hook_narr):
-            # single retry on hard constraints only
+        if not _hook_ok(hook_narr) or not _hook_form_ok(hook_narr):
+            # single retry: the hook must at least be complete and SHOULD
+            # be a question (dark-psychology openers ask)
             hook_narr, _hook_vis = _parse_scene(
                 write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
                             source_text=source_text, concepts=_CONCEPT_KEYS)
@@ -418,6 +430,15 @@ class ScriptEngineBlock:
                     feedback = ["empty or placeholder output"]
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
+                # rescue pass: rewrite-to-length is a transformation task
+                # small models handle well, unlike free generation
+                wc = len(narr.split())
+                if wc < target - 3 or wc > target + 3 or (i > 0 and "?" in narr):
+                    condensed = condense_line(self._llm, narr, target, statement=(i > 0))
+                    if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
+                        logger.info("scene %d condensed %d -> %d words", i, wc, len(condensed.split()))
+                        narr = condensed
+                        vis = ""
                 res = validate_scene(narr, target, allow_question=(i == 0))
                 if _is_incomplete(narr):
                     res.ok = False

@@ -87,15 +87,25 @@ def validate_hook_payoff(hook: str, outro: str) -> ValidationResult:
     return r
 
 
-def repeats_previous(narration: str, previous: list[str], threshold: float = 0.6) -> bool:
+def repeats_previous(narration: str, previous: list[str], threshold: float = 0.4) -> bool:
     """True when a line's content words heavily overlap an earlier line.
 
     The small model loves to ask the same question four times with tiny
-    wording changes; this catches that mechanically.
+    wording changes; this catches that mechanically. Light stemming keeps
+    wish/wishes or follow/following from dodging the check.
     """
 
     def content_words(t: str) -> set[str]:
-        return {w for w in re.findall(r"[a-z']+", t.lower()) if w not in _STOPWORDS}
+        words = set()
+        for w in re.findall(r"[a-z']+", t.lower()):
+            if w in _STOPWORDS:
+                continue
+            for suf in ("'s", "es", "s", "ing", "ed"):
+                if len(w) > 4 and w.endswith(suf):
+                    w = w[: -len(suf)]
+                    break
+            words.add(w)
+        return words
 
     cur = content_words(narration)
     if not cur:

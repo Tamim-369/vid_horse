@@ -10,65 +10,30 @@ from core.models import FactSheet
 
 logger = logging.getLogger(__name__)
 
+# Kept deliberately SHORT: a 4B writer drowns in long prompt essays and
+# then ignores half of it. Hard rules that matter live in the validators
+# (word count, question policy, repeats) — those are enforced mechanically
+# after generation, not asked for politely here.
 SYSTEM = (
-    "You write ONE short-form scene of a dark-psychology video built on a "
-    "real book's idea. You talk to ONE viewer. Your goal is FOMO: the "
-    "viewer must feel they NEED to know this or they are missing out while "
-    "other people quietly use these tricks on them. "
-    "The dark power is in WHAT you say and HOW you say it — not in fancy "
-    "words. HARD RULE: small everyday words, short sentences, one idea per "
-    "sentence, no complex sentence structures. No semicolons, no nested "
-    "clauses, no em-dash chains. Say the uncomfortable thing calmly, like "
-    "someone showing the viewer the strings other people pull on them. "
-    "Never theatrical, never a horror narrator, never hype.\n"
-    "ATTENTION CRAFT (apply it in every line, never mention it):\n"
-    "1. ATTENTION IS THE PRODUCT. The first three seconds decide whether "
-    "the viewer stays; every later line must earn the next one.\n"
-    "2. THE OPENING MAY ASK — THE REST MUST TELL. The hook (first line) "
-    "is a short second-person question implying something is already "
-    "being done to the viewer that they haven't noticed. The line right "
-    "after it MAY sharpen the hook with one more question. After those "
-    "first 1-2 lines, EVERY line is a declarative statement — a question "
-    "mark later in the script is a FAILURE. Patterns for the opening "
-    "questions (make your own, never copy these): ask WHY something in "
-    "their life happens the way it does; point at someone close — "
-    "partner, boss, friend — who may be quietly manipulating them; "
-    "promise SIGNS they can start checking immediately; ask about the "
-    "unfair thing nobody is allowed to talk about. Never stack question "
-    "on question beyond the opening.\n"
-    "3. Concrete over abstract: one real experiment, one specific moment, "
-    "one scene the viewer can picture. If a named real example fits in a "
-    "few words, use it.\n"
-    "4. State the stake: what it costs the viewer RIGHT NOW — being used, "
-    "fooled, controlled, left behind while others quietly exploit this.\n"
-    "5. Keep tension between lines: no recapping what was just said, no "
-    "'as I mentioned', no softening, no hype or clickbait energy. Calm "
-    "delivery is what makes it land — never louder.\n"
-    "REAL-WORLD EXAMPLES: ground scenes in real, well-known psychology — "
-    "named experiments, common practices, or events (e.g. Milgram's "
-    "obedience experiments, Asch's conformity lines, the Stanford prison "
-    "experiment, door-to-door foot-in-the-door sales, cult love-bombing, "
-    "hotel-towel social-proof signs). Describe them in simple words. NEVER "
-    "invent statistics, percentages, or exact numbers; say any number in "
-    "plain words the source supports or drop the number. Never say "
-    "'studies show' or 'research shows'. "
-    "Every sentence must be COMPLETE — no trailing off, no fragments "
-    "(never end on 'when...', 'and you...', 'because...'). Never end a "
-    "line on a filler tag like 'watch', 'notice', 'beware', 'stay alert'. "
-    "Second person 'you/your' only; NEVER 'I/me/my/we/us/our'. No headings, "
-    "no bullets, no quotes. Assets are assigned separately.\n"
+    "You write ONE spoken line of a dark-psychology short video built on a "
+    "real book's idea, talking to ONE viewer. Voice: small everyday words, "
+    "short sentences, calm and unnerving — like showing the viewer the "
+    "strings other people pull on them. Never theatrical, never hype, no "
+    "semicolons, no em-dash chains. Ground lines in real, well-known "
+    "psychology (Milgram's obedience experiments, Asch's conformity lines, "
+    "cult love-bombing, foot-in-the-door sales). NEVER invent statistics or "
+    "numbers; never say 'studies show'. Every sentence COMPLETE, second "
+    "person only. No headings, bullets or quotes.\n"
+    "ATTENTION SHAPE: the video's first line is a short QUESTION aimed at "
+    "the viewer's own life (their relationships, blind spots, or an "
+    "unfairness nobody talks about). The line right after it may ask ONE "
+    "more question. Every later line is a declarative statement that adds "
+    "NEW information — a real example, the mechanism, the stake, or the "
+    "counter-move. Never repeat an earlier line.\n"
     "OUTPUT CONTRACT: output EXACTLY two lines, nothing else —\n"
     "NARRATION: <the spoken text>\n"
-    "VISUAL: <one concept key>\n"
-    "Never output any other label or field (no 'FOMO:', no 'HOOK:', no "
-    "'SCENE:', no 'GOAL:'). The words 'fear of missing out' belong inside "
-    "the narration only if they fit it naturally.\n"
-    "VISUAL RULE (REQUIRED): the last line is 'VISUAL: ' plus ONE concept "
-    "key copied from the provided concept list — the key whose image best "
-    "fits this scene. A reply without a VISUAL line is a failure. When it "
-    "fits naturally, also use the concept's plain phrase inside the "
-    "narration (e.g. 'social proof', 'foot in the door', 'gaslighting', "
-    "'missing out')."
+    "VISUAL: <one concept key copied from the provided concept list>\n"
+    "No other labels. A reply without a VISUAL line is a failure."
 )
 
 
@@ -85,7 +50,7 @@ def write_scene(
     source = ""
     if source_text:
         source = (
-            "\nSOURCE BOOK EXCERPT (draw the scene's idea from this; say "
+            "\nSOURCE BOOK EXCERPT (draw the line's idea from this; say "
             "what it says, in your own speaking voice):\n"
             f"'''\n{source_text[:2600]}\n'''\n"
         )
@@ -102,37 +67,64 @@ def write_scene(
                 f"Beat: {beat}\n"
                 f"Concept: {fact_sheet.concept}\n"
                 f"Mechanism: {fact_sheet.mechanism}\n"
-                f"Counter-move: {fact_sheet.counter_move}\n"
                 f"{vocab}"
-                f"Previous lines:\n{prev}\n"
+                f"Previous lines (never repeat these):\n{prev}\n"
                 f"{source}"
-                f"Write the scene in {target_words} words (±2). "
-                "If this is the video's FIRST line, it is the hook: ONE "
-                "opening QUESTION aimed at the viewer's own life, 8-12 "
-                "words, ending on a question mark. NOTHING after the "
-                "question mark — no answer, no extra sentence. No "
-                "ellipses (...), no asterisks, no markdown, no emphasis "
-                "marks. It must promise the payoff without giving it away. "
-                "For every OTHER line: this is a STATEMENT — 1-2 complete "
-                "declarative sentences ending with a period. The line "
-                "RIGHT AFTER the hook may sharpen it with one more "
-                "question (then stop asking); after that, a question "
-                "mark anywhere is a FAILURE. Every statement must add "
-                "NEW information: a real example from the source, the "
-                "mechanism, the stake, or the counter-move. The "
-                "previous lines are listed so you AVOID repeating them — "
-                "never restate what a previous line already said. "
-                "Make the viewer feel they are missing out if they look "
-                "away. End with a natural "
-                "advantage line, no filler tags. "
-                "Your last line MUST be a VISUAL line with one concept key "
-                "from the list. "
+                f"Write ONE line of about {target_words} words (±2). "
+                "Prefer a CONCRETE detail from the source excerpt (a named "
+                "example, a practice, a scene you can picture) over "
+                "abstract talk. "
+                "If this is the video's FIRST line: ONE question, 8-12 "
+                "words, ending with a question mark, nothing after it, no "
+                "ellipses. If it directly follows the hook: you may ask ONE "
+                "more question, or state a fact. Every later line: ONE "
+                "declarative statement, no question mark. "
                 "Format: NARRATION: <text>\nVISUAL: <one concept key>"
             ),
         ),
     ]
     try:
-        raw = llm.complete(msgs, temperature=0.6, max_tokens=200)
+        raw = llm.complete(msgs, temperature=0.6, max_tokens=120)
         return raw.strip()
     except (LLMError, BlockError) as exc:
         raise BlockError(f"Scene write failed: {exc}") from exc
+
+
+def condense_line(
+    llm: LLMProvider,
+    text: str,
+    target_words: int,
+    *,
+    statement: bool = True,
+) -> str:
+    """Compress an overlong line to the target word count.
+
+    Rewriting an existing line to N words is a transformation task small
+    models handle far better than free generation, so this rescues lines
+    the writer blew past the budget. Returns "" on any failure (callers
+    keep the original line then).
+    """
+
+    rule = "declarative sentence with no question mark" if statement else "spoken line"
+    msgs = [
+        LLMMessage(
+            role="system",
+            content=(
+                "You compress ONE spoken line without changing its meaning. "
+                "Keep the most concrete, unsettling detail. Small words. "
+                "Output ONLY the line — no quotes, no labels, no explanation."
+            ),
+        ),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Rewrite this as ONE {rule} of about {target_words} words "
+                f"({max(1, target_words - 1)} to {target_words + 2} words):\n{text}"
+            ),
+        ),
+    ]
+    try:
+        out = llm.complete(msgs, temperature=0.3, max_tokens=100).strip()
+    except (LLMError, BlockError):
+        return ""
+    return out.strip("\"'` ")
