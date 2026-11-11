@@ -51,7 +51,15 @@ class Settings(BaseSettings):
             "VIDEOAI_OLLAMA_ASSET_MODEL", "OLLAMA_ASSET_MODEL"
         ),
     )
-    ollama_num_ctx: int = Field(default=2048, gt=0)
+    ollama_num_ctx: int = Field(
+        default=8192, gt=0,
+        description=(
+            "Prompt context window in tokens. 8192 fits a full lesson chunk "
+            "plus surrounding context parts; lower values make Ollama "
+            "silently truncate the book text (the cause of 'weak grounding' "
+            "warnings)."
+        ),
+    )
     ollama_num_thread: int = Field(
         default=4,
         description="CPU threads per ollama request. Limit to 4 to prevent thermal shutdown.",

@@ -1,8 +1,11 @@
 """Lesson picker: read one book chunk and extract ONE teachable lesson idea.
 
-The agent may also read neighbouring chunks as CONTEXT (for continuity), but
-the script idea must come from the target chunk itself. Context chunks stay
-un-taken in the ledger; only the target chunk gets marked.
+The agent reads as much surrounding material as it needs for continuity —
+previous and following parts, including parts that ALREADY produced a video
+(those are context-only: they are labeled as used so the agent knows not to
+mine them for ideas). The script idea must come from the target chunk, which
+is always the next not-yet-used part in book order. Only the target chunk
+gets marked in the ledger.
 """
 
 from __future__ import annotations
@@ -20,20 +23,24 @@ from utils.ledger import TakenLedger
 
 logger = logging.getLogger(__name__)
 
-MAX_CONTEXT_CHARS = 4000
+MAX_CONTEXT_CHARS = 2000
 MAX_LESSON_CHARS = 12000
 
 SYSTEM = (
     "You are a teacher preparing one short video mini-lesson from a real "
     "BOOK excerpt (the video then teaches that book). Read the TARGET "
     "LESSON text and pick the single most teachable idea in it: something a "
-    "smart general viewer can understand and use. Neighbouring excerpts are "
-    "CONTEXT ONLY — use them to understand continuity, but the idea MUST "
-    "come from the target text. Give the idea a short spoken-friendly topic "
-    "name and quote 2-3 short passages from the target text that support it. "
-    "If the excerpt is too fragmentary to teach from (a printer's imprint, a "
-    "table of contents, pure OCR noise of under ~40 words), return topic and "
-    "lesson empty strings so the runner can skip it. Output JSON only."
+    "smart general viewer can understand and use. Read as much of the "
+    "surrounding material as you need — more context is better than "
+    "misreading the book. Surrounding parts marked ALREADY USED produced "
+    "earlier videos: use them ONLY to keep continuity (avoid repeating a "
+    "lesson already taught), never as the idea source. The idea MUST come "
+    "from the target text, which is the next not-yet-used part. Give the "
+    "idea a short spoken-friendly topic name and quote 2-3 short passages "
+    "from the target text that support it. If the excerpt is too "
+    "fragmentary to teach from (a printer's imprint, a table of contents, "
+    "pure OCR noise of under ~40 words), return topic and lesson empty "
+    "strings so the runner can skip it. Output JSON only."
 )
 
 
@@ -75,12 +82,17 @@ def pick_lesson(
     context = ""
     for path in context_paths or []:
         p = Path(path)
-        if p.exists():
-            context += f"\n--- context: {p.name} ---\n{_read(p, MAX_CONTEXT_CHARS)}\n"
+        if not p.exists():
+            continue
+        used = ledger.is_taken(p) if ledger is not None else False
+        label = "ALREADY USED in an earlier video - context only" if used else "not used yet"
+        context += f"\n--- context: {p.name} [{label}] ---\n{_read(p, MAX_CONTEXT_CHARS)}\n"
 
     user = (
-        f"TARGET LESSON ({lesson_path.name}):\n\"\"\"\n{target}\n\"\"\"\n"
-        f"NEIGHBOURING CONTEXT (do NOT take the idea from here):{context or ' (none)'}\n\n"
+        f"TARGET LESSON ({lesson_path.name}) — this is the NEXT UNUSED part; "
+        f"your idea comes from here:\n\"\"\"\n{target}\n\"\"\"\n"
+        f"SURROUNDING PARTS (continuity only; [ALREADY USED] parts made a "
+        f"video already — never take the idea from them):{context or ' (none)'}\n\n"
         "Pick ONE teachable idea from the target lesson. Output JSON with keys: "
         "topic (str), lesson (str), source_chunks (list[str], short verbatim "
         "passages from the TARGET text), context_notes (str)."
@@ -143,11 +155,24 @@ def next_untaken(
     return None
 
 
-def neighbours(path: Path, count: int = 1) -> list[Path]:
-    """The previous N lesson files of the same book part, for context."""
+def neighbours(
+    path: Path,
+    count: int = 2,
+    after: int = 1,
+) -> list[Path]:
+    """Nearby lesson files of the same book part, for continuity context.
+
+    ``count`` parts before the target plus ``after`` parts following it
+    (the part *after* the target matters: if the target turns out
+    fragmentary, the agent can still see where the chapter is heading).
+    """
+
     siblings = sorted(p for p in path.parent.glob("*.txt") if p.is_file())
     index = siblings.index(path)
-    return siblings[max(0, index - count) : index]
+    return (
+        siblings[max(0, index - count) : index]
+        + siblings[index + 1 : index + 1 + after]
+    )
 
 
 def load_manifest(book_dir: str | Path) -> dict:

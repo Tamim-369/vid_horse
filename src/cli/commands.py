@@ -580,7 +580,7 @@ def auto_cmd(
             try:
                 # 1. Pick lesson
                 console.print(f"  [1/5] Picking lesson...")
-                idea = pick_lesson(llm, lesson_path, context_paths=neighbours(lesson_path, count=1), ledger=ledger)
+                idea = pick_lesson(llm, lesson_path, context_paths=neighbours(lesson_path), ledger=ledger)
 
                 # 2. Write script
                 console.print(f"  [2/5] Writing script...")
