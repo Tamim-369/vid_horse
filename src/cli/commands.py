@@ -634,7 +634,7 @@ def auto_cmd(
 
     console.print(f"\n[bold cyan]{'='*60}")
     console.print(f"Completed: {produced}/{count} videos")
-    console.print(f"{'='*60}[/bold cyan]")
+    console.print(f"[bold cyan]{'='*60}[/bold cyan]")
 
 
 # ============================================================================
