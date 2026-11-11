@@ -622,9 +622,9 @@ def auto_cmd(
                 produced += 1
 
                 # Gap between videos
-                if produced < count and min_gap > 0:
-                    console.print(f"  Waiting {min_gap}s before next video...")
-                    time.sleep(min_gap)
+                if produced < count and gap > 0:
+                    console.print(f"  Waiting {gap}s before next video...")
+                    time.sleep(gap)
 
             except Exception as e:
                 console.print(f"[red]Failed: {e}[/red]")
