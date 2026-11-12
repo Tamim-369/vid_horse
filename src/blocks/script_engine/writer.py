@@ -12,26 +12,32 @@ logger = logging.getLogger(__name__)
 
 # Prompt kept focused: clear voice, clear arc, clear contract.
 SYSTEM = (
-    "You write ONE spoken line of a dark-psychology short video built on a "
-    "real book's idea, talking to ONE viewer. Voice: small everyday words, "
-    "short sentences, calm, confident, quietly gripping — like a sharp "
-    "friend letting the viewer in on a secret about the strings other "
-    "people pull on them. Translate bookish words into everyday speech: "
-    "'individuals' → 'people', 'do not' → 'don't', 'utilize' → 'use', "
-    "'numerous' → 'many', 'conduct' → 'behave'. Never theatrical, never "
-    "hype, NEVER fear-mongering or ominous. No semicolons, no em-dash "
-    "chains. Ground lines in real, well-known psychology (Milgram's "
-    "obedience experiments, Asch's conformity lines, cult love-bombing, "
-    "foot-in-the-door sales). NEVER invent statistics or numbers; never "
-    "say 'studies show'. Every sentence COMPLETE, second person only.\n"
+    "You write ONE spoken line of a dark-psychology short video from a "
+    "book's idea, talking to ONE viewer. Use the SIMPLEST everyday words "
+    "only — the kind you say to a friend. Never copy the book's style or "
+    "wording. If a word feels fancy, swap it for a plain one ('people' "
+    "not 'individuals', 'don't' not 'do not', 'use' not 'utilize', "
+    "'show' not 'demonstrate'). Short sentences. Voice: calm, confident, "
+    "quietly dark — like a friend sharing a secret about how people "
+    "really act. Never theatrical, never hype, never scary or preachy. "
+    "No semicolons, no em-dash chains. Use real-life examples from "
+    "everyday life (work, friends, family, online, crowds) and, when "
+    "fitting, well-known moments like Milgram's shock test or Asch's "
+    "line test — explained in plain words. NEVER invent numbers or "
+    "statistics; never say 'studies show'. Every sentence COMPLETE, "
+    "second person only.\n"
     "FLOW: the whole script is ONE connected argument. Each new line must "
     "follow naturally from the line before it — continue the thread, add "
     "the next concrete point, and carry the viewer forward. Never jump "
     "topics, never restate.\n"
-    "ATTENTION SHAPE: line 1 is a short QUESTION aimed at the viewer's own "
-    "life. Line 2 may ask one more question or state a fact. Every later "
-    "line is a declarative statement that adds NEW information — a real "
-    "example, the mechanism, the stake, or the counter-move.\n"
+    "ATTENTION SHAPE: line 1 is the HOOK — a short QUESTION about a "
+    "concrete real-life moment that shows this pattern, asking WHY it "
+    "happens (example style: 'Why do you laugh when everyone laughs, "
+    "even if it's not funny?' — ask about the moment, NOT about the "
+    "pattern's name). Line 2 may ask one more question or state a fact. "
+    "Every later line is a declarative statement that adds NEW "
+    "information — a real-life example, why it happens, what's at stake, "
+    "or what to do.\n"
     "OUTPUT CONTRACT: output EXACTLY two lines, nothing else —\n"
     "NARRATION: <the spoken text>\n"
     "VISUAL: <one concept key copied from the provided concept list>\n"
@@ -79,6 +85,26 @@ def write_scene(
             outline = "\n".join(f"  - {b}" for b in plan)
             arc = f"SCRIPT PLAN:\n{outline}\n"
     prev_note = "Script so far (continue naturally from the LAST line):" if previous else "Script so far:"
+    if beat_index == 0:
+        line_rule = (
+            "HOOK (line 1): ask ONE question about a concrete real-life "
+            "moment that shows this pattern and makes the viewer wonder "
+            "WHY it happens. Ask about that moment (something you do, see, "
+            "or feel in daily life), NOT the pattern's name or the idea in "
+            "general. 8-12 words, end with a question mark, nothing after it."
+        )
+    elif beat_index == 1:
+        line_rule = (
+            "Line 2 (right after the hook): keep it concrete and connected "
+            "to line 1. You may ask one more short question, or give a "
+            "clear fact with a real-life example."
+        )
+    else:
+        line_rule = (
+            "Middle/late line: ONE declarative statement, no question mark. "
+            "Add a real-life example, explain why it happens in plain words, "
+            "show what's at stake, or give a simple thing to do."
+        )
     msgs = [
         LLMMessage(role="system", content=SYSTEM),
         LLMMessage(
@@ -93,14 +119,10 @@ def write_scene(
                 f"{prev_note}\n{prev}\n"
                 f"{source}"
                 f"Write ONE line of about {target_words} words (±2). "
-                "Prefer a CONCRETE detail from the source excerpt (a named "
-                "example, a practice, a scene you can picture) over "
-                "abstract talk. Continue smoothly from the previous line. "
-                "If this is the video's FIRST line: ONE question, 8-12 "
-                "words, ending with a question mark, nothing after it, no "
-                "ellipses. If it directly follows the hook: you may ask ONE "
-                "more question, or state a fact. Every later line: ONE "
-                "declarative statement, no question mark. "
+                "Use the simplest common words. Do NOT copy the book's "
+                "style. Prefer a concrete real-life example over abstract "
+                "talk. Continue smoothly from the previous line.\n"
+                f"{line_rule}\n"
                 "Format: NARRATION: <text>\nVISUAL: <one concept key>"
             ),
         ),
@@ -119,18 +141,21 @@ def write_scene(
 # so they form one connected passage instead of four orphaned one-liners.
 MIDDLE_SYSTEM = (
     "You write the MIDDLE lines of a dark-psychology short video script "
-    "from a real book's idea, talking to ONE viewer. Voice: small everyday "
-    "words, short sentences, calm, confident, quietly gripping — like a "
-    "sharp friend letting the viewer in on a secret. Translate bookish "
-    "words into everyday speech ('individuals' → 'people', 'do not' → "
-    "'don't', 'utilize' → 'use'). NEVER fear-mongering. No semicolons, no "
-    "em-dash chains. NEVER invent statistics or numbers; never say "
-    "'studies show'. Every sentence COMPLETE, second person only.\n"
-    "FLOW: the lines together are ONE connected argument — they receive a "
-    "hook question, then build point by point (real example, mechanism, "
-    "stake, counter-move), and hand off to a closing payoff. Each line "
-    "follows naturally from the one before. Never repeat an earlier line, "
-    "never restate it. No question marks in these lines.\n"
+    "from a book's idea, talking to ONE viewer. Use the SIMPLEST everyday "
+    "words only — the kind you say to a friend. Never copy the book's "
+    "style or wording. If a word feels fancy, swap it for a plain one. "
+    "Short sentences. Voice: calm, confident, quietly dark — like a "
+    "friend sharing a secret about how people really act. Use real-life "
+    "examples from everyday life (work, friends, family, online, crowds). "
+    "Never scary or preachy. No semicolons, no em-dash chains. NEVER "
+    "invent numbers or statistics; never say 'studies show'. Every "
+    "sentence COMPLETE, second person only.\n"
+    "FLOW: the lines together are ONE connected argument — they follow a "
+    "hook about a real-life moment and build point by point (real "
+    "example, why it happens, what's at stake, what to do), then hand "
+    "off to a closing line. Each line follows naturally from the one "
+    "before. Never repeat an earlier line, never restate it. No question "
+    "marks in these lines.\n"
     "OUTPUT CONTRACT: exactly ONE numbered line per beat, nothing else —\n"
     "2. <the spoken text for beat 2>\n"
     "3. <the spoken text for beat 3>\n"
@@ -187,7 +212,9 @@ def write_middle(
                 f"{source}"
                 f"Write ONLY lines 2 to {len(beats) + 1}, about "
                 f"{target_words} words each (±2), in order, connected as "
-                "one flowing passage. Start your reply with '2.'."
+                "one flowing passage. Use the simplest common words, not "
+                "the book's style. Use real-life examples from everyday "
+                "life with a quiet dark vibe. Start your reply with '2.'."
             ),
         ),
     ]
@@ -229,8 +256,9 @@ def condense_line(
             role="system",
             content=(
                 "You compress ONE spoken line without changing its meaning. "
-                "Keep the most concrete, compelling detail and the same "
-                "connection to the previous line. Small words. "
+                "Use the simplest everyday words — never fancy or bookish. "
+                "Keep the most concrete real-life detail and the same "
+                "connection to the previous line. "
                 "Output ONLY the line — no quotes, no labels, no explanation."
             ),
         ),
