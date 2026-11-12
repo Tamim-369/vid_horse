@@ -30,41 +30,37 @@ MAX_LESSON_CHARS = 8000
 MAX_TOTAL_CONTEXT_CHARS = 6000
 
 SYSTEM = (
-    "You are a teacher preparing one short video mini-lesson from a real "
-    "BOOK excerpt (the video must teach that book). Read the TARGET LESSON "
-    "and pick the single most teachable idea in it for a smart general "
-    "viewer. Read the surrounding parts for understanding and continuity, "
-    "but the idea MUST come from the TARGET text (the next not-yet-used "
-    "part). Parts marked ALREADY USED are context only — never take the "
-    "idea from them.\n"
-    "Explain everything in the SIMPLEST everyday words (not the book's "
-    "style). Stay true to what the target text means; do not invent "
-    "numbers, studies, or facts it does not support.\n"
-    "Return a grounded lesson brief as JSON with: topic (2-5 words), "
-    "lesson (one plain sentence: what the viewer will learn), hook_moment "
-    "(a concrete everyday moment/situation that shows this pattern — "
-    "something from work, friends, family, online, or a crowd), why_plain "
-    "(why it happens, in simple words), takeaway (one simple thing to "
-    "notice or do), source_chunks (1-3 short verbatim passages from the "
-    "TARGET text), context_notes (one sentence, or empty).\n"
-    "If the target is too fragmentary to teach from (imprint, table of "
-    "contents, pure OCR noise under ~40 words), return topic and lesson as "
-    "empty strings. Output JSON only."
+    "You read a real BOOK excerpt and find the one hidden truth about how people act that "
+    "would hit a viewer in everyday life (for a short dark-psychology video). Read the "
+    "TARGET LESSON and pick that single idea. Read the surrounding parts for understanding "
+    "and continuity, but the idea MUST come from the TARGET text (the next not-yet-used "
+    "part). Parts marked ALREADY USED are context only — never take the idea from them.\n"
+    "Use the SIMPLEST everyday words (not the book's style). Be direct and concrete, not "
+    "academic. Stay true to what the target text means; do not invent numbers, studies, or "
+    "facts it does not support.\n"
+    "Return a grounded brief as JSON with: topic (2-5 plain words), lesson (one plain "
+    "spoken sentence stating the hidden truth about what you do or why — not a textbook "
+    "definition), hook_moment (a concrete everyday moment/situation that shows it — work, "
+    "friends, family, online, or a crowd), why_plain (why you do it, in simple words), "
+    "takeaway (one simple thing to notice or do), source_chunks (1-3 short verbatim "
+    "passages from the TARGET text), context_notes (one sentence, or empty).\n"
+    "If the target is too fragmentary to teach from (imprint, table of contents, pure OCR "
+    "noise under ~40 words), return topic and lesson as empty strings. Output JSON only."
 )
 
 
 class LessonIdea(StrictModel):
-    """One teachable idea extracted from a book chunk (lesson brief for the writer)."""
+    """One grounded idea/brief extracted from a book chunk for the writer."""
 
-    topic: str = Field(description="Short spoken-friendly topic name, 2-5 words.")
-    lesson: str = Field(description="One sentence stating what the viewer will learn, in plain everyday words.")
+    topic: str = Field(description="Short spoken-friendly topic name, 2-5 plain words.")
+    lesson: str = Field(description="One plain spoken sentence stating the hidden truth about what you do or why (not a textbook definition).")
     hook_moment: str = Field(
         default="",
-        description="A concrete everyday moment/situation that shows this pattern (work, friends, family, online, crowd) — for the opening 'why' question.",
+        description="A concrete everyday moment/situation that shows this (work, friends, family, online, crowd) — for the opening 'why' question.",
     )
     why_plain: str = Field(
         default="",
-        description="Why this happens, in simple everyday words, grounded in the target text.",
+        description="Why you do it, in simple everyday words, grounded in the target text.",
     )
     takeaway: str = Field(
         default="",
@@ -72,7 +68,7 @@ class LessonIdea(StrictModel):
     )
     source_chunks: list[str] = Field(
         default_factory=list,
-        description="1-3 short verbatim passages from the TARGET text that support the lesson.",
+        description="1-3 short verbatim passages from the TARGET text that support the idea.",
     )
     context_notes: str = Field(
         default="", description="One sentence on how surrounding context helped understanding, if at all."

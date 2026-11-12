@@ -27,27 +27,32 @@ class FullScript(BaseModel):
 
 
 FULL_SYSTEM = (
-    "You write a complete short video script that teaches ONE idea from a real book, "
-    "for ONE viewer. Write the whole script as ONE connected argument — each line follows "
-    "naturally from the line before it.\n\n"
-    "Voice: calm, confident, quietly dark — like a friend sharing a secret about how people "
-    "really act. Never theatrical, never hype, never scary or preachy.\n"
-    "Language: use the SIMPLEST everyday words only (like talking to a friend). Never copy "
-    "the book's style or wording. No semicolons, no em-dash chains.\n"
-    "Truth: stay true to the TARGET PASSAGE and the lesson brief. Use concrete real-life "
-    "examples (work, friends, family, online, crowds). NEVER invent numbers, statistics, "
-    "studies, or facts the text does not support. Never say 'studies show'.\n\n"
-    "Shape (6 lines):\n"
-    "1. hook: a short question about a concrete real-life moment that shows the pattern, "
-    "asking WHY it happens. Ask about the moment, NOT the pattern's name.\n"
-    "2. scene1: follows the hook with a concrete fact or everyday example (may be a question or a statement).\n"
-    "3. scene2: statement — a real-life example or why it happens, in plain words. No question mark.\n"
-    "4. scene3: statement — what is at stake or the pattern in plain words. No question mark.\n"
-    "5. scene4: statement — one simple thing to notice or do. No question mark.\n"
-    "6. outro: a strong closing statement that lands the point. No question mark.\n\n"
-    "Every line must be a complete, clear sentence in plain everyday words. "
-    "Do not repeat the same idea. Do not mention 'the book', 'the author', or these instructions. "
-    "Output JSON only."
+    "You write a short dark-psychology video script for ONE viewer. It reveals the quiet, "
+    "hidden truth behind an everyday behavior from a real book — like a friend leaning in "
+    "to tell you what is really going on. This is NOT a lesson, lecture, or research paper.\n\n"
+    "Voice: calm, confident, quietly dark and intimate. Make the viewer recognize themselves. "
+    "Never theatrical, never hype, never scary or preachy.\n"
+    "Language: SIMPLEST everyday spoken words only (how you talk to a friend). Short, direct "
+    "sentences. Say \"you\", not \"people\" or \"individuals\". Never copy the book's style or "
+    "wording. No semicolons, no em-dash chains.\n"
+    "Banned tone/phrasing: no academic or textbook talk — never say \"this concept\", "
+    "\"this phenomenon\", \"research shows\", \"studies show\", \"it can be understood as\", "
+    "\"in other words\", \"this means that\", \"this teaches\", \"the lesson is\". Do not define "
+    "terms; show the moment and the hidden pull behind it.\n"
+    "Truth: stay true to the TARGET PASSAGE and the brief. Use concrete real-life moments "
+    "(work, friends, family, online, crowds). NEVER invent numbers, statistics, studies, or "
+    "facts the text does not support.\n\n"
+    "Shape (6 lines, one connected thread):\n"
+    "1. hook: a short question about a concrete real-life moment that shows this pattern, "
+    "asking WHY it happens. Ask about the moment, NOT the pattern's name. (8-14 words)\n"
+    "2. scene1: follows the hook — pull the viewer into that moment or state the hidden truth "
+    "behind it, plainly (question or statement).\n"
+    "3. scene2: statement — show why you do it, in plain words, through a real moment. No question mark.\n"
+    "4. scene3: statement — the quiet cost or what it really does to you. No question mark.\n"
+    "5. scene4: statement — one simple thing to notice or do next time. No question mark.\n"
+    "6. outro: a short closing line that lands the uneasy truth. No question mark.\n\n"
+    "Every line must be complete and spoken. Do not repeat the same idea. "
+    "Do not mention 'the book', 'the author', or these instructions. Output JSON only."
 )
 
 
@@ -77,15 +82,15 @@ def write_full_script(
 ) -> FullScript:
     """Write the complete 6-line script in ONE call from a grounded lesson brief."""
 
-    brief_lines = [f"Topic: {topic}"]
+    brief_lines = [f"Topic (context only, do not name it in the script): {topic}"]
     if lesson:
-        brief_lines.append(f"What to teach (one point): {lesson}")
+        brief_lines.append(f"Hidden truth to reveal: {lesson}")
     if hook_moment:
-        brief_lines.append(f"Concrete everyday moment for the hook: {hook_moment}")
+        brief_lines.append(f"Real-life moment (use for the hook): {hook_moment}")
     if why_plain:
-        brief_lines.append(f"Why it happens (plain words): {why_plain}")
+        brief_lines.append(f"Why you do it (plain words): {why_plain}")
     if takeaway:
-        brief_lines.append(f"Simple takeaway: {takeaway}")
+        brief_lines.append(f"What to notice or do: {takeaway}")
     brief = "\n".join(brief_lines)
 
     quotes = _join_quotes(key_quotes)
