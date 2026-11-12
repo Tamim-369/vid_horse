@@ -742,7 +742,7 @@ class ScriptEngineBlock:
                     "weak grounding (%.2f): script may drift off the book text", score
                 )
 
-        return VideoScript(
+        script = VideoScript(
             title=fs.concept,
             hook=hook_narr,
             format=format,
@@ -750,3 +750,14 @@ class ScriptEngineBlock:
             scenes=scenes,
             outro=payoff_narr,
         )
+
+        # separate review pass: an independent critic checks the draft and
+        # triggers a targeted rewrite if it fails, before assets/images
+        # are assigned.
+        from blocks.script_engine.review import review_and_improve
+
+        script = review_and_improve(
+            self._llm, script, source_text=source_text, model=wm,
+        )
+
+        return script
