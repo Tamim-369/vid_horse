@@ -63,12 +63,12 @@ class Settings(BaseSettings):
         ),
     )
     ollama_num_ctx: int = Field(
-        default=8192, gt=0,
+        default=16384, gt=0,
         description=(
-            "Prompt context window in tokens. 8192 fits a full lesson chunk "
-            "plus surrounding context parts; lower values make Ollama "
-            "silently truncate the book text (the cause of 'weak grounding' "
-            "warnings)."
+            "Prompt context window in tokens. 16384 fits a full lesson chunk "
+            "plus the surrounding section parts so the model has enough "
+            "book context to understand the lesson fully; lower values make "
+            "Ollama silently truncate the text."
         ),
     )
     ollama_num_thread: int = Field(

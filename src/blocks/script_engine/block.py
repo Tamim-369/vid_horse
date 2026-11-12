@@ -419,35 +419,31 @@ class ScriptEngineBlock:
         wm = self._writer_model
         from blocks.script_engine.writer import write_full_script
 
-        raw = write_full_script(
+        result = write_full_script(
             self._llm, fs, beats, target,
             source_text=source_text, model=wm, flexible=cap_mode,
         )
 
-        # parse numbered lines 1-6
-        lines: list[str] = []
-        for m in re.finditer(r"^\s*(\d+)\s*[.)]\s*(.+)$", raw, re.M):
-            text_line = _clean_speech(m.group(2).strip())
-            if text_line and not _is_placeholder(text_line):
-                lines.append(text_line)
-        # fallback: split by non-empty lines if numbering missing
-        if len(lines) < 6:
-            lines = []
-            for ln in raw.splitlines():
-                ln = re.sub(r"^\s*\d+\s*[.)]\s*", "", ln).strip()
-                ln = _clean_speech(ln)
-                if ln and not _is_placeholder(ln):
-                    lines.append(ln)
-        # dedupe while preserving order
+        raw_lines = [
+            (result.hook or "").strip(),
+            (result.scene1 or "").strip(),
+            (result.scene2 or "").strip(),
+            (result.scene3 or "").strip(),
+            (result.scene4 or "").strip(),
+            (result.outro or "").strip(),
+        ]
+        lines = [_clean_speech(ln) for ln in raw_lines]
+        # dedupe while preserving order (keep position by replacing dupes later)
         seen: set[str] = set()
-        uniq: list[str] = []
-        for ln in lines:
+        for idx, ln in enumerate(lines):
             key = re.sub(r"\W+", " ", ln.lower()).strip()
-            if not key or key in seen:
+            if not key:
                 continue
-            seen.add(key)
-            uniq.append(ln)
-        lines = uniq
+            if key in seen:
+                lines[idx] = ""  # mark duplicate for fallback
+            else:
+                seen.add(key)
+        lines = (lines + [""] * 6)[:6]
 
         # ensure we have 6 lines (hook + 4 scenes + outro)
         while len(lines) < 6:

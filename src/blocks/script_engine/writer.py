@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from pydantic import BaseModel, Field
+
 from core.errors import BlockError, LLMError
 from core.interfaces import LLMMessage, LLMProvider
 from core.models import FactSheet
@@ -65,7 +67,7 @@ def write_scene(
         source = (
             "\nSOURCE BOOK EXCERPT (draw the line's idea from this; say "
             "what it says, in your own speaking voice):\n"
-            f"'''\n{source_text[:2600]}\n'''\n"
+            f"'''\n{source_text[:7000]}\n'''\n"
         )
     vocab = ""
     if concepts:
@@ -209,7 +211,7 @@ def write_middle(
         source = (
             "\nSOURCE BOOK EXCERPT (draw every line's idea from this; say "
             "what it says, in your own speaking voice):\n"
-            f"'''\n{source_text[:2600]}\n'''\n"
+            f"'''\n{source_text[:7000]}\n'''\n"
         )
     if flexible:
         length_rule = (
@@ -254,6 +256,15 @@ def write_middle(
         raise BlockError(f"Batch scene write failed: {exc}") from exc
 
 
+class FullScript(BaseModel):
+    hook: str = Field(description="Line 1: question about a real-life moment asking why it happens (8-14 words).")
+    scene1: str = Field(description="Line 2: follows the hook with a concrete fact or example.")
+    scene2: str = Field(description="Line 3: statement with a real-life example or why it happens.")
+    scene3: str = Field(description="Line 4: statement showing what's at stake or the pattern in plain words.")
+    scene4: str = Field(description="Line 5: statement with a simple thing to do or notice.")
+    outro: str = Field(description="Line 6: closing statement that lands the point.")
+
+
 FULL_SYSTEM = (
     "You write a complete dark-psychology short video script from a book's "
     "idea, for ONE viewer. Write the whole script as ONE connected "
@@ -261,24 +272,22 @@ FULL_SYSTEM = (
     "Voice: calm, confident, quietly dark — like a friend sharing a "
     "secret about how people really act. Use the SIMPLEST everyday words "
     "only. Never copy the book's style or wording. Use concrete real-life "
-    "examples from everyday life (work, friends, family, online, crowds). "
-    "Never theatrical, never hype, never scary. No semicolons, no "
-    "em-dash chains. NEVER invent numbers or statistics; never say "
-    "'studies show'.\n"
-    "SHAPE:\n"
-    "1. HOOK: a short question about a concrete real-life moment that "
-    "shows this pattern, asking WHY it happens (ask about the moment, "
-    "NOT the pattern's name). 8-14 words.\n"
-    "2. Follows the hook: a concrete fact or example, or one more short "
-    "question. Connects to line 1.\n"
-    "3-5. Statements that build the argument: real-life examples, why it "
-    "happens in plain words, what's at stake, a simple thing to do. Each "
-    "adds something new. No question marks.\n"
-    "6. CLOSING: a strong statement that lands the point. No question mark.\n"
+    "examples (work, friends, family, online, crowds). Never theatrical, "
+    "never hype, never scary. No semicolons, no em-dash chains. NEVER "
+    "invent numbers or statistics; never say 'studies show'.\n"
+    "Rules:\n"
+    "- hook: a short question about a concrete real-life moment that "
+    "shows the pattern, asking WHY it happens. Ask about the moment, "
+    "NOT the pattern's name.\n"
+    "- scene1: follows the hook with a concrete fact or example (may be "
+    "a question or a statement).\n"
+    "- scene2, scene3, scene4: statements (no question marks) that build "
+    "the argument with real-life examples, why it happens in plain words, "
+    "what's at stake, or a simple thing to do. Each adds something new.\n"
+    "- outro: a strong closing statement (no question mark).\n"
     "Every line must be a complete, clear sentence in plain everyday "
     "words. No vague 'they found'. Stay true to the book's meaning but "
-    "say it simply.\n"
-    "OUTPUT: exactly 6 lines, numbered 1-6, one per line. Nothing else."
+    "say it simply. Output JSON only."
 )
 
 
@@ -291,7 +300,7 @@ def write_full_script(
     source_text: str = "",
     model: str | None = None,
     flexible: bool = False,
-) -> str:
+) -> FullScript:
     """Write the complete 6-line script in ONE call for maximum coherence."""
     outline = "\n".join(f"  {i+1}. {b}" for i, b in enumerate(beats[:6]))
     source = ""
@@ -299,7 +308,7 @@ def write_full_script(
         source = (
             "\nSOURCE EXCERPT (stay true to its meaning, but say it in "
             "simple everyday words and real-life examples):\n"
-            f"'''\n{source_text[:2600]}\n'''\n"
+            f"'''\n{source_text[:7000]}\n'''\n"
         )
     if flexible:
         length = (
@@ -317,17 +326,17 @@ def write_full_script(
                 f"Topic: {fact_sheet.concept}\n"
                 f"Why it happens: {fact_sheet.mechanism}\n"
                 f"What to do: {fact_sheet.counter_move}\n"
-                f"Beat plan:\n{outline}\n"
+                f"Beat plan (for meaning only, do not copy its wording):\n{outline}\n"
                 f"{source}"
                 f"{length}\n"
-                "Write the full 6-line script now (numbered 1-6)."
+                "Write the full script now. Output JSON."
             ),
         ),
     ]
     try:
         per_line = target_words * 4 + 30 if flexible else target_words * 3 + 25
-        max_tokens = max(300, 6 * per_line)
-        return llm.complete(msgs, temperature=0.6, max_tokens=max_tokens, model=model).strip()
+        max_tokens = max(350, 6 * per_line)
+        return llm.complete_json(msgs, FullScript, temperature=0.6, max_tokens=max_tokens, model=model)
     except (LLMError, BlockError) as exc:
         raise BlockError(f"Full script write failed: {exc}") from exc
 

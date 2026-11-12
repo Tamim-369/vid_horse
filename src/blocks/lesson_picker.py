@@ -23,8 +23,11 @@ from utils.ledger import TakenLedger
 
 logger = logging.getLogger(__name__)
 
-MAX_CONTEXT_CHARS = 2000
+# Give the model enough of the book to truly understand the lesson.
+# Neighbors are included in book order but sized to fit a total budget.
+MAX_CONTEXT_CHARS = 4500
 MAX_LESSON_CHARS = 12000
+MAX_TOTAL_CONTEXT_CHARS = 18000
 
 SYSTEM = (
     "You are a teacher preparing one short video mini-lesson from a real "
@@ -70,7 +73,7 @@ def pick_lesson(
     context_paths: list[str | Path] | None = None,
     ledger: TakenLedger | None = None,
 ) -> LessonIdea:
-    """Read one lesson chunk (plus optional context) and return one idea."""
+    """Read one lesson chunk (plus surrounding section context) and return one idea."""
 
     lesson_path = Path(lesson_path)
     if not lesson_path.exists():
@@ -79,21 +82,28 @@ def pick_lesson(
         raise BlockError(f"lesson already taken: {lesson_path}")
 
     target = _read(lesson_path, MAX_LESSON_CHARS)
+
+    # Include surrounding parts so the model has enough memory to understand
+    # the lesson fully (the whole section, in book order), within a budget.
+    paths = [Path(p) for p in (context_paths or []) if Path(p).exists()]
+    per_part = (
+        min(MAX_CONTEXT_CHARS, max(1200, MAX_TOTAL_CONTEXT_CHARS // len(paths)))
+        if paths else 0
+    )
     context = ""
-    for path in context_paths or []:
-        p = Path(path)
-        if not p.exists():
-            continue
+    for p in paths:
         used = ledger.is_taken(p) if ledger is not None else False
         label = "ALREADY USED in an earlier video - context only" if used else "not used yet"
-        context += f"\n--- context: {p.name} [{label}] ---\n{_read(p, MAX_CONTEXT_CHARS)}\n"
+        context += f"\n--- context: {p.name} [{label}] ---\n{_read(p, per_part)}\n"
 
     user = (
         f"TARGET LESSON ({lesson_path.name}) — this is the NEXT UNUSED part; "
-        f"your idea comes from here:\n\"\"\"\n{target}\n\"\"\"\n"
-        f"SURROUNDING PARTS (continuity only; [ALREADY USED] parts made a "
-        f"video already — never take the idea from them):{context or ' (none)'}\n\n"
-        "Pick ONE teachable idea from the target lesson. Output JSON with keys: "
+        f"your idea must come from here:\n\"\"\"\n{target}\n\"\"\"\n"
+        f"SURROUNDING SECTION PARTS (read these for full understanding and "
+        f"continuity; parts marked [ALREADY USED] already made a video — "
+        f"never take the idea from them, but use them to understand the "
+        f"lesson):{context or ' (none)'}\n\n"
+        "Pick ONE teachable idea from the TARGET lesson. Output JSON with keys: "
         "topic (str), lesson (str), source_chunks (list[str], short verbatim "
         "passages from the TARGET text), context_notes (str)."
     )
@@ -107,10 +117,39 @@ def pick_lesson(
         raise BlockError(f"lesson picking failed: {exc}") from exc
     if not idea.topic.strip() or not idea.lesson.strip():
         raise BlockError(f"no teachable idea in: {lesson_path.name}")
-    # The script engine must see the FULL target text, not just the short
-    # supporting quotes — a starved writer pads the script with questions.
-    idea = idea.model_copy(update={"source_chunks": [target, *idea.source_chunks]})
-    logger.info("picked lesson idea '%s' from %s", idea.topic, lesson_path.name)
+
+    # Give the script writer full lesson memory: target + nearest section
+    # parts, so it can explain the idea with proper context.
+    writer_budget = 7000
+    combined = target[: min(len(target), 4500)]
+    sibs = sorted(x for x in lesson_path.parent.glob("*.txt") if x.is_file())
+    try:
+        idx = sibs.index(lesson_path)
+    except ValueError:
+        idx = -1
+    if idx >= 0:
+        ordered_nb: list[Path] = []
+        for d in range(1, max(idx, len(sibs) - idx) + 1):
+            if idx - d >= 0:
+                ordered_nb.append(sibs[idx - d])
+            if idx + d < len(sibs):
+                ordered_nb.append(sibs[idx + d])
+    else:
+        ordered_nb = paths
+    for p in ordered_nb:
+        if len(combined) >= writer_budget - 400:
+            break
+        room = writer_budget - len(combined) - 80
+        if room < 300:
+            break
+        snippet = _read(p, min(1500, room))
+        combined += f"\n\n[context: {p.name}]\n{snippet}"
+
+    idea = idea.model_copy(update={"source_chunks": [combined, *idea.source_chunks]})
+    logger.info(
+        "picked lesson idea '%s' from %s (with %d context parts)",
+        idea.topic, lesson_path.name, len(paths),
+    )
     return idea
 
 
@@ -160,29 +199,19 @@ def next_untaken(
 
 def neighbours(
     path: Path,
-    count: int = 3,
-    after: int = 1,
+    count: int = 8,
+    after: int = 3,
     ledger: TakenLedger | None = None,
 ) -> list[Path]:
-    """Nearby lesson files of the same book part, for continuity context.
+    """All other lesson files in the same book section, for full context.
 
-    Always reads at least ``count`` parts before the target (default 3) so
-    the agent has enough material to understand and pick a lesson, plus
-    ``after`` parts following it. If any earlier part in this book section
-    already produced a video, one extra previous part is included so the
-    agent can see that continuity (used parts are labeled context-only by
-    the picker and never become the lesson source).
+    The model reads the whole section (all parts in the same folder) so it
+    has enough material in memory to understand the lesson fully. Parts
+    already used are included as continuity-only context and labeled by the
+    picker; the lesson idea must still come from the target part.
     """
-
     siblings = sorted(p for p in path.parent.glob("*.txt") if p.is_file())
-    index = siblings.index(path)
-    before = max(count, 3)
-    if ledger is not None and any(ledger.is_taken(p) for p in siblings[:index]):
-        before += 1
-    return (
-        siblings[max(0, index - before) : index]
-        + siblings[index + 1 : index + 1 + after]
-    )
+    return [p for p in siblings if p != path]
 
 
 def load_manifest(book_dir: str | Path) -> dict:
