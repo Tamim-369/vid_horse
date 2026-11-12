@@ -31,34 +31,55 @@ MAX_TOTAL_CONTEXT_CHARS = 6000
 
 SYSTEM = (
     "You are a teacher preparing one short video mini-lesson from a real "
-    "BOOK excerpt (the video then teaches that book). Read the TARGET "
-    "LESSON text and pick the single most teachable idea in it: something a "
-    "smart general viewer can understand and use. Read as much of the "
-    "surrounding material as you need — more context is better than "
-    "misreading the book. Surrounding parts marked ALREADY USED produced "
-    "earlier videos: use them ONLY to keep continuity (avoid repeating a "
-    "lesson already taught), never as the idea source. The idea MUST come "
-    "from the target text, which is the next not-yet-used part. Give the "
-    "idea a short spoken-friendly topic name and quote 2-3 short passages "
-    "from the target text that support it. If the excerpt is too "
-    "fragmentary to teach from (a printer's imprint, a table of contents, "
-    "pure OCR noise of under ~40 words), return topic and lesson empty "
-    "strings so the runner can skip it. Output JSON only."
+    "BOOK excerpt (the video must teach that book). Read the TARGET LESSON "
+    "and pick the single most teachable idea in it for a smart general "
+    "viewer. Read the surrounding parts for understanding and continuity, "
+    "but the idea MUST come from the TARGET text (the next not-yet-used "
+    "part). Parts marked ALREADY USED are context only — never take the "
+    "idea from them.\n"
+    "Explain everything in the SIMPLEST everyday words (not the book's "
+    "style). Stay true to what the target text means; do not invent "
+    "numbers, studies, or facts it does not support.\n"
+    "Return a grounded lesson brief as JSON with: topic (2-5 words), "
+    "lesson (one plain sentence: what the viewer will learn), hook_moment "
+    "(a concrete everyday moment/situation that shows this pattern — "
+    "something from work, friends, family, online, or a crowd), why_plain "
+    "(why it happens, in simple words), takeaway (one simple thing to "
+    "notice or do), source_chunks (1-3 short verbatim passages from the "
+    "TARGET text), context_notes (one sentence, or empty).\n"
+    "If the target is too fragmentary to teach from (imprint, table of "
+    "contents, pure OCR noise under ~40 words), return topic and lesson as "
+    "empty strings. Output JSON only."
 )
 
 
 class LessonIdea(StrictModel):
-    """One teachable idea extracted from a book chunk."""
+    """One teachable idea extracted from a book chunk (lesson brief for the writer)."""
 
     topic: str = Field(description="Short spoken-friendly topic name, 2-5 words.")
-    lesson: str = Field(description="One sentence stating what the viewer will learn.")
+    lesson: str = Field(description="One sentence stating what the viewer will learn, in plain everyday words.")
+    hook_moment: str = Field(
+        default="",
+        description="A concrete everyday moment/situation that shows this pattern (work, friends, family, online, crowd) — for the opening 'why' question.",
+    )
+    why_plain: str = Field(
+        default="",
+        description="Why this happens, in simple everyday words, grounded in the target text.",
+    )
+    takeaway: str = Field(
+        default="",
+        description="One simple thing to notice or do, in plain words.",
+    )
     source_chunks: list[str] = Field(
         default_factory=list,
-        description="Short verbatim passages from the target text that support the lesson.",
+        description="1-3 short verbatim passages from the TARGET text that support the lesson.",
     )
     context_notes: str = Field(
-        default="", description="One sentence on how neighbouring context was used, if at all."
+        default="", description="One sentence on how surrounding context helped understanding, if at all."
     )
+    # Filled by picker (not by the LLM): grounded text for the script writer.
+    target_text: str = Field(default="", description="Target lesson text.")
+    context_text: str = Field(default="", description="Brief surrounding section context.")
 
 
 def _read(path: Path, max_chars: int) -> str:
@@ -97,15 +118,11 @@ def pick_lesson(
         context += f"\n--- context: {p.name} [{label}] ---\n{_read(p, per_part)}\n"
 
     user = (
-        f"TARGET LESSON ({lesson_path.name}) — this is the NEXT UNUSED part; "
-        f"your idea must come from here:\n\"\"\"\n{target}\n\"\"\"\n"
-        f"SURROUNDING SECTION PARTS (read these for full understanding and "
-        f"continuity; parts marked [ALREADY USED] already made a video — "
-        f"never take the idea from them, but use them to understand the "
-        f"lesson):{context or ' (none)'}\n\n"
-        "Pick ONE teachable idea from the TARGET lesson. Output JSON with keys: "
-        "topic (str), lesson (str), source_chunks (list[str], short verbatim "
-        "passages from the TARGET text), context_notes (str)."
+        f"TARGET LESSON ({lesson_path.name}) — NEXT UNUSED part; the idea must come from here:\n"
+        f"\"\"\"\n{target}\n\"\"\"\n"
+        f"SURROUNDING SECTION PARTS (for understanding/continuity only; "
+        f"[ALREADY USED] parts must not be the idea source):{context or ' (none)'}\n\n"
+        "Pick ONE teachable idea from the TARGET lesson and return the lesson brief JSON."
     )
     msgs = [
         LLMMessage(role="system", content=SYSTEM),
@@ -118,10 +135,10 @@ def pick_lesson(
     if not idea.topic.strip() or not idea.lesson.strip():
         raise BlockError(f"no teachable idea in: {lesson_path.name}")
 
-    # Give the script writer lesson memory: target + nearest section
-    # parts, sized to stay within a safe context/memory budget.
-    writer_budget = 4500
-    combined = target[: min(len(target), 3000)]
+    # Build grounded, target-first text for the script writer (safe budget).
+    target_for_writer = target[:3500]
+    ctx_parts: list[str] = []
+    ctx_budget = 1200
     sibs = sorted(x for x in lesson_path.parent.glob("*.txt") if x.is_file())
     try:
         idx = sibs.index(lesson_path)
@@ -136,19 +153,26 @@ def pick_lesson(
                 ordered_nb.append(sibs[idx + d])
     else:
         ordered_nb = paths
+    used_ctx = 0
     for p in ordered_nb:
-        if len(combined) >= writer_budget - 400:
+        if used_ctx >= ctx_budget:
             break
-        room = writer_budget - len(combined) - 80
-        if room < 300:
+        room = ctx_budget - used_ctx
+        if room < 250:
             break
-        snippet = _read(p, min(1000, room))
-        combined += f"\n\n[context: {p.name}]\n{snippet}"
+        snippet = _read(p, min(600, room)).strip()
+        if snippet:
+            ctx_parts.append(f"[{p.name}]\n{snippet}")
+            used_ctx += len(snippet)
+    context_for_writer = "\n\n".join(ctx_parts)
 
-    idea = idea.model_copy(update={"source_chunks": [combined, *idea.source_chunks]})
+    idea = idea.model_copy(update={
+        "target_text": target_for_writer,
+        "context_text": context_for_writer,
+    })
     logger.info(
-        "picked lesson idea '%s' from %s (with %d context parts)",
-        idea.topic, lesson_path.name, len(paths),
+        "picked lesson brief '%s' from %s (target=%d chars, context=%d chars, %d section parts read)",
+        idea.topic, lesson_path.name, len(target_for_writer), len(context_for_writer), len(paths),
     )
     return idea
 

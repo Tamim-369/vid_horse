@@ -166,9 +166,15 @@ def lesson_script_cmd(
     console.print(f"[cyan]Writing script...[/cyan]")
     script = engine.run(
         idea.topic,
-        source_chunks=idea.source_chunks,
-        context_note=idea.context_notes or "",
         format=format,
+        lesson=idea.lesson,
+        hook_moment=idea.hook_moment,
+        why_plain=idea.why_plain,
+        takeaway=idea.takeaway,
+        key_quotes=idea.source_chunks,
+        target_text=idea.target_text,
+        context_text=idea.context_text,
+        context_note=idea.context_notes or "",
     )
     script = script.model_copy(update={"title": idea.topic})
 
@@ -332,9 +338,15 @@ def lesson_produce_cmd(
     console.print("[cyan]2/5 Writing script...[/cyan]")
     script = engine.run(
         idea.topic,
-        source_chunks=idea.source_chunks,
-        context_note=idea.context_notes or "",
         format=format,
+        lesson=idea.lesson,
+        hook_moment=idea.hook_moment,
+        why_plain=idea.why_plain,
+        takeaway=idea.takeaway,
+        key_quotes=idea.source_chunks,
+        target_text=idea.target_text,
+        context_text=idea.context_text,
+        context_note=idea.context_notes or "",
     )
     script = script.model_copy(update={"title": idea.topic})
     script = annotate_music(llm, script)
@@ -586,9 +598,15 @@ def auto_cmd(
                 console.print(f"  [2/5] Writing script...")
                 script = engine.run(
                     idea.topic,
-                    source_chunks=idea.source_chunks,
-                    context_note=idea.context_notes or "",
                     format="short",
+                    lesson=idea.lesson,
+                    hook_moment=idea.hook_moment,
+                    why_plain=idea.why_plain,
+                    takeaway=idea.takeaway,
+                    key_quotes=idea.source_chunks,
+                    target_text=idea.target_text,
+                    context_text=idea.context_text,
+                    context_note=idea.context_notes or "",
                 )
                 script = script.model_copy(update={"title": idea.topic})
                 script = annotate_music(llm, script)

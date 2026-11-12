@@ -1,155 +1,17 @@
-"""Multi-stage script engine: facts -> beats -> scenes -> validate -> revise."""
+"""Script engine: grounded single-call script writing from a lesson brief."""
 
 from __future__ import annotations
 
 import logging
 import re
 
-from blocks.concept_metaphors import CONCEPT_VISUALS, extract_concepts_from_text
-from blocks.script_engine.beats import generate_beats
-from blocks.script_engine.facts import generate_fact_sheet
-from blocks.script_engine.polish import polish_script_lines
-from blocks.script_engine.validators import (
-    check_claims,
-    grounding_score,
-    repeats_previous,
-    validate_pov,
-    validate_scene,
-)
-from blocks.script_engine.writer import condense_line, write_middle, write_scene
+from blocks.concept_metaphors import extract_concepts_from_text
+from blocks.script_engine.validators import grounding_score, repeats_previous
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
 from ingestion.retriever import RAGRetriever
 
 logger = logging.getLogger(__name__)
-
-BEAT_NAMES = ["hook", "situation", "mechanism", "turn", "action", "payoff"]
-
-# Asset-aware writing: the writer must pick VISUAL hints from the same
-# concept vocabulary the asset agent uses, and weaving a concept's plain
-# phrase into the narration lets the asset agent lock onto that concept.
-_CONCEPT_KEYS: list[str] = sorted(CONCEPT_VISUALS)
-_CONCEPT_KEY_BY_NORM = {k.replace("_", " "): k for k in _CONCEPT_KEYS}
-
-
-_REASONING_MARKERS = re.compile(
-    r"(?:^|\n)\s*(?:\d+\.\s|\*{1,2}[A-Za-z]|<[a-z/]|Constraints?:|Analyze|Role:|Tone:|Format:|Length"
-    r"|The user|Let me|Let's break|I'll|Here is|Here's|Okay,|Sure,|Step \d)",
-    re.I,
-)
-
-
-_PLACEHOLDER_RE = re.compile(
-    r"^\s*(?:text|query|narration|visual|scene)\b[\s/.*]*",
-    re.I,
-)
-
-
-def _is_placeholder(text: str) -> bool:
-    return bool(_PLACEHOLDER_RE.match(text)) or len(text.split()) < 3
-
-
-def _same_text(a: str, b: str) -> bool:
-    """True when two lines are the same idea (punctuation/case insensitive)."""
-
-    def norm(text: str) -> list[str]:
-        return re.findall(r"[a-z0-9']+", text.lower())
-
-    wa, wb = norm(a), norm(b)
-    if not wa or not wb:
-        return False
-    if wa == wb:
-        return True
-    overlap = len(set(wa) & set(wb)) / max(len(set(wa) | set(wb)), 1)
-    return overlap >= 0.8
-
-
-def _clean_speech(text: str) -> str:
-    """Strip markdown/prompt artifacts; keep apostrophes inside words."""
-    text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
-    text = re.sub(r"[*_`<>{}]", "", text)
-    # slash-markup the model leaks ("/br", "./br", "\br")
-    text = re.sub(r"[./\\]+\s*br\b\.?", " ", text, flags=re.I)
-    # drop everything from the first reasoning marker on
-    cut = _REASONING_MARKERS.search(text)
-    if cut:
-        text = text[: cut.start()]
-    # model appends its own search-word tail to narration — strip it
-    text = re.sub(r"\s*(?:search\s*words?|keywords?)\s*:.*$", "", text, flags=re.I)
-    # straight/curly double quotes off; apostrophes between letters stay
-    text = re.sub(r'"|“|”', "", text)
-    text = text.replace("‘", "'").replace("’", "'")
-    # keep ' only between two letters (contractions); all other quotes go
-    text = re.sub(r"(?<!\w)'|'(?!\w)", "", text)
-    # stray digit the model left dangling after the final punctuation
-    text = re.sub(r"([.!?])\s*\d{1,3}\s*$", r"\1", text.strip())
-    # unlabeled keyword tail the model tacked on after the last sentence
-    # (lowercase start — a real next sentence would begin with a capital)
-    tail = re.search(
-        r"([.!?])\s+([a-z][A-Za-z']*(?:\s*[;,]?\s*[A-Za-z'][A-Za-z']*){1,3})"
-        r"\s*[.;,]?\s*$",
-        text,
-    )
-    if tail:
-        tail_words = re.findall(r"[A-Za-z']+", tail.group(2))
-        if all(w.lower() not in _VISUAL_STOPWORDS for w in tail_words):
-            text = text[: tail.start()] + tail.group(1)
-    # trailing dangling conjunction the model left before the final stop
-    text = re.sub(
-        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to)\s*[.\s]*$",
-        ".",
-        text.strip(),
-        flags=re.I,
-    )
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def _parse_scene(raw: str) -> tuple[str, str]:
-    import re
-
-    narr = ""
-    vis = ""
-    # typo-tolerant labels: 4B models emit NARRATIOAN/NARROTAION/VISION etc.
-    m = re.search(r"NARR\w*\s*:\s*(.*?)(?=VIS\w*\s*:|$)", raw, re.I | re.S)
-    if m:
-        narr = m.group(1).strip()
-    m2 = re.search(r"VIS\w*\s*:\s*(.*)", raw, re.I | re.S)
-    if m2:
-        # keep only the first line: free models echo instructions after it
-        vis_lines = m2.group(1).strip().splitlines()
-        vis = vis_lines[0].strip() if vis_lines else ""
-        # strip markdown emphasis/code marks; keep '_' (concept-key delimiter)
-        vis = re.sub(r"[*<>`]", "", vis).strip()
-    # remove any leaked VISUAL/VISION/FOMO labels from narration
-    narr = re.sub(r"\s*VIS\w*\s*:.*", "", narr, flags=re.I | re.S).strip()
-    narr = re.sub(r"\s*FOMO\s*:.*", "", narr, flags=re.I | re.S).strip()
-    # scrub stray mislabelled tokens the model leaks mid-line
-    # ("...stay quiet.NARROTION." -> "...stay quiet.")
-    narr = re.sub(r"\bNARR\w*[.:]?\s*", "", narr, flags=re.I).strip()
-    narr = re.sub(r"\bVIS\w*[.:]?\s*", "", narr, flags=re.I).strip()
-    narr = narr.strip(" .,;:-")
-    if not narr:
-        narr = raw.strip()
-    narr = _clean_speech(narr)
-    narr = _ensure_complete(narr)
-    # a concept key (with or without underscores) is valid at any length and
-    # must be checked BEFORE _clean_speech (which strips underscores);
-    # snap it to the canonical key the asset agent knows
-    vis_key = _CONCEPT_KEY_BY_NORM.get(vis.lower().replace("_", " ").strip())
-    if vis_key is not None:
-        return narr, vis_key
-    vis = _clean_speech(vis)
-    # a visual is a 2-4 word image query; anything longer is leaked narration
-    if len(vis.split()) > 5:
-        vis = _visual_keywords(vis)
-    if _is_placeholder(vis):
-        vis = ""
-    # scene failure mode: model puts the same line in both fields —
-    # drop the visual so the block falls back to the beat text
-    if narr and vis and _same_text(narr, vis):
-        vis = ""
-    return narr, vis
-
 
 _DANGLING_WORDS = frozenset(
     [
@@ -161,166 +23,6 @@ _DANGLING_WORDS = frozenset(
         "over", "under",
     ]
 )
-
-
-
-_INCOMPLETE_TAIL = re.compile(
-    r"\b(when|if|as|while|before|after|because|since|though|although|unless|until|"
-    r"that|which|who|whom|where|and|or|but|so|than|to|for|with|about|into|"
-    r"like|from)\s+(everyone|everybody|someone|somebody|anyone|anybody|people|"
-    r"they|you|we|he|she|it|things|something|anything|nothing|a\s+\w+|the\s+\w+|your\s+\w+|their\s+\w+)\s*[.!?]?\s*$",
-    re.I,
-)
-_TRAILING_OPEN = re.compile(
-    r"\b(when|if|because|before|after|while|that|which|who|to|and|but|or|so|than|as)\s*[.!?]?\s*$",
-    re.I,
-)
-
-
-def _is_incomplete(text: str) -> bool:
-    """True when narration looks cut off / not a complete thought."""
-    t = (text or "").strip()
-    if not t or len(t.split()) < 4:
-        return True
-    if _INCOMPLETE_TAIL.search(t):
-        return True
-    if _TRAILING_OPEN.search(t):
-        return True
-    # ends without sentence-final punctuation and smells fragmentary
-    if t[-1] not in ".!?":
-        if len(t.split()) < 6:
-            return True
-    return False
-
-
-def _ensure_complete(text: str) -> str:
-    """If clearly cut off, trim the dangling tail to the last clean boundary."""
-    t = (text or "").strip()
-    if not _is_incomplete(t):
-        return t
-    # try trimming the dangling tail (drop last 1-3 words) and re-close
-    words = re.findall(r"\S+", t.rstrip(".!?"))
-    for drop in (2, 3, 1):
-        if len(words) <= drop + 3:
-            continue
-        cand = " ".join(words[:-drop]).rstrip(",;: ")
-        # don't end on a dangling word
-        cw = cand.split()
-        while cw and cw[-1].lower().strip(",;:") in _DANGLING_WORDS:
-            cw.pop()
-        if len(cw) >= 4 and not _TRAILING_OPEN.search(" ".join(cw)):
-            return " ".join(cw).rstrip(",;: ") + "."
-    # fallback: return as-is but ensure terminal punct
-    if t and t[-1] not in ".!?":
-        t += "."
-    return t
-
-def _first_sentence(text: str, max_words: int = 12, min_words: int = 0) -> str:
-    """First sentence of ``text``, hard-capped at ``max_words`` words.
-
-    With ``min_words`` set, short lead sentences pull in the next sentence
-    so the line does not end as a weak fragment. Truncation never ends on a
-    dangling function word ("...changed the rules of the.").
-    """
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    sent = parts[0] if parts else text.strip()
-    if min_words and len(sent.split()) < min_words and len(parts) > 1:
-        sent = parts[0] + " " + parts[1]
-    words = sent.split()
-    if len(words) > max_words:
-        words = words[:max_words]
-    while len(words) > 3 and words[-1].lower().strip(",;:.!?") in _DANGLING_WORDS:
-        words.pop()
-    if len(words) < len(sent.split()):
-        sent = " ".join(words).rstrip(",;:.!?") + "."
-    return _ensure_complete(sent)
-
-
-def _parse_batch(
-    raw: str,
-    hook_line: str = "",
-    payoff_line: str = "",
-) -> dict[int, tuple[str, str]]:
-    """Split a batch reply into {beat_index: (narration, visual)}.
-
-    Preferred format: numbered lines ("2. <text>") where the number is
-    the line's position in the full script (2 = first middle line), so
-    misalignment is impossible even when the model echoes the hook.
-    Falls back to NARRATION/VISUAL blocks, then blank-line paragraphs
-    (assigned sequentially). Lines that near-duplicate the hook or
-    payoff are dropped.
-    """
-    known = [line for line in (hook_line, payoff_line) if line]
-    out: dict[int, tuple[str, str]] = {}
-    for m in re.finditer(r"^\s*(\d+)\s*[.)]\s*(.+)$", raw, re.M):
-        text = m.group(2).strip()
-        if not text or _is_placeholder(text) or repeats_previous(text, known):
-            continue
-        out[int(m.group(1)) - 2] = (text, "")
-    if out:
-        return out
-    pairs: list[tuple[str, str]] = []
-    chunks = re.split(r"(?=NARR\w*\s*:)", raw, flags=re.I)
-    for chunk in chunks:
-        if not re.match(r"NARR\w*\s*:", chunk, re.I):
-            continue
-        narr, vis = _parse_scene(chunk)
-        if narr:
-            pairs.append((narr, vis))
-    if not pairs:
-        for chunk in re.split(r"\n\s*\n", raw):
-            chunk = chunk.strip()
-            if chunk and not _is_placeholder(chunk):
-                pairs.append((chunk, ""))
-    idx = 0
-    for narr, vis in pairs:
-        if repeats_previous(narr, known):
-            continue
-        out[idx] = (narr, vis)
-        idx += 1
-    return out
-
-
-def _trim_fresh(text: str, target: int, previous: list[str]) -> str:
-    """Leading complete sentences of ``text`` within the word budget,
-    skipping sentences that near-duplicate lines already in the script.
-
-    A 4B model that rambles tends to open every attempt with the same
-    image; taking the first sentence blindly then makes every scene
-    sound identical. Skipping repeated sentences keeps each line fresh
-    without an extra LLM call. Returns "" when nothing fresh fits.
-    """
-    parts = re.split(r"(?<=[.!?])\s+", text.strip())
-    kept: list[str] = []
-    count = 0
-    for part in parts:
-        if not part.strip() or repeats_previous(part, previous):
-            continue
-        w = len(part.split())
-        if count + w > target and kept:
-            break
-        kept.append(part)
-        count += w
-        if count >= max(4, target - 4):
-            break
-    out = " ".join(kept).strip()
-    if not out:
-        return ""
-    if len(out.split()) > target:
-        out = _first_sentence(out, max_words=target)
-    return out
-
-
-_POV_SWAPS = [
-    (r"\bI\b", "you"),
-    (r"\bmy\b", "your"),
-    (r"\bmine\b", "yours"),
-    (r"\bme\b", "you"),
-    (r"\bwe\b", "you"),
-    (r"\bus\b", "you"),
-    (r"\bour\b", "your"),
-    (r"\bourselves\b", "yourselves"),
-]
 
 _VISUAL_STOPWORDS = frozenset(
     [
@@ -338,10 +40,80 @@ _VISUAL_STOPWORDS = frozenset(
     ]
 )
 
+_META_LEAK_RE = re.compile(
+    r"\b(as an ai|here is|here's|sure[,!]|i can help|let me|i will|i'll|"
+    r"beat\s*\d|scene\s*\d|hook\s*:|outro\s*:|narration\s*:|visual\s*:|"
+    r"lesson brief|target passage|json)\b",
+    re.I,
+)
+
+_TRAILING_OPEN = re.compile(
+    r"\b(when|if|because|before|after|while|that|which|who|to|and|but|or|so|than|as)\s*[.!?]?\s*$",
+    re.I,
+)
+
+
+def _clean_speech(text: str) -> str:
+    """Strip labels, markdown, and common instruction/meta leakage from a line."""
+    t = (text or "").strip()
+    # strip common field/line labels the model may echo
+    t = re.sub(r"^\s*(hook|scene\s*\d+|outro|line\s*\d+|narration)\s*[:\-]\s*", "", t, flags=re.I)
+    t = re.sub(r"^\s*\d+\s*[.)]\s*", "", t)
+    t = re.sub(r"[*_`#<>]", "", t)
+    t = re.sub(r'"|“|”', "", t)
+    t = t.replace("‘", "'").replace("’", "'")
+    t = re.sub(r"(?<!\w)'|'(?!\w)", "", t)
+    # if meta leakage appears, keep only the part before it
+    m = _META_LEAK_RE.search(t)
+    if m and m.start() > 10:
+        t = t[: m.start()].strip()
+    t = re.sub(r"\s+", " ", t).strip(" -:;")
+    return t
+
+
+def _is_bad(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    if len(t.split()) < 3:
+        return True
+    if _META_LEAK_RE.search(t):
+        return True
+    return False
+
+
+def _ensure_sentence(text: str) -> str:
+    t = (text or "").strip()
+    if not t:
+        return t
+    if t[-1] not in ".!?":
+        t += "."
+    # avoid ending on a dangling connector
+    t = re.sub(
+        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to)\s*[.!?]\s*$",
+        ".",
+        t,
+        flags=re.I,
+    )
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _first_sentence(text: str, max_words: int) -> str:
+    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
+    sent = parts[0] if parts and parts[0].strip() else (text or "").strip()
+    if not sent:
+        return sent
+    words = sent.split()
+    if len(words) > max_words:
+        words = words[:max_words]
+        while len(words) > 3 and words[-1].lower().strip(",;:.!?") in _DANGLING_WORDS:
+            words.pop()
+        sent = " ".join(words).rstrip(",;:.!?") + "."
+    return _ensure_sentence(sent)
+
 
 def _visual_keywords(text: str, limit: int = 4) -> str:
-    """Derive a short image-query from the most significant words."""
-    words = re.findall(r"[a-z][a-z-]{2,}", text.lower())
+    words = re.findall(r"[a-z][a-z-]{2,}", (text or "").lower())
     picked: list[str] = []
     for word in words:
         if word in _VISUAL_STOPWORDS or word in picked:
@@ -352,15 +124,6 @@ def _visual_keywords(text: str, limit: int = 4) -> str:
     return " ".join(picked)
 
 
-def _fix_pov(text: str) -> str:
-    """Mechanically rewrite first-person words to second person."""
-    for pattern, replacement in _POV_SWAPS:
-        text = re.sub(pattern, replacement, text, flags=re.I)
-    if text:
-        text = text[0].upper() + text[1:]
-    return text
-
-
 class ScriptEngineBlock:
     name = "script_engine"
 
@@ -369,14 +132,13 @@ class ScriptEngineBlock:
         llm: LLMProvider,
         *,
         target_seconds: int = 45,
-        max_scene_retries: int = 2,
+        max_scene_retries: int = 2,  # kept for API compatibility
         retriever: RAGRetriever | None = None,
     ) -> None:
         from config import get_settings
 
         self._llm = llm
         self._target_seconds = target_seconds
-        self._max_scene_retries = max_scene_retries
         self._retriever = retriever
         settings = get_settings()
         self._writer_model = settings.ollama_writer_model or settings.ollama_model
@@ -386,10 +148,18 @@ class ScriptEngineBlock:
         topic: str,
         *,
         format: ScriptFormat = "short",
+        lesson: str = "",
+        hook_moment: str = "",
+        why_plain: str = "",
+        takeaway: str = "",
+        key_quotes: list[str] | None = None,
+        target_text: str = "",
+        context_text: str = "",
         source_chunks: list[str] | None = None,
         context_note: str = "",
     ) -> VideoScript:
-        if source_chunks is None and self._retriever is not None:
+        # Optional RAG (non-lesson flows)
+        if not target_text and source_chunks is None and self._retriever is not None:
             try:
                 results = self._retriever.retrieve_for_topic(topic, top_k=6)
                 source_chunks = [r["text"] for r in results]
@@ -398,33 +168,42 @@ class ScriptEngineBlock:
                 logger.warning("RAG retrieval failed: %s", exc)
                 source_chunks = None
 
-        fs = generate_fact_sheet(
-            self._llm, topic, source_chunks=source_chunks, context_note=context_note
-        )
-        beats = generate_beats(self._llm, fs)
-        source_text = " ".join(source_chunks or [])
+        if not target_text and source_chunks:
+            # backward compat: first chunk is primary text
+            target_text = source_chunks[0]
+            if not context_text and len(source_chunks) > 1:
+                context_text = "\n\n".join(source_chunks[1:3])
 
-        # --- simplified: plan, then write the whole script in one call ---
-        # (facts+beats already done above; fewer calls = more coherence)
+        key_quotes = list(key_quotes or [])
+        if not key_quotes and source_chunks and len(source_chunks) > 1 and not context_text:
+            # legacy picker put quotes after combined blob; if target_text came from elsewhere, treat extras as quotes
+            key_quotes = [c for c in source_chunks[1:4] if c and c.strip()]
+
+        # Budget for pacing: use only as many words as needed (cap, not a quota)
         wps = 2.5
         total_words = int(self._target_seconds * wps)
         cap_mode = self._target_seconds >= 120
         per_scene_ceiling = max(12, total_words // 6)
-        # writer hint: comfortable length, not something to pad to
-        if cap_mode:
-            target = min(per_scene_ceiling, 30)
-        else:
-            target = max(10, min(per_scene_ceiling, 22))
+        target = min(per_scene_ceiling, 30) if cap_mode else max(10, min(per_scene_ceiling, 22))
 
-        wm = self._writer_model
         from blocks.script_engine.writer import write_full_script
 
         result = write_full_script(
-            self._llm, fs, beats, target,
-            source_text=source_text, model=wm, flexible=cap_mode,
+            self._llm,
+            topic=topic,
+            lesson=lesson or context_note or topic,
+            hook_moment=hook_moment,
+            why_plain=why_plain,
+            takeaway=takeaway,
+            key_quotes=key_quotes,
+            target_text=target_text,
+            context_text=context_text,
+            target_words=target,
+            model=self._writer_model,
+            flexible=cap_mode,
         )
 
-        raw_lines = [
+        raw = [
             (result.hook or "").strip(),
             (result.scene1 or "").strip(),
             (result.scene2 or "").strip(),
@@ -432,115 +211,93 @@ class ScriptEngineBlock:
             (result.scene4 or "").strip(),
             (result.outro or "").strip(),
         ]
-        lines = [_clean_speech(ln) for ln in raw_lines]
-        # dedupe while preserving order (keep position by replacing dupes later)
+        lines = [_clean_speech(x) for x in raw]
+
+        # Dedupe: drop later duplicates (keep first occurrence)
         seen: set[str] = set()
-        for idx, ln in enumerate(lines):
+        for i, ln in enumerate(lines):
             key = re.sub(r"\W+", " ", ln.lower()).strip()
             if not key:
                 continue
             if key in seen:
-                lines[idx] = ""  # mark duplicate for fallback
+                lines[i] = ""
             else:
                 seen.add(key)
-        lines = (lines + [""] * 6)[:6]
 
-        # ensure we have 6 lines (hook + 4 scenes + outro)
-        while len(lines) < 6:
-            idx = len(lines)
-            fb = _clean_speech(beats[idx] if idx < len(beats) else beats[-1])
-            lines.append(_ensure_complete(fb) if fb else "Think about this in your own life.")
+        # Deterministic, brief-grounded fallbacks (no invented "beats")
+        fallbacks = [
+            hook_moment or lesson or topic,
+            lesson or why_plain or topic,
+            why_plain or lesson or topic,
+            takeaway or why_plain or lesson or topic,
+            takeaway or lesson or "Notice this the next time it happens.",
+            takeaway or lesson or "Now you can see it more clearly.",
+        ]
 
-        def _clean_hook(text: str) -> str:
-            if not text:
-                return text
-            text = text.strip()
-            text = re.sub(r'^\{[^}]+\}\s*', '', text)
-            text = re.sub(r'^\[[^\]]+\]\s*', '', text)
-            text = re.sub(r'^["\']\s*', '', text)
-            text = re.sub(r'\s*["\']$', '', text)
-            text = text.replace("*", "").replace("…", "...")
-            text = re.sub(r'\.{3,}', '', text)
-            return re.sub(r'\s+', ' ', text).strip()
+        fixed: list[str] = []
+        for i, ln in enumerate(lines):
+            if _is_bad(ln) or repeats_previous(ln, fixed):
+                fb = _clean_speech(fallbacks[i] if i < len(fallbacks) else fallbacks[-1])
+                if fb and not repeats_previous(fb, fixed):
+                    ln = fb
+            ln = _ensure_sentence(ln) if ln else _ensure_sentence(_clean_speech(fallbacks[i]))
+            if len(ln.split()) < 3:
+                ln = _ensure_sentence(_clean_speech(fallbacks[i]) or "Think about this in your own life.")
+            fixed.append(ln)
 
-        hook_narr = _clean_hook(lines[0])
-        if "?" not in hook_narr:
-            hook_narr = hook_narr.rstrip(".! ") + "?"
-        hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=14))
-        if not hook_narr.endswith("?"):
-            hook_narr = hook_narr.rstrip(".! ") + "?"
-        if _is_placeholder(hook_narr) or len(hook_narr.split()) < 4:
-            hook_narr = _ensure_complete(_first_sentence(_clean_speech(beats[0]), max_words=12))
-            if "?" not in hook_narr:
-                hook_narr = hook_narr.rstrip(".! ") + "?"
+        # Enforce shape: hook is a question (about a moment/why), line 2 may be question or statement,
+        # lines 3-6 must be statements.
+        hook = fixed[0]
+        hook = re.sub(r"[.!]+\s*$", "?", hook).strip()
+        if "?" not in hook:
+            hook = hook.rstrip() + "?"
+        hook = _first_sentence(hook, max_words=16)
+        if "?" not in hook:
+            hook = hook.rstrip(".! ") + "?"
+        fixed[0] = hook
 
-        scene_lines = list(lines[1:5])
-        outro_narr = lines[5]
+        for i in range(2, 6):  # scene2, scene3, scene4, outro -> statements
+            fixed[i] = fixed[i].replace("?", ".")
+            fixed[i] = _ensure_sentence(fixed[i])
 
-        fixed_scenes: list[str] = []
-        prevs: list[str] = [hook_narr]
-        for i, ln in enumerate(scene_lines):
-            # line 2 (i==0) may ask one question; later must be statements
-            if i >= 1 and "?" in ln:
-                ln = ln.replace("?", ".")
-            if len(ln.split()) > per_scene_ceiling + 4:
-                trimmed = _trim_fresh(ln, per_scene_ceiling, prevs)
-                if not trimmed:
-                    trimmed = _first_sentence(ln, max_words=per_scene_ceiling)
-                if trimmed and not _is_placeholder(trimmed):
-                    ln = trimmed
-            if _is_placeholder(ln) or len(ln.split()) < 5 or repeats_previous(ln, prevs):
-                beat_fb = _clean_speech(beats[i + 1] if i + 1 < len(beats) else beats[-1])
-                if beat_fb and not repeats_previous(beat_fb, prevs):
-                    ln = _ensure_complete(beat_fb)
-            fixed_scenes.append(ln)
-            prevs.append(ln)
+        # Cap overlong lines (keep them clear, don't pad)
+        for i in range(1, 6):
+            if len(fixed[i].split()) > per_scene_ceiling + 6:
+                fixed[i] = _first_sentence(fixed[i], max_words=per_scene_ceiling)
 
-        if "?" in outro_narr:
-            outro_narr = outro_narr.replace("?", ".")
-        if len(outro_narr.split()) > per_scene_ceiling + 4:
-            trimmed = _first_sentence(outro_narr, max_words=per_scene_ceiling)
-            if trimmed and not _is_placeholder(trimmed):
-                outro_narr = trimmed
-        if _is_placeholder(outro_narr) or len(outro_narr.split()) < 5:
-            outro_narr = _ensure_complete(_clean_speech(beats[5] if len(beats) > 5 else beats[-1]))
-
-        # POV repair
-        all_narrs = [hook_narr] + fixed_scenes + [outro_narr]
-        pov_res = validate_pov(all_narrs)
-        if not pov_res.ok:
-            logger.info("POV drift: %s — repairing", pov_res.issues)
-            hook_narr = _fix_pov(hook_narr)
-            outro_narr = _fix_pov(outro_narr)
-            fixed_scenes = [_fix_pov(s) for s in fixed_scenes]
+        scene_lines = fixed[1:5]
+        outro = fixed[5]
 
         scenes: list[ScriptScene] = []
-        for i, narr in enumerate(fixed_scenes):
-            beat = beats[i + 1] if i + 1 < len(beats) else narr
+        for narr in scene_lines:
             found = extract_concepts_from_text(narr)
-            visual = found[0] if found else _visual_keywords(narr) or _visual_keywords(beat)
+            visual = found[0] if found else _visual_keywords(narr) or "people thinking"
             if len(visual.split()) > 5:
                 visual = _visual_keywords(visual)
-            if not visual or _is_placeholder(visual):
-                visual = _visual_keywords(beat)
             secs = max(3, int(len(narr.split()) / 2.5))
             scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
 
         script = VideoScript(
-            title=fs.concept,
-            hook=hook_narr,
+            title=topic,
+            hook=hook,
             format=format,
             target_seconds=self._target_seconds,
             scenes=scenes,
-            outro=outro_narr,
+            outro=outro,
         )
 
-        if source_chunks:
-            full_text = " ".join([hook_narr] + fixed_scenes + [outro_narr])
-            score = grounding_score(full_text, " ".join(source_chunks))
-            logger.info("grounding score: %.2f (content words traced to source)", score)
-            if score < 0.3:
-                logger.warning("weak grounding (%.2f): script may drift off the book text", score)
+        # Grounding signal against the target passage (if available)
+        ref = (target_text or " ".join(source_chunks or [])).strip()
+        if ref:
+            full_text = " ".join([hook] + scene_lines + [outro])
+            try:
+                score = grounding_score(full_text, ref)
+                logger.info("grounding score: %.2f (content words traced to source)", score)
+                if score < 0.25:
+                    logger.warning("weak grounding (%.2f): script may drift off the target text", score)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("grounding score failed: %s", exc)
 
-        logger.info("script generated in simplified single-write mode")
+        logger.info("script generated (brief-driven single write, writer=%s)", self._writer_model)
         return script
+
