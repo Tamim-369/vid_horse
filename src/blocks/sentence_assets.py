@@ -25,6 +25,54 @@ _WORD_RE = re.compile(r"[A-Za-z0-9']+")
 MANIFEST_PATH = Path("assets/psychology_motifs/manifest.json")
 ASSETS_ROOT = Path("assets/psychology_motifs")
 
+_USAGE_PATH = Path(".cache/videoai/used_images.json")
+_RECENT_VIDEOS = 10
+
+
+def _load_image_usage() -> dict:
+    try:
+        if _USAGE_PATH.exists():
+            return json.loads(_USAGE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    return {"videos": [], "by_image": {}}
+
+
+def _save_image_usage(usage: dict) -> None:
+    try:
+        _USAGE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _USAGE_PATH.write_text(json.dumps(usage, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception as e:
+        logger.warning("Failed to save image usage: %s", e)
+
+
+def _globally_recent_ids(usage: dict, exclude_slug: str | None = None, limit: int = _RECENT_VIDEOS) -> set[str]:
+    videos = [v for v in usage.get("videos", []) if v != exclude_slug]
+    recent = set(videos[-limit:])
+    out: set[str] = set()
+    for img_id, slugs in usage.get("by_image", {}).items():
+        if any(s in recent for s in (slugs or [])):
+            out.add(str(img_id))
+    return out
+
+
+def _record_image_usage(slug: str, image_ids: list[str]) -> None:
+    if not slug:
+        return
+    usage = _load_image_usage()
+    videos = [v for v in usage.get("videos", []) if v != slug]
+    videos.append(slug)
+    usage["videos"] = videos[-60:]
+    kept = set(usage["videos"])
+    by = usage.get("by_image", {})
+    for iid in image_ids:
+        key = str(iid)
+        lst = [s for s in by.get(key, []) if s in kept and s != slug]
+        lst.append(slug)
+        by[key] = lst[-20:]
+    usage["by_image"] = {k: v for k, v in by.items() if any(s in kept for s in v)}
+    _save_image_usage(usage)
+
 # LLM selection prompt
 _SELECTION_PROMPT = """You are selecting visuals for a spoken sentence in a dark psychology teaching video.
 
@@ -190,34 +238,55 @@ def _ranked_for_sentence(sentence: str, catalog: list[dict], used_ids: set[str])
 
 
 def _select_images_for_sentence(
-    sentence: str, catalog: list[dict], used_ids: set[str], count: int,
+    sentence: str,
+    catalog: list[dict],
+    used_ids: set[str],
+    count: int,
+    globally_recent: set[str] | None = None,
 ) -> list[dict]:
     """Pick `count` different images related to parts of the sentence."""
     if not catalog or count <= 0:
         return []
     count = min(count, len(catalog))
+    globally_recent = globally_recent or set()
 
     llm = _get_selector_llm()
     valid_ids = {img["id"].lower() for img in catalog}
     ranked = _ranked_for_sentence(sentence, catalog, used_ids)
-    pool = ranked[:25] if ranked else catalog[:25]
+    pool = ranked[:30] if ranked else catalog[:30]
+    # add some variety: shuffle within near-tied relevance bands in the pool
+    if len(pool) > 6:
+        head = pool[:12]
+        random.shuffle(head)
+        pool = head + pool[12:]
     picks: list[dict] = []
     picked_ids: set[str] = set()
 
+    def _acceptable(pid: str, allow_recent: bool = False) -> bool:
+        if pid in used_ids or pid in picked_ids or pid not in valid_ids:
+            return False
+        if not allow_recent and pid in globally_recent:
+            return False
+        return True
+
     if llm is not None and pool:
         image_list = _format_catalog_for_prompt(pool)
-        avoid = ""
-        if used_ids:
-            avoid_list = ", ".join(sorted(used_ids)[:20])
-            avoid = f"\n\nDo NOT reuse these images (they already appeared): {avoid_list}."
+        avoid: list[str] = []
+        in_video = list(sorted(used_ids))[:20]
+        if in_video:
+            avoid.append("Do NOT reuse these images (already in this video): " + ", ".join(in_video))
+        recent_hint = [pid for pid in list(globally_recent)[:12] if pid in {p["id"].lower() for p in pool}]
+        if recent_hint:
+            avoid.append("Prefer NOT to use these (used in recent videos): " + ", ".join(sorted(recent_hint)))
+        avoid_txt = ("\n\n" + "\n".join(avoid)) if avoid else ""
         prompt = _SELECTION_PROMPT.format(
             count=count, sentence=sentence.strip()[:300], image_list=image_list
-        ) + avoid
+        ) + avoid_txt
         try:
-            raw = llm.complete([LLMMessage(role="user", content=prompt)], temperature=0.0)
+            raw = llm.complete([LLMMessage(role="user", content=prompt)], temperature=0.15)
             for match in re.finditer(r"\b([a-z]{3,6})[_\\](\d+)\b", raw.replace("\\", ""), re.IGNORECASE):
                 pid = f"{match.group(1)}_{match.group(2)}".lower()
-                if pid in used_ids or pid in picked_ids or pid not in valid_ids:
+                if not _acceptable(pid, allow_recent=False):
                     continue
                 for img in catalog:
                     if img["id"].lower() == pid:
@@ -226,24 +295,46 @@ def _select_images_for_sentence(
                         break
                 if len(picks) >= count:
                     break
+            # if all LLM picks were recently used globally, allow them as fallback
+            if not picks:
+                for match in re.finditer(r"\b([a-z]{3,6})[_\\](\d+)\b", raw.replace("\\", ""), re.IGNORECASE):
+                    pid = f"{match.group(1)}_{match.group(2)}".lower()
+                    if not _acceptable(pid, allow_recent=True):
+                        continue
+                    for img in catalog:
+                        if img["id"].lower() == pid:
+                            picks.append(img)
+                            picked_ids.add(pid)
+                            break
+                    if len(picks) >= count:
+                        break
             if picks:
                 logger.info("LLM selected %s for: %s...", [p["id"] for p in picks], sentence[:50])
         except Exception as e:
             logger.warning("LLM multi-selection failed: %s", e)
 
-    # fill remaining slots with ranked diverse picks
-    if len(picks) < count:
+    def _fill(from_recent: bool) -> None:
         for img in ranked:
-            if img["id"] in used_ids or img["id"] in picked_ids:
+            pid = img["id"]
+            if pid in used_ids or pid in picked_ids:
+                continue
+            if (pid in globally_recent) != from_recent:
                 continue
             # prefer category variety among the picks for this sentence
             if picks and all(img.get("category") == p.get("category") for p in picks):
                 continue
             picks.append(img)
-            picked_ids.add(img["id"])
+            picked_ids.add(pid)
             if len(picks) >= count:
-                break
-    # final fill: any unused
+                return
+
+    # prefer not-globally-recent, ranked/diverse
+    if len(picks) < count:
+        _fill(from_recent=False)
+    # allow globally recent if needed
+    if len(picks) < count:
+        _fill(from_recent=True)
+    # final fill: any unused in this video
     if len(picks) < count:
         for img in catalog:
             if img["id"] in used_ids or img["id"] in picked_ids:
@@ -291,7 +382,10 @@ def _fallback_select(
 
 
 def assign_sentence_assets(
-    texts: list[str], *, used_concepts: set[str] | None = None
+    texts: list[str],
+    *,
+    used_concepts: set[str] | None = None,
+    globally_recent: set[str] | None = None,
 ) -> list[VisualAsset]:
     """Assign multiple related visuals per sentence.
 
@@ -302,6 +396,7 @@ def assign_sentence_assets(
     if used_concepts is None:
         used_concepts = set()
     used_ids = used_concepts  # shared across hook + scenes so no image repeats
+    globally_recent = globally_recent or set()
 
     all_sents: list[tuple[int, int, str]] = []
     for ti, text in enumerate(texts):
@@ -327,19 +422,31 @@ def assign_sentence_assets(
     seq_idx = 0
 
     for sent, count in plan:
-        picks = _select_images_for_sentence(sent, catalog, used_ids, count)
+        picks = _select_images_for_sentence(sent, catalog, used_ids, count, globally_recent=globally_recent)
         if len(picks) < count:
-            ranked = _ranked_for_sentence(sent, catalog, used_ids)
+            ranked = _ranked_for_sentence(sentence, catalog, used_ids)
             picked_set = {p["id"] for p in picks}
-            for img in ranked:
-                if img["id"] in picked_set or img["id"] in used_ids:
-                    continue
-                picks.append(img)
-                picked_set.add(img["id"])
+            # prefer not globally recent
+            for prefer_recent in (False, True):
+                for img in ranked:
+                    if img["id"] in picked_set or img["id"] in used_ids:
+                        continue
+                    if (img["id"] in globally_recent) != prefer_recent:
+                        continue
+                    picks.append(img)
+                    picked_set.add(img["id"])
+                    if len(picks) >= count:
+                        break
                 if len(picks) >= count:
                     break
         if not picks:
-            picks = [catalog[0]]
+            # last resort: anything not used in this video, prefer not globally recent
+            pool = [img for img in catalog if img["id"] not in used_ids]
+            if pool:
+                fresh = [img for img in pool if img["id"] not in globally_recent] or pool
+                picks = [random.choice(fresh)]
+            else:
+                picks = [catalog[0]]
 
         for img in picks:
             used_ids.add(img["id"])
@@ -378,13 +485,18 @@ def assign_sentence_assets(
 
 
 def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
-    """Assign one visual per sentence of every scene (and hook)."""
+    """Assign visuals per sentence of every scene (and hook), varying across videos."""
+
+    usage = _load_image_usage()
+    globally_recent = _globally_recent_ids(usage, exclude_slug=slug)
 
     used_concepts: set[str] = set()
     scenes: list[SceneAssets] = []
 
     # Hook gets its own visual
-    hook_assets = assign_sentence_assets([script.hook], used_concepts=used_concepts)
+    hook_assets = assign_sentence_assets(
+        [script.hook], used_concepts=used_concepts, globally_recent=globally_recent
+    )
     scenes.append(
         SceneAssets(
             scene_index=-1,
@@ -396,7 +508,7 @@ def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
 
     for index, scene in enumerate(script.scenes):
         sent_assets = assign_sentence_assets(
-            [scene.narration], used_concepts=used_concepts
+            [scene.narration], used_concepts=used_concepts, globally_recent=globally_recent
         )
         scenes.append(
             SceneAssets(
@@ -407,13 +519,25 @@ def build_asset_pack(script: VideoScript, *, slug: str) -> AssetPack:
             )
         )
 
-    return AssetPack(
+    pack = AssetPack(
         slug=slug,
         topic=script.title,
         article_title="manifest-driven visual selection",
         article_url="",
         scenes=scenes,
     )
+
+    # remember what this video used so future videos pick different images
+    used_in_video: list[str] = []
+    for sc in scenes:
+        for a in sc.assets:
+            # a.file is filename; image id is stem in manifest terms (e.g. face_05)
+            stem = Path(a.file).stem
+            if stem and stem not in used_in_video:
+                used_in_video.append(stem)
+    _record_image_usage(slug, used_in_video)
+
+    return pack
 
 
 def choose_concepts(script: VideoScript) -> list[str]:
