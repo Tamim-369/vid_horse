@@ -67,7 +67,7 @@ def write_scene(
         source = (
             "\nSOURCE BOOK EXCERPT (draw the line's idea from this; say "
             "what it says, in your own speaking voice):\n"
-            f"'''\n{source_text[:7000]}\n'''\n"
+            f"'''\n{source_text[:4500]}\n'''\n"
         )
     vocab = ""
     if concepts:
@@ -211,7 +211,7 @@ def write_middle(
         source = (
             "\nSOURCE BOOK EXCERPT (draw every line's idea from this; say "
             "what it says, in your own speaking voice):\n"
-            f"'''\n{source_text[:7000]}\n'''\n"
+            f"'''\n{source_text[:4500]}\n'''\n"
         )
     if flexible:
         length_rule = (
@@ -308,7 +308,7 @@ def write_full_script(
         source = (
             "\nSOURCE EXCERPT (stay true to its meaning, but say it in "
             "simple everyday words and real-life examples):\n"
-            f"'''\n{source_text[:7000]}\n'''\n"
+            f"'''\n{source_text[:4500]}\n'''\n"
         )
     if flexible:
         length = (

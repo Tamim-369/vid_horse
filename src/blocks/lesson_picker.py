@@ -23,11 +23,11 @@ from utils.ledger import TakenLedger
 
 logger = logging.getLogger(__name__)
 
-# Give the model enough of the book to truly understand the lesson.
-# Neighbors are included in book order but sized to fit a total budget.
-MAX_CONTEXT_CHARS = 4500
-MAX_LESSON_CHARS = 12000
-MAX_TOTAL_CONTEXT_CHARS = 18000
+# Give the model enough of the book to understand the lesson, while
+# staying within a safe context/memory budget (PC can crash if too large).
+MAX_CONTEXT_CHARS = 2000
+MAX_LESSON_CHARS = 8000
+MAX_TOTAL_CONTEXT_CHARS = 6000
 
 SYSTEM = (
     "You are a teacher preparing one short video mini-lesson from a real "
@@ -118,10 +118,10 @@ def pick_lesson(
     if not idea.topic.strip() or not idea.lesson.strip():
         raise BlockError(f"no teachable idea in: {lesson_path.name}")
 
-    # Give the script writer full lesson memory: target + nearest section
-    # parts, so it can explain the idea with proper context.
-    writer_budget = 7000
-    combined = target[: min(len(target), 4500)]
+    # Give the script writer lesson memory: target + nearest section
+    # parts, sized to stay within a safe context/memory budget.
+    writer_budget = 4500
+    combined = target[: min(len(target), 3000)]
     sibs = sorted(x for x in lesson_path.parent.glob("*.txt") if x.is_file())
     try:
         idx = sibs.index(lesson_path)
@@ -142,7 +142,7 @@ def pick_lesson(
         room = writer_budget - len(combined) - 80
         if room < 300:
             break
-        snippet = _read(p, min(1500, room))
+        snippet = _read(p, min(1000, room))
         combined += f"\n\n[context: {p.name}]\n{snippet}"
 
     idea = idea.model_copy(update={"source_chunks": [combined, *idea.source_chunks]})
