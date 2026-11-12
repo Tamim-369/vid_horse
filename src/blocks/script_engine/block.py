@@ -67,7 +67,7 @@ def _same_text(a: str, b: str) -> bool:
 def _clean_speech(text: str) -> str:
     """Strip markdown/prompt artifacts; keep apostrophes inside words."""
     text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
-    text = re.sub(r"[*_`<>]", "", text)
+    text = re.sub(r"[*_`<>{}]", "", text)
     # slash-markup the model leaks ("/br", "./br", "\br")
     text = re.sub(r"[./\\]+\s*br\b\.?", " ", text, flags=re.I)
     # drop everything from the first reasoning marker on
