@@ -7,6 +7,7 @@ structurally reliable.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from typing import Any
 
@@ -91,6 +92,12 @@ class OllamaProvider(BaseLLMProvider):
         }
         if schema is not None:
             kwargs["format"] = schema
+        # reasoning-style models spend the whole token budget thinking and
+        # return empty content (which used to double every call via the
+        # retry below). Disable thinking up front for the model families
+        # that support the flag; others reject it, so don't send it.
+        if re.search(r"qwen3|qwq|deepseek|thinking", options["model"], re.I):
+            kwargs["think"] = False
 
         try:
             response = self._client.chat(**kwargs)

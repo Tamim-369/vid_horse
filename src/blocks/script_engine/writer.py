@@ -106,10 +106,98 @@ def write_scene(
         ),
     ]
     try:
-        raw = llm.complete(msgs, temperature=0.6, max_tokens=140, model=model)
+        # token budget scaled to the line length: a 4B model given a big
+        # token budget will happily ramble 130+ words for an 18-word line
+        max_tokens = max(60, target_words * 3 + 20)
+        raw = llm.complete(msgs, temperature=0.6, max_tokens=max_tokens, model=model)
         return raw.strip()
     except (LLMError, BlockError) as exc:
         raise BlockError(f"Scene write failed: {exc}") from exc
+
+
+# Batch system prompt: the middle lines are written TOGETHER in one call
+# so they form one connected passage instead of four orphaned one-liners.
+MIDDLE_SYSTEM = (
+    "You write the MIDDLE lines of a dark-psychology short video script "
+    "from a real book's idea, talking to ONE viewer. Voice: small everyday "
+    "words, short sentences, calm, confident, quietly gripping — like a "
+    "sharp friend letting the viewer in on a secret. Translate bookish "
+    "words into everyday speech ('individuals' → 'people', 'do not' → "
+    "'don't', 'utilize' → 'use'). NEVER fear-mongering. No semicolons, no "
+    "em-dash chains. NEVER invent statistics or numbers; never say "
+    "'studies show'. Every sentence COMPLETE, second person only.\n"
+    "FLOW: the lines together are ONE connected argument — they receive a "
+    "hook question, then build point by point (real example, mechanism, "
+    "stake, counter-move), and hand off to a closing payoff. Each line "
+    "follows naturally from the one before. Never repeat an earlier line, "
+    "never restate it. No question marks in these lines.\n"
+    "OUTPUT CONTRACT: exactly ONE numbered line per beat, nothing else —\n"
+    "2. <the spoken text for beat 2>\n"
+    "3. <the spoken text for beat 3>\n"
+    "(and so on). Numbers only, no labels, no headings, no extra words "
+    "before or after."
+)
+
+
+def write_middle(
+    llm: LLMProvider,
+    beats: list[str],
+    fact_sheet: FactSheet,
+    hook_line: str,
+    payoff_line: str,
+    target_words: int,
+    source_text: str = "",
+    concepts: list[str] | None = None,
+    *,
+    model: str | None = None,
+) -> str:
+    """Write ALL middle lines in ONE call.
+
+    Writing them together is both cheaper (one round-trip instead of one
+    per line — a real cost on CPU-bound local models) and far more
+    coherent: the model composes a single passage that flows from the
+    hook into the payoff, rather than four isolated one-liners.
+    """
+    outline = "\n".join(
+        f"  {i + 2}. {beat}" for i, beat in enumerate(beats)
+    )
+    source = ""
+    if source_text:
+        source = (
+            "\nSOURCE BOOK EXCERPT (draw every line's idea from this; say "
+            "what it says, in your own speaking voice):\n"
+            f"'''\n{source_text[:2600]}\n'''\n"
+        )
+    msgs = [
+        LLMMessage(role="system", content=MIDDLE_SYSTEM),
+        LLMMessage(
+            role="user",
+            content=(
+                "FULL SCRIPT PLAN (hook and closing payoff are already "
+                f"written; you write ONLY the numbered middle lines):\n"
+                f"  1. {hook_line}   <- hook (already written, do NOT "
+                "rewrite or repeat it)\n"
+                f"{outline}\n"
+                f"  {len(beats) + 2}. {payoff_line}   <- closing payoff "
+                "(already written; your last line must hand off "
+                "naturally to it)\n"
+                f"Concept: {fact_sheet.concept}\n"
+                f"Mechanism: {fact_sheet.mechanism}\n"
+                f"Counter-move: {fact_sheet.counter_move}\n"
+                f"{source}"
+                f"Write ONLY lines 2 to {len(beats) + 1}, about "
+                f"{target_words} words each (±2), in order, connected as "
+                "one flowing passage. Start your reply with '2.'."
+            ),
+        ),
+    ]
+    try:
+        # enough tokens for N lines of narration + visual keys
+        max_tokens = len(beats) * (target_words * 3 + 30) + 60
+        raw = llm.complete(msgs, temperature=0.6, max_tokens=max_tokens, model=model)
+        return raw.strip()
+    except (LLMError, BlockError) as exc:
+        raise BlockError(f"Batch scene write failed: {exc}") from exc
 
 
 def condense_line(
@@ -156,7 +244,9 @@ def condense_line(
         ),
     ]
     try:
-        out = llm.complete(msgs, temperature=0.2, max_tokens=100, model=model).strip()
+        out = llm.complete(
+            msgs, temperature=0.2, max_tokens=max(45, target_words * 3), model=model,
+        ).strip()
     except (LLMError, BlockError):
         return ""
     return out.strip("\"'` ")

@@ -26,18 +26,18 @@ MANIFEST_PATH = Path("assets/psychology_motifs/manifest.json")
 ASSETS_ROOT = Path("assets/psychology_motifs")
 
 # LLM selection prompt
-_SELECTION_PROMPT = """You are selecting the best visual for a spoken sentence in a dark psychology teaching video.
+_SELECTION_PROMPT = """You are selecting visuals for a spoken sentence in a dark psychology teaching video.
 
-Given the sentence and a list of available images with descriptions, pick the ONE image that best matches what the sentence is actually about. A visual metaphor is fine; an unrelated subject is not.
+Given the sentence and a list of available images with descriptions, pick {count} DIFFERENT images that best match what the sentence is talking about. Each image should relate to a different part or idea in the sentence (a visual metaphor is fine; an unrelated subject is not).
 
-Return ONLY the image ID (e.g., "face_05", "crowd_12", "arch_03", "diag_14").
+Return ONLY a comma-separated list of image IDs in the order they should appear, e.g. "face_05, crowd_12" or "arch_03, diag_14, face_01".
 
 Sentence: "{sentence}"
 
 Available images:
 {image_list}
 
-Best image ID:"""
+Best image IDs:"""
 
 
 def _sentences(text: str) -> list[str]:
@@ -70,8 +70,19 @@ def _load_manifest() -> dict:
         return {"categories": {}}
 
 
+def _load_descriptions() -> dict:
+    p = ASSETS_ROOT / "descriptions.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def _build_image_catalog(manifest: dict) -> list[dict]:
-    """Flatten manifest into a list of image entries for LLM selection."""
+    """Flatten manifest into a list of image entries for LLM/keyword selection."""
+    descriptions = _load_descriptions()
     catalog = []
     for cat_name, cat_data in manifest.get("categories", {}).items():
         # Handle both old format (dict with "images") and new format (list)
@@ -80,13 +91,18 @@ def _build_image_catalog(manifest: dict) -> list[dict]:
             img_id = img.get("id", "")
             if not img_id:
                 continue
-            catalog.append({
+            entry = {
                 "id": img_id,
                 "category": img.get("category", cat_name),
                 "name": img.get("name", img_id),
                 "description": img.get("description", ""),
                 "filename": img.get("filename", f"{img_id}.png"),
-            })
+            }
+            rich = descriptions.get(img_id)
+            if rich:
+                entry["name"] = rich.get("name", entry["name"])
+                entry["description"] = rich.get("description", entry["description"])
+            catalog.append(entry)
     return catalog
 
 
@@ -116,68 +132,136 @@ def _get_selector_llm():
     return _llm_cache
 
 
-def _select_image_for_sentence(
-    sentence: str, catalog: list[dict], used_ids: set[str] | None = None
-) -> dict | None:
-    """Use LLM to pick the best image for a sentence."""
-    llm = _get_selector_llm()
-    used_ids = used_ids or set()
-    if llm is None or not catalog:
-        return None
+_STOP_WORDS = {
+    "the", "and", "you", "your", "they", "their", "them", "this", "that",
+    "with", "from", "have", "has", "had", "will", "would", "could", "should",
+    "when", "what", "how", "why", "not", "are", "was", "were", "been", "being",
+    "into", "than", "then", "just", "like", "more", "some", "most", "even",
+    "only", "also", "over", "such", "each", "every", "other", "about",
+}
 
-    valid_ids = {img["id"].lower() for img in catalog}
 
-    # Only offer images not already shown in this video (fall back to the
-    # full catalog if we would starve the prompt).
-    unused_catalog = [img for img in catalog if img["id"] not in used_ids]
-    pool = unused_catalog or catalog
-
-    # Limit pool to the top N most relevant by keyword overlap
+def _sentence_keywords(sentence: str) -> set[str]:
     sentence_lower = sentence.lower()
-    keywords = set(re.findall(r"[a-z]{3,}", sentence_lower)) - {
-        "the", "and", "you", "your", "they", "their", "them", "this", "that",
-        "with", "from", "have", "has", "had", "will", "would", "could", "should",
-        "when", "what", "how", "why", "not", "are", "was", "were", "been", "being",
-    }
+    return set(re.findall(r"[a-z]{3,}", sentence_lower)) - _STOP_WORDS
 
-    scored = []
-    for img in pool:
-        desc = (img.get("description", "") + " " + img.get("name", "")).lower()
-        score = sum(1 for kw in keywords if kw in desc)
-        if score > 0:
-            scored.append((score, img))
 
+def _images_for_sentence_count(sentence: str) -> int:
+    """How many images to show during one sentence (at least 2)."""
+    wc = len(sentence.split())
+    if wc <= 6:
+        return 2
+    if wc <= 12:
+        return 2
+    return 3
+
+
+def _score_image(img: dict, keywords: set[str], sentence_lower: str) -> int:
+    desc_lower = (img.get("description", "") + " " + img.get("name", "")).lower()
+    score = sum(1 for kw in keywords if kw in desc_lower)
+    cat = img.get("category", "")
+    if "face" in cat and any(w in sentence_lower for w in ["face", "expression", "look", "stare", "eye", "smile", "tear", "feel", "emotion"]):
+        score += 3
+    elif "crowd" in cat and any(w in sentence_lower for w in ["crowd", "people", "protest", "line", "group", "mass", "gathering", "together"]):
+        score += 3
+    elif "arch" in cat and any(w in sentence_lower for w in ["leader", "politician", "ceo", "therapist", "parent", "child", "narcissist", "psychopath", "healer", "authority", "boss"]):
+        score += 3
+    elif "diag" in cat and any(w in sentence_lower for w in ["inequality", "gap", "wealth", "income", "discriminat", "politics", "system", "structure", "data", "chart", "statistic", "power"]):
+        score += 3
+    elif "env" in cat and any(w in sentence_lower for w in ["room", "office", "building", "space", "institution", "prison", "cult", "place"]):
+        score += 2
+    elif "surveillance" in cat and any(w in sentence_lower for w in ["watch", "monitor", "track", "surveil", "camera", "data", "algorithm", "follow"]):
+        score += 3
+    elif "manip" in cat and any(w in sentence_lower for w in ["control", "manipulat", "gaslight", "puppet", "coerce", "pressure", "trick", "force"]):
+        score += 3
+    return score
+
+
+def _ranked_for_sentence(sentence: str, catalog: list[dict], used_ids: set[str]) -> list[dict]:
+    sentence_lower = sentence.lower()
+    keywords = _sentence_keywords(sentence)
+    unused = [img for img in catalog if img["id"] not in used_ids] or catalog
+    scored = [( _score_image(img, keywords, sentence_lower), img) for img in unused]
     scored.sort(reverse=True, key=lambda x: x[0])
-    top_catalog = [img for _, img in scored[:15]] or pool[:15]
+    # prefer matches with some relevance, but keep others as tail so we never starve
+    relevant = [img for s, img in scored if s > 0]
+    rest = [img for s, img in scored if s <= 0]
+    return relevant + rest
 
-    image_list = _format_catalog_for_prompt(top_catalog)
-    avoid = ""
-    if used_ids:
-        avoid_list = ", ".join(sorted(used_ids)[:20])
-        avoid = f"\n\nDo NOT reuse these images (they already appeared): {avoid_list}."
-    prompt = _SELECTION_PROMPT.format(sentence=sentence.strip()[:300], image_list=image_list) + avoid
 
-    try:
-        raw = llm.complete(
-            [LLMMessage(role="user", content=prompt)],
-            temperature=0.0,
-        )
-        match = re.search(r'\b([a-z]{3,6})[_\\](\d+)\b', raw.replace("\\", ""), re.IGNORECASE)
-        if match:
-            picked_id = f"{match.group(1)}_{match.group(2)}".lower()
-            if picked_id in used_ids:
-                logger.warning("LLM re-picked used image %s; falling back", picked_id)
-                return None
-            if picked_id in valid_ids:
+def _select_images_for_sentence(
+    sentence: str, catalog: list[dict], used_ids: set[str], count: int,
+) -> list[dict]:
+    """Pick `count` different images related to parts of the sentence."""
+    if not catalog or count <= 0:
+        return []
+    count = min(count, len(catalog))
+
+    llm = _get_selector_llm()
+    valid_ids = {img["id"].lower() for img in catalog}
+    ranked = _ranked_for_sentence(sentence, catalog, used_ids)
+    pool = ranked[:25] if ranked else catalog[:25]
+    picks: list[dict] = []
+    picked_ids: set[str] = set()
+
+    if llm is not None and pool:
+        image_list = _format_catalog_for_prompt(pool)
+        avoid = ""
+        if used_ids:
+            avoid_list = ", ".join(sorted(used_ids)[:20])
+            avoid = f"\n\nDo NOT reuse these images (they already appeared): {avoid_list}."
+        prompt = _SELECTION_PROMPT.format(
+            count=count, sentence=sentence.strip()[:300], image_list=image_list
+        ) + avoid
+        try:
+            raw = llm.complete([LLMMessage(role="user", content=prompt)], temperature=0.0)
+            for match in re.finditer(r"\b([a-z]{3,6})[_\\](\d+)\b", raw.replace("\\", ""), re.IGNORECASE):
+                pid = f"{match.group(1)}_{match.group(2)}".lower()
+                if pid in used_ids or pid in picked_ids or pid not in valid_ids:
+                    continue
                 for img in catalog:
-                    if img["id"].lower() == picked_id:
-                        logger.info("LLM selected %s for: %s...", img["id"], sentence[:60])
-                        return img
-        logger.warning("LLM returned invalid ID: %s", raw[:100])
-    except Exception as e:
-        logger.warning("LLM selection failed: %s", e)
+                    if img["id"].lower() == pid:
+                        picks.append(img)
+                        picked_ids.add(pid)
+                        break
+                if len(picks) >= count:
+                    break
+            if picks:
+                logger.info("LLM selected %s for: %s...", [p["id"] for p in picks], sentence[:50])
+        except Exception as e:
+            logger.warning("LLM multi-selection failed: %s", e)
 
-    return None
+    # fill remaining slots with ranked diverse picks
+    if len(picks) < count:
+        for img in ranked:
+            if img["id"] in used_ids or img["id"] in picked_ids:
+                continue
+            # prefer category variety among the picks for this sentence
+            if picks and all(img.get("category") == p.get("category") for p in picks):
+                continue
+            picks.append(img)
+            picked_ids.add(img["id"])
+            if len(picks) >= count:
+                break
+    # final fill: any unused
+    if len(picks) < count:
+        for img in catalog:
+            if img["id"] in used_ids or img["id"] in picked_ids:
+                continue
+            picks.append(img)
+            picked_ids.add(img["id"])
+            if len(picks) >= count:
+                break
+    # absolute last resort: allow reuse rather than returning fewer than requested
+    if len(picks) < count:
+        for img in catalog:
+            if img["id"] in picked_ids:
+                continue
+            picks.append(img)
+            picked_ids.add(img["id"])
+            if len(picks) >= count:
+                break
+    return picks[:count]
 
 
 def _fallback_select(
@@ -185,49 +269,22 @@ def _fallback_select(
     last_category: str | None = None,
 ) -> dict | None:
     """Fallback: keyword-based selection when LLM fails."""
-    sentence_lower = sentence.lower()
-    keywords = set(re.findall(r"[a-z]{3,}", sentence_lower)) - {
-        "the", "and", "you", "your", "they", "their", "them", "this", "that",
-        "with", "from", "have", "has", "had", "will", "would", "could", "should",
-        "when", "what", "how", "why", "not", "are", "was", "were", "been", "being",
-    }
-
+    ranked = _ranked_for_sentence(sentence, catalog, used_ids)
     best = None
-    best_score = -1
-
-    for img in catalog:
+    best_score = -10**9
+    sentence_lower = sentence.lower()
+    keywords = _sentence_keywords(sentence)
+    for img in ranked:
         if img["id"] in used_ids:
             continue
-
-        # Score based on keyword overlap in description + name
-        desc_lower = (img.get("description", "") + " " + img.get("name", "")).lower()
-        score = sum(1 for kw in keywords if kw in desc_lower)
-
-        # Boost for category relevance
-        cat = img.get("category", "")
-        if "face" in cat and any(w in sentence_lower for w in ["face", "expression", "look", "stare", "eye", "smile", "tear"]):
-            score += 3
-        elif "crowd" in cat and any(w in sentence_lower for w in ["crowd", "people", "protest", "line", "group", "mass", "gathering"]):
-            score += 3
-        elif "arch" in cat and any(w in sentence_lower for w in ["leader", "politician", "ceo", "therapist", "parent", "child", "narcissist", "psychopath", "healer"]):
-            score += 3
-        elif "diag" in cat and any(w in sentence_lower for w in ["inequality", "gap", "wealth", "income", "discriminat", "politics", "system", "structure", "data", "chart", "statistic"]):
-            score += 3
-        elif "env" in cat and any(w in sentence_lower for w in ["room", "office", "building", "space", "institution", "prison", "cult"]):
-            score += 2
-        elif "surveillance" in cat and any(w in sentence_lower for w in ["watch", "monitor", "track", "surveil", "camera", "data", "algorithm"]):
-            score += 3
-        elif "manip" in cat and any(w in sentence_lower for w in ["control", "manipulat", "gaslight", "puppet", "coerce", "pressure"]):
-            score += 3
-
-        # Variety: avoid showing the same category back-to-back
-        if last_category and cat == last_category:
+        score = _score_image(img, keywords, sentence_lower)
+        if last_category and img.get("category") == last_category:
             score -= 2
-
         if score > best_score:
             best_score = score
             best = img
-
+        if best_score >= 4:
+            break
     if best:
         logger.info("Fallback selected %s (score=%d) for: %s...", best["id"], best_score, sentence[:60])
     return best
@@ -236,7 +293,11 @@ def _fallback_select(
 def assign_sentence_assets(
     texts: list[str], *, used_concepts: set[str] | None = None
 ) -> list[VisualAsset]:
-    """Assign one visual per sentence using manifest catalog + LLM selection."""
+    """Assign multiple related visuals per sentence.
+
+    Each sentence gets 2-3 images (shown in sequence) so that different
+    parts of what the sentence talks about have a matching visual.
+    """
 
     if used_concepts is None:
         used_concepts = set()
@@ -258,62 +319,60 @@ def assign_sentence_assets(
         logger.warning("No images in manifest!")
         return []
 
-    last_category: str | None = None
+    plan: list[tuple[str, int]] = [
+        (sent, _images_for_sentence_count(sent)) for _ti, _si, sent in all_sents
+    ]
+    total = sum(c for _, c in plan) or 1
     assets: list[VisualAsset] = []
+    seq_idx = 0
 
-    for idx, (_ti, _si, sent) in enumerate(all_sents):
-        llm_picked = False
-        # Try LLM selection first (it only sees unused images)
-        img = _select_image_for_sentence(sent, catalog, used_ids=used_ids)
-        if img is not None and img["id"] not in used_ids:
-            llm_picked = True
-
-        # Fallback if LLM fails
-        if img is None or img["id"] in used_ids:
-            img = _fallback_select(sent, catalog, used_ids, last_category=last_category)
-
-        if img is None:
-            # Last resort: any unused image
-            for c in catalog:
-                if c["id"] not in used_ids:
-                    img = c
+    for sent, count in plan:
+        picks = _select_images_for_sentence(sent, catalog, used_ids, count)
+        if len(picks) < count:
+            ranked = _ranked_for_sentence(sent, catalog, used_ids)
+            picked_set = {p["id"] for p in picks}
+            for img in ranked:
+                if img["id"] in picked_set or img["id"] in used_ids:
+                    continue
+                picks.append(img)
+                picked_set.add(img["id"])
+                if len(picks) >= count:
                     break
+        if not picks:
+            picks = [catalog[0]]
 
-        if img is None:
-            img = catalog[0]  # Should not happen
+        for img in picks:
+            used_ids.add(img["id"])
+            position = seq_idx / max(total - 1, 1) if total > 1 else 0.0
+            seq_idx += 1
 
-        used_ids.add(img["id"])
-        last_category = img.get("category", last_category)
+            # Find actual file path
+            cat_dir = ASSETS_ROOT / img["category"]
+            file_path = cat_dir / img["filename"]
+            if not file_path.exists():
+                # Search all subdirs
+                for subdir in ASSETS_ROOT.iterdir():
+                    if subdir.is_dir():
+                        p = subdir / img["filename"]
+                        if p.exists():
+                            file_path = p
+                            break
 
-        position = idx / max(len(all_sents) - 1, 1) if len(all_sents) > 1 else 0.0
-
-        # Find actual file path
-        cat_dir = ASSETS_ROOT / img["category"]
-        file_path = cat_dir / img["filename"]
-        if not file_path.exists():
-            # Search all subdirs
-            for subdir in ASSETS_ROOT.iterdir():
-                if subdir.is_dir():
-                    p = subdir / img["filename"]
-                    if p.exists():
-                        file_path = p
-                        break
-
-        asset = VisualAsset(
-            kind="image",
-            file=img["filename"],
-            url=f"file://{file_path.resolve()}" if file_path.exists() else "",
-            page_url=f"{img['category']}:{img['filename']}",
-            caption=f"{img['category']}: {img['name']}",
-            trigger=_trigger(sent),
-            position=round(position, 3),
-            extra={
-                "concept": img["category"],
-                "source": "manifest",
-                "llm_selected": llm_picked,
-            },
-        )
-        assets.append(asset)
+            asset = VisualAsset(
+                kind="image",
+                file=img["filename"],
+                url=f"file://{file_path.resolve()}" if file_path.exists() else "",
+                page_url=f"{img['category']}:{img['filename']}",
+                caption=f"{img['category']}: {img['name']}",
+                trigger=_trigger(sent),
+                position=round(position, 3),
+                extra={
+                    "concept": img["category"],
+                    "source": "manifest",
+                    "llm_selected": False,
+                },
+            )
+            assets.append(asset)
 
     return assets
 

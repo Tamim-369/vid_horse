@@ -351,6 +351,14 @@ def render_black_style(
             pick = _pool_pick(last_file)
             seq = [pick] if pick is not None else [None]
 
+        # Show multiple images per line/sentence, but keep each on screen
+        # long enough to register (don't flash). If the line is too short
+        # for every assigned image, show as many as fit in order.
+        MIN_IMG_DUR = 1.8
+        if len(seq) > 1 and line_dur / len(seq) < MIN_IMG_DUR:
+            keep = max(1, int(line_dur / MIN_IMG_DUR))
+            seq = seq[:keep]
+
         bounds = [line_dur * i / len(seq) for i in range(len(seq) + 1)]
 
         for wi, asset in enumerate(seq):

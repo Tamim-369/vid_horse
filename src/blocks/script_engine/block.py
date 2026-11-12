@@ -16,7 +16,7 @@ from blocks.script_engine.validators import (
     validate_pov,
     validate_scene,
 )
-from blocks.script_engine.writer import condense_line, write_scene
+from blocks.script_engine.writer import condense_line, write_middle, write_scene
 from core.interfaces import LLMProvider
 from core.models import ScriptFormat, ScriptScene, VideoScript
 from ingestion.retriever import RAGRetriever
@@ -68,6 +68,8 @@ def _clean_speech(text: str) -> str:
     """Strip markdown/prompt artifacts; keep apostrophes inside words."""
     text = re.sub(r"<br\s*/?>", " ", text, flags=re.I)
     text = re.sub(r"[*_`<>]", "", text)
+    # slash-markup the model leaks ("/br", "./br", "\br")
+    text = re.sub(r"[./\\]+\s*br\b\.?", " ", text, flags=re.I)
     # drop everything from the first reasoning marker on
     cut = _REASONING_MARKERS.search(text)
     if cut:
@@ -107,18 +109,24 @@ def _parse_scene(raw: str) -> tuple[str, str]:
 
     narr = ""
     vis = ""
-    m = re.search(r"NARRATION:\s*(.*?)(?=VIS(?:UAL|ION):|$)", raw, re.I | re.S)
+    # typo-tolerant labels: 4B models emit NARRATIOAN/NARROTAION/VISION etc.
+    m = re.search(r"NARR\w*\s*:\s*(.*?)(?=VIS\w*\s*:|$)", raw, re.I | re.S)
     if m:
         narr = m.group(1).strip()
-    m2 = re.search(r"VIS(?:UAL|ION):\s*(.*)", raw, re.I | re.S)
+    m2 = re.search(r"VIS\w*\s*:\s*(.*)", raw, re.I | re.S)
     if m2:
         # keep only the first line: free models echo instructions after it
         vis = m2.group(1).strip().splitlines()[0].strip()
         # strip markdown emphasis/code marks; keep '_' (concept-key delimiter)
         vis = re.sub(r"[*<>`]", "", vis).strip()
     # remove any leaked VISUAL/VISION/FOMO labels from narration
-    narr = re.sub(r"\s*VIS(?:UAL|ION):.*", "", narr, flags=re.I | re.S).strip()
+    narr = re.sub(r"\s*VIS\w*\s*:.*", "", narr, flags=re.I | re.S).strip()
     narr = re.sub(r"\s*FOMO\s*:.*", "", narr, flags=re.I | re.S).strip()
+    # scrub stray mislabelled tokens the model leaks mid-line
+    # ("...stay quiet.NARROTION." -> "...stay quiet.")
+    narr = re.sub(r"\bNARR\w*[.:]?\s*", "", narr, flags=re.I).strip()
+    narr = re.sub(r"\bVIS\w*[.:]?\s*", "", narr, flags=re.I).strip()
+    narr = narr.strip(" .,;:-")
     if not narr:
         narr = raw.strip()
     narr = _clean_speech(narr)
@@ -225,6 +233,81 @@ def _first_sentence(text: str, max_words: int = 12, min_words: int = 0) -> str:
     if len(words) < len(sent.split()):
         sent = " ".join(words).rstrip(",;:.!?") + "."
     return _ensure_complete(sent)
+
+
+def _parse_batch(
+    raw: str,
+    hook_line: str = "",
+    payoff_line: str = "",
+) -> dict[int, tuple[str, str]]:
+    """Split a batch reply into {beat_index: (narration, visual)}.
+
+    Preferred format: numbered lines ("2. <text>") where the number is
+    the line's position in the full script (2 = first middle line), so
+    misalignment is impossible even when the model echoes the hook.
+    Falls back to NARRATION/VISUAL blocks, then blank-line paragraphs
+    (assigned sequentially). Lines that near-duplicate the hook or
+    payoff are dropped.
+    """
+    known = [line for line in (hook_line, payoff_line) if line]
+    out: dict[int, tuple[str, str]] = {}
+    for m in re.finditer(r"^\s*(\d+)\s*[.)]\s*(.+)$", raw, re.M):
+        text = m.group(2).strip()
+        if not text or _is_placeholder(text) or repeats_previous(text, known):
+            continue
+        out[int(m.group(1)) - 2] = (text, "")
+    if out:
+        return out
+    pairs: list[tuple[str, str]] = []
+    chunks = re.split(r"(?=NARR\w*\s*:)", raw, flags=re.I)
+    for chunk in chunks:
+        if not re.match(r"NARR\w*\s*:", chunk, re.I):
+            continue
+        narr, vis = _parse_scene(chunk)
+        if narr:
+            pairs.append((narr, vis))
+    if not pairs:
+        for chunk in re.split(r"\n\s*\n", raw):
+            chunk = chunk.strip()
+            if chunk and not _is_placeholder(chunk):
+                pairs.append((chunk, ""))
+    idx = 0
+    for narr, vis in pairs:
+        if repeats_previous(narr, known):
+            continue
+        out[idx] = (narr, vis)
+        idx += 1
+    return out
+
+
+def _trim_fresh(text: str, target: int, previous: list[str]) -> str:
+    """Leading complete sentences of ``text`` within the word budget,
+    skipping sentences that near-duplicate lines already in the script.
+
+    A 4B model that rambles tends to open every attempt with the same
+    image; taking the first sentence blindly then makes every scene
+    sound identical. Skipping repeated sentences keeps each line fresh
+    without an extra LLM call. Returns "" when nothing fresh fits.
+    """
+    parts = re.split(r"(?<=[.!?])\s+", text.strip())
+    kept: list[str] = []
+    count = 0
+    for part in parts:
+        if not part.strip() or repeats_previous(part, previous):
+            continue
+        w = len(part.split())
+        if count + w > target and kept:
+            break
+        kept.append(part)
+        count += w
+        if count >= max(4, target - 4):
+            break
+    out = " ".join(kept).strip()
+    if not out:
+        return ""
+    if len(out.split()) > target:
+        out = _first_sentence(out, max_words=target)
+    return out
 
 
 _POV_SWAPS = [
@@ -406,11 +489,29 @@ class ScriptEngineBlock:
                 _clean_speech(hook_beat), max_words=12))
             logger.warning("hook fallback used beat text: %s", hook_narr)
 
-        # Generate middle scenes.
+        # Generate middle scenes. ONE batch call writes all of them
+        # together (cheaper on CPU-bound local models, and the lines are
+        # composed as a single connected passage). Lines that fail
+        # validation afterwards fall back to individual rewrites.
         middle_beats = beats[1:5]
         scenes: list[ScriptScene] = []
         scene_beats: list[str] = []
         narrations: list[str] = [hook_narr]
+        batch: dict[int, tuple[str, str]] = {}
+        try:
+            batch_raw = write_middle(
+                self._llm, middle_beats, fs, hook_narr, payoff_narr,
+                per_scene, source_text=source_text, concepts=_CONCEPT_KEYS,
+                model=wm,
+            )
+            for j, (bn, bv) in _parse_batch(batch_raw, hook_narr, payoff_narr).items():
+                if 0 <= j < len(middle_beats) and bn and not _is_placeholder(bn):
+                    batch[j] = (bn, bv)
+            logger.info(
+                "batch wrote %d/%d middle lines", len(batch), len(middle_beats)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("batch middle write failed: %s", exc)
         for i, beat in enumerate(middle_beats):
             target = per_scene
             attempt = 0
@@ -425,46 +526,80 @@ class ScriptEngineBlock:
                 "no warm-up, no recapping the hook, keep the tension.)"
                 if i == 0 else beat
             )
+            best_narr, best_vis, best_gap = "", "", 10**9
+            accepted = False
             while attempt < self._max_scene_retries:
-                write_beat = base_beat
-                if feedback:
-                    write_beat = (
-                        base_beat + f" (Your previous attempt was rejected: "
-                        f"{'; '.join(feedback)}. Fix it: write 1-2 complete "
-                        "STATEMENTS that add NEW information from the source and "
-                        "continue naturally from the previous line. "
-                        "No question mark in a statement line.)"
-                    )
-                try:
-                    raw = write_scene(
-                        self._llm, write_beat, fs, narrations, target,
-                        source_text=source_text, concepts=_CONCEPT_KEYS,
-                        plan=beats, beat_index=beat_idx, model=wm,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("scene %d write failed: %s", i, exc)
-                    attempt += 1
-                    continue
-                narr, vis = _parse_scene(raw)
+                if attempt == 0 and i in batch:
+                    # the batch line is this scene's first attempt
+                    narr, vis = batch[i]
+                else:
+                    write_beat = base_beat
+                    if feedback:
+                        write_beat = (
+                            base_beat + f" (Your previous attempt was rejected: "
+                            f"{'; '.join(feedback)}. Fix it: write 1-2 complete "
+                            "STATEMENTS that add NEW information from the source and "
+                            "continue naturally from the previous line. "
+                            "No question mark in a statement line.)"
+                        )
+                    try:
+                        raw = write_scene(
+                            self._llm, write_beat, fs, narrations, target,
+                            source_text=source_text, concepts=_CONCEPT_KEYS,
+                            plan=beats, beat_index=beat_idx, model=wm,
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("scene %d write failed: %s", i, exc)
+                        attempt += 1
+                        continue
+                    narr, vis = _parse_scene(raw)
                 if not narr or _is_placeholder(narr):
                     attempt += 1
                     feedback = ["empty or placeholder output"]
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
-                # rescue pass: only when seriously off-length or when a
-                # statement slot contains a question. Aggressive condense
-                # breaks flow, so prefer letting polish smooth minor drift.
+                # mechanical trim FIRST: a rambling multi-sentence dump gets
+                # cut to its leading complete sentences within budget —
+                # instant, no LLM call; sentences that near-duplicate lines
+                # already in the script are skipped so scenes stay distinct
                 wc = len(narr.split())
-                if wc < max(4, target - 5) or wc > target + 6 or (i > 0 and "?" in narr):
+                if wc > target + 2:
+                    trimmed = _trim_fresh(narr, target, narrations)
+                    if not trimmed:
+                        trimmed = _first_sentence(
+                            narr, max_words=target, min_words=max(4, target - 4)
+                        )
+                    if trimmed and not _is_placeholder(trimmed):
+                        logger.info(
+                            "scene %d trimmed %d -> %d words",
+                            i, wc, len(trimmed.split()),
+                        )
+                        narr, vis = trimmed, ""
+                        wc = len(narr.split())
+                # rescue pass (LLM) only when still off-length or a statement
+                # slot contains a question — and only kept if it lands closer
+                # to budget than what we already have
+                if wc < max(4, target - 5) or wc > target + 2 or (i > 0 and "?" in narr):
                     condensed = condense_line(
                         self._llm, narr, target, statement=(i > 0),
                         previous=narrations[-1] if narrations else "",
                         model=wm,
                     )
                     if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
-                        logger.info("scene %d condensed %d -> %d words", i, wc, len(condensed.split()))
-                        narr = condensed
-                        vis = ""
+                        cwc = len(condensed.split())
+                        if abs(cwc - target) <= abs(wc - target):
+                            logger.info("scene %d condensed %d -> %d words", i, wc, cwc)
+                            narr, vis, wc = condensed, "", cwc
+                # remember the closest-to-budget complete candidate as a
+                # fallback if every attempt fails validation
+                gap = abs(wc - target)
+                if (
+                    gap < best_gap
+                    and not (i > 0 and "?" in narr)
+                    and not _is_incomplete(narr)
+                    and not repeats_previous(narr, narrations)
+                ):
+                    best_narr, best_vis, best_gap = narr, vis, gap
                 res = validate_scene(narr, target, allow_question=(i == 0))
                 if _is_incomplete(narr):
                     res.ok = False
@@ -483,10 +618,29 @@ class ScriptEngineBlock:
                     feedback = pov.issues
                     logger.info("scene %d retry (POV): %s", i, pov.issues)
                     continue
+                accepted = True
                 break
-            if not narr or _is_placeholder(narr):
-                narr = _clean_speech(beat)
-                vis = ""
+            if not accepted:
+                # never ship a monster line just because retries ran out:
+                # prefer the attempt closest to the word budget
+                if best_narr:
+                    logger.info(
+                        "scene %d: keeping best attempt (%d words)",
+                        i, len(best_narr.split()),
+                    )
+                    narr, vis = best_narr, best_vis
+                if not narr or _is_placeholder(narr) or repeats_previous(narr, narrations):
+                    # a repeated line is as bad as an empty one — the beat
+                    # text is a distinct planned thought, so prefer it
+                    beatline = _clean_speech(beat)
+                    if beatline and not repeats_previous(beatline, narrations):
+                        logger.info("scene %d: falling back to beat text", i)
+                        narr, vis = beatline, ""
+            # final clamp: narration should never blow the budget
+            if narr and len(narr.split()) > target + 3:
+                clamped = _first_sentence(narr, max_words=target + 2)
+                if clamped and not _is_placeholder(clamped):
+                    narr = clamped
             visual = vis or ""
             if not visual or _is_placeholder(visual):
                 # small models often skip the VISUAL line; bind the visual to
