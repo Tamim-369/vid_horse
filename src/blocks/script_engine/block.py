@@ -60,6 +60,7 @@ def _clean_speech(text: str) -> str:
     t = re.sub(r"^\s*(hook|scene\s*\d+|outro|line\s*\d+|narration)\s*[:\-]\s*", "", t, flags=re.I)
     t = re.sub(r"^\s*\d+\s*[.)]\s*", "", t)
     t = re.sub(r"[*_`#<>]", "", t)
+    t = t.replace("—", ", ").replace("–", ", ").replace("…", "...")
     t = re.sub(r'"|“|”', "", t)
     t = t.replace("‘", "'").replace("’", "'")
     t = re.sub(r"(?<!\w)'|'(?!\w)", "", t)
@@ -67,7 +68,7 @@ def _clean_speech(text: str) -> str:
     m = _META_LEAK_RE.search(t)
     if m and m.start() > 10:
         t = t[: m.start()].strip()
-    t = re.sub(r"\s+", " ", t).strip(" -:;")
+    t = re.sub(r"\s+", " ", t).strip(" -:;,")
     return t
 
 
@@ -82,34 +83,43 @@ def _is_bad(text: str) -> bool:
     return False
 
 
-def _ensure_sentence(text: str) -> str:
+def _ensure_sentence(text: str, end: str = ".") -> str:
     t = (text or "").strip()
     if not t:
         return t
     if t[-1] not in ".!?":
-        t += "."
+        t += end
     # avoid ending on a dangling connector
     t = re.sub(
-        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to)\s*[.!?]\s*$",
-        ".",
+        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to|like|as|when|if|than)\s*[.!?]\s*$",
+        end,
         t,
         flags=re.I,
     )
     return re.sub(r"\s+", " ", t).strip()
 
 
-def _first_sentence(text: str, max_words: int) -> str:
-    parts = re.split(r"(?<=[.!?])\s+", (text or "").strip())
-    sent = parts[0] if parts and parts[0].strip() else (text or "").strip()
-    if not sent:
-        return sent
-    words = sent.split()
-    if len(words) > max_words:
-        words = words[:max_words]
-        while len(words) > 3 and words[-1].lower().strip(",;:.!?") in _DANGLING_WORDS:
-            words.pop()
-        sent = " ".join(words).rstrip(",;:.!?") + "."
-    return _ensure_sentence(sent)
+def _cap_to_complete(text: str, max_words: int) -> str:
+    """Shorten to whole sentences within ~max_words; never cut mid-thought."""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t or len(t.split()) <= max_words:
+        return t
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+    if len(parts) > 1:
+        kept: list[str] = []
+        total = 0
+        for p in parts:
+            w = len(p.split())
+            if kept and total + w > max_words + 6:
+                break
+            kept.append(p)
+            total += w
+            if total >= max_words:
+                break
+        if kept:
+            return " ".join(kept)
+    # Single long sentence: keep it intact rather than chopping into nonsense.
+    return t
 
 
 def _visual_keywords(text: str, limit: int = 4) -> str:
@@ -240,30 +250,42 @@ class ScriptEngineBlock:
                 fb = _clean_speech(fallbacks[i] if i < len(fallbacks) else fallbacks[-1])
                 if fb and not repeats_previous(fb, fixed):
                     ln = fb
-            ln = _ensure_sentence(ln) if ln else _ensure_sentence(_clean_speech(fallbacks[i]))
+            if ln:
+                ln = _ensure_sentence(ln, end="?" if i == 0 else ".")
+            else:
+                ln = _ensure_sentence(_clean_speech(fallbacks[i]), end="?" if i == 0 else ".")
             if len(ln.split()) < 3:
-                ln = _ensure_sentence(_clean_speech(fallbacks[i]) or "Think about this in your own life.")
+                fb = _clean_speech(fallbacks[i]) or ("Why does this happen to you?" if i == 0 else "You feel it before you see it.")
+                ln = _ensure_sentence(fb, end="?" if i == 0 else ".")
             fixed.append(ln)
 
-        # Enforce shape: hook is a question (about a moment/why), line 2 may be question or statement,
-        # lines 3-6 must be statements.
+        # Enforce shape: hook asks "why" about a moment; line 2 may be question or statement;
+        # lines 3-6 are statements.
         hook = fixed[0]
-        hook = re.sub(r"[.!]+\s*$", "?", hook).strip()
-        if "?" not in hook:
-            hook = hook.rstrip() + "?"
-        hook = _first_sentence(hook, max_words=16)
+        # prefer an actual question sentence if one exists
+        q = re.search(r"[^.!?]*\?", hook)
+        if q:
+            hook = q.group(0).strip()
+        else:
+            hook = re.sub(r"[.!]+\s*$", "?", hook).strip() or hook
+            if "?" not in hook:
+                hook = hook.rstrip() + "?"
+        hook = _cap_to_complete(hook, 16)
         if "?" not in hook:
             hook = hook.rstrip(".! ") + "?"
+        hook = re.sub(r"\s+", " ", hook).strip()
         fixed[0] = hook
 
+        fixed[1] = _ensure_sentence(fixed[1])
         for i in range(2, 6):  # scene2, scene3, scene4, outro -> statements
             fixed[i] = fixed[i].replace("?", ".")
             fixed[i] = _ensure_sentence(fixed[i])
 
-        # Cap overlong lines (keep them clear, don't pad)
+        # Only shorten very overlong lines, and never by cutting mid-thought
+        soft_cap = per_scene_ceiling + (12 if cap_mode else 8)
         for i in range(1, 6):
-            if len(fixed[i].split()) > per_scene_ceiling + 6:
-                fixed[i] = _first_sentence(fixed[i], max_words=per_scene_ceiling)
+            if len(fixed[i].split()) > soft_cap:
+                fixed[i] = _ensure_sentence(_cap_to_complete(fixed[i], per_scene_ceiling + 4))
 
         scene_lines = fixed[1:5]
         outro = fixed[5]
