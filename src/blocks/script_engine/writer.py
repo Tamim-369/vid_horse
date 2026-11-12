@@ -57,6 +57,7 @@ def write_scene(
     plan: list[str] | None = None,
     beat_index: int | None = None,
     model: str | None = None,
+    flexible: bool = False,
 ) -> str:
     prev = "\n".join(previous) if previous else "(none)"
     source = ""
@@ -100,11 +101,27 @@ def write_scene(
             "clear fact with a real-life example."
         )
     else:
-        line_rule = (
-            "Middle/late line: ONE declarative statement, no question mark. "
-            "Add a real-life example, explain why it happens in plain words, "
-            "show what's at stake, or give a simple thing to do."
+        if flexible:
+            line_rule = (
+                "This line: ONE or MORE complete sentences (a declarative "
+                "statement). Explain this part clearly using real-life "
+                "examples in plain words — take the space you need. No "
+                "question mark."
+            )
+        else:
+            line_rule = (
+                "Middle/late line: ONE declarative statement, no question "
+                "mark. Add a real-life example, explain why it happens in "
+                "plain words, show what's at stake, or give a simple thing "
+                "to do."
+            )
+    if flexible and beat_index not in (0, 1):
+        length_rule = (
+            f"Write up to {target_words} words. Use only as many words as "
+            "you need to explain this clearly — shorter is fine, do not pad."
         )
+    else:
+        length_rule = f"Write ONE line of about {target_words} words (±2)."
     msgs = [
         LLMMessage(role="system", content=SYSTEM),
         LLMMessage(
@@ -118,9 +135,9 @@ def write_scene(
                 f"{vocab}"
                 f"{prev_note}\n{prev}\n"
                 f"{source}"
-                f"Write ONE line of about {target_words} words (±2). "
+                f"{length_rule} "
                 "Use the simplest common words. Do NOT copy the book's "
-                "style. Prefer a concrete real-life example over abstract "
+                "style. Prefer concrete real-life examples over abstract "
                 "talk. Continue smoothly from the previous line.\n"
                 f"{line_rule}\n"
                 "Format: NARRATION: <text>\nVISUAL: <one concept key>"
@@ -175,6 +192,7 @@ def write_middle(
     concepts: list[str] | None = None,
     *,
     model: str | None = None,
+    flexible: bool = False,
 ) -> str:
     """Write ALL middle lines in ONE call.
 
@@ -193,6 +211,14 @@ def write_middle(
             "what it says, in your own speaking voice):\n"
             f"'''\n{source_text[:2600]}\n'''\n"
         )
+    if flexible:
+        length_rule = (
+            f"up to {target_words} words each — use only as many as you need "
+            "to explain clearly (shorter is fine). You may use one or two "
+            "short sentences per line if it helps explain the idea."
+        )
+    else:
+        length_rule = f"about {target_words} words each (±2)"
     msgs = [
         LLMMessage(role="system", content=MIDDLE_SYSTEM),
         LLMMessage(
@@ -210,17 +236,18 @@ def write_middle(
                 f"Mechanism: {fact_sheet.mechanism}\n"
                 f"Counter-move: {fact_sheet.counter_move}\n"
                 f"{source}"
-                f"Write ONLY lines 2 to {len(beats) + 1}, about "
-                f"{target_words} words each (±2), in order, connected as "
-                "one flowing passage. Use the simplest common words, not "
-                "the book's style. Use real-life examples from everyday "
-                "life with a quiet dark vibe. Start your reply with '2.'."
+                f"Write ONLY lines 2 to {len(beats) + 1}, {length_rule}, "
+                "in order, connected as one flowing passage. Use the "
+                "simplest common words, not the book's style. Use real-life "
+                "examples from everyday life with a quiet dark vibe. Start "
+                "your reply with '2.'."
             ),
         ),
     ]
     try:
-        # enough tokens for N lines of narration + visual keys
-        max_tokens = len(beats) * (target_words * 3 + 30) + 60
+        # enough tokens for N lines of narration
+        per_line = target_words * 4 + 40 if flexible else target_words * 3 + 30
+        max_tokens = len(beats) * per_line + 60
         raw = llm.complete(msgs, temperature=0.6, max_tokens=max_tokens, model=model)
         return raw.strip()
     except (LLMError, BlockError) as exc:

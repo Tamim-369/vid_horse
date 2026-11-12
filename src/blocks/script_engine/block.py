@@ -407,7 +407,16 @@ class ScriptEngineBlock:
         # words per scene: distribute target seconds
         wps = 2.5
         total_words = int(self._target_seconds * wps)
+        # 200s+ is a "cap" (use only as many words as needed); shorter
+        # targets are filled to feel paced.
+        cap_mode = self._target_seconds >= 120
         per_scene = max(6, total_words // len(beats))
+
+        def _scene_target(base: int) -> int:
+            # writer hint: aim for a comfortable length, not the hard ceiling
+            if cap_mode:
+                return min(base, 28)
+            return base
 
         wm = self._writer_model
 
@@ -415,9 +424,9 @@ class ScriptEngineBlock:
         payoff_idx = 5 if len(beats) >= 6 else len(beats) - 1
         payoff_beat = beats[payoff_idx]
         payoff_raw = write_scene(
-            self._llm, payoff_beat, fs, [], 12,
+            self._llm, payoff_beat, fs, [], 16 if cap_mode else 12,
             source_text=source_text, concepts=_CONCEPT_KEYS,
-            plan=beats, beat_index=payoff_idx, model=wm,
+            plan=beats, beat_index=payoff_idx, model=wm, flexible=cap_mode,
         )
         payoff_narr, payoff_vis = _parse_scene(payoff_raw)
         if not payoff_narr or _is_placeholder(payoff_narr):
@@ -468,7 +477,7 @@ class ScriptEngineBlock:
         hook_narr, _hook_vis = _parse_scene(
             write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
                         source_text=source_text, concepts=_CONCEPT_KEYS,
-                        plan=beats, beat_index=0, model=wm)
+                        plan=beats, beat_index=0, model=wm, flexible=cap_mode)
         )
         hook_narr = _clean_hook(hook_narr)
         # mechanical clamps only (they never invent content)
@@ -479,7 +488,7 @@ class ScriptEngineBlock:
             hook_narr, _hook_vis = _parse_scene(
                 write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
                             source_text=source_text, concepts=_CONCEPT_KEYS,
-                            plan=beats, beat_index=0, model=wm)
+                            plan=beats, beat_index=0, model=wm, flexible=cap_mode)
             )
             hook_narr = _clean_hook(hook_narr)
             hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
@@ -502,8 +511,8 @@ class ScriptEngineBlock:
         try:
             batch_raw = write_middle(
                 self._llm, middle_beats, fs, hook_narr, payoff_narr,
-                per_scene, source_text=source_text, concepts=_CONCEPT_KEYS,
-                model=wm,
+                _scene_target(per_scene), source_text=source_text, concepts=_CONCEPT_KEYS,
+                model=wm, flexible=cap_mode,
             )
             for j, (bn, bv) in _parse_batch(batch_raw, hook_narr, payoff_narr).items():
                 if 0 <= j < len(middle_beats) and bn and not _is_placeholder(bn):
@@ -514,7 +523,8 @@ class ScriptEngineBlock:
         except Exception as exc:  # noqa: BLE001
             logger.warning("batch middle write failed: %s", exc)
         for i, beat in enumerate(middle_beats):
-            target = per_scene
+            write_target = _scene_target(per_scene)  # what we ask the writer for
+            ceiling = per_scene  # hard upper budget for this slot
             attempt = 0
             narr = ""
             vis = ""
@@ -545,9 +555,10 @@ class ScriptEngineBlock:
                         )
                     try:
                         raw = write_scene(
-                            self._llm, write_beat, fs, narrations, target,
+                            self._llm, write_beat, fs, narrations, write_target,
                             source_text=source_text, concepts=_CONCEPT_KEYS,
                             plan=beats, beat_index=beat_idx, model=wm,
+                            flexible=cap_mode,
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning("scene %d write failed: %s", i, exc)
@@ -559,16 +570,15 @@ class ScriptEngineBlock:
                     feedback = ["empty or placeholder output"]
                     logger.info("scene %d retry: placeholder/empty output", i)
                     continue
-                # mechanical trim FIRST: a rambling multi-sentence dump gets
-                # cut to its leading complete sentences within budget —
-                # instant, no LLM call; sentences that near-duplicate lines
-                # already in the script are skipped so scenes stay distinct
                 wc = len(narr.split())
-                if wc > target + 2:
-                    trimmed = _trim_fresh(narr, target, narrations)
+                # mechanical trim when over the per-slot ceiling (or over the
+                # writer target in non-cap mode) — never pad short lines up
+                trim_limit = ceiling if cap_mode else write_target
+                if wc > trim_limit + 2:
+                    trimmed = _trim_fresh(narr, trim_limit, narrations)
                     if not trimmed:
                         trimmed = _first_sentence(
-                            narr, max_words=target, min_words=max(4, target - 4)
+                            narr, max_words=trim_limit, min_words=max(4, min(trim_limit, 12))
                         )
                     if trimmed and not _is_placeholder(trimmed):
                         logger.info(
@@ -577,31 +587,41 @@ class ScriptEngineBlock:
                         )
                         narr, vis = trimmed, ""
                         wc = len(narr.split())
-                # rescue pass (LLM) only when still off-length or a statement
-                # slot contains a question — and only kept if it lands closer
-                # to budget than what we already have
-                if wc < max(4, target - 5) or wc > target + 2 or (i > 0 and "?" in narr):
+                # rescue pass (LLM) only when clearly under the writer target
+                # in paced mode, or when over ceiling / has a forbidden '?'
+                needs_condense = (wc > ceiling + 2) or (i > 0 and "?" in narr)
+                if not cap_mode:
+                    needs_condense = needs_condense or wc < max(4, write_target - 5)
+                if needs_condense:
                     condensed = condense_line(
-                        self._llm, narr, target, statement=(i > 0),
+                        self._llm, narr, write_target, statement=(i > 0),
                         previous=narrations[-1] if narrations else "",
                         model=wm,
                     )
                     if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
                         cwc = len(condensed.split())
-                        if abs(cwc - target) <= abs(wc - target):
+                        # keep it if it fixes the problem (closer to target,
+                        # or no longer over ceiling / no question)
+                        better = abs(cwc - write_target) <= abs(wc - write_target)
+                        if cap_mode:
+                            better = cwc <= ceiling + 2 or cwc < wc
+                        if better:
                             logger.info("scene %d condensed %d -> %d words", i, wc, cwc)
                             narr, vis, wc = condensed, "", cwc
-                # remember the closest-to-budget complete candidate as a
-                # fallback if every attempt fails validation
-                gap = abs(wc - target)
+                # remember the best complete candidate as fallback
+                gap = abs(wc - write_target)
                 if (
-                    gap < best_gap
+                    (best_narr == "" or gap < best_gap)
                     and not (i > 0 and "?" in narr)
                     and not _is_incomplete(narr)
                     and not repeats_previous(narr, narrations)
+                    and wc >= 6
                 ):
                     best_narr, best_vis, best_gap = narr, vis, gap
-                res = validate_scene(narr, target, allow_question=(i == 0))
+                if cap_mode:
+                    res = validate_scene(narr, 6, max_words=ceiling, allow_question=(i == 0))
+                else:
+                    res = validate_scene(narr, write_target, allow_question=(i == 0))
                 if _is_incomplete(narr):
                     res.ok = False
                     res.issues.append("incomplete/cut-off narration")
@@ -623,7 +643,7 @@ class ScriptEngineBlock:
                 break
             if not accepted:
                 # never ship a monster line just because retries ran out:
-                # prefer the attempt closest to the word budget
+                # prefer the best attempt we saw
                 if best_narr:
                     logger.info(
                         "scene %d: keeping best attempt (%d words)",
@@ -638,8 +658,8 @@ class ScriptEngineBlock:
                         logger.info("scene %d: falling back to beat text", i)
                         narr, vis = beatline, ""
             # final clamp: narration should never blow the budget
-            if narr and len(narr.split()) > target + 3:
-                clamped = _first_sentence(narr, max_words=target + 2)
+            if narr and len(narr.split()) > ceiling + 3:
+                clamped = _first_sentence(narr, max_words=ceiling)
                 if clamped and not _is_placeholder(clamped):
                     narr = clamped
             visual = vis or ""

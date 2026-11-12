@@ -33,12 +33,19 @@ def validate_scene(
     tolerance: int = 2,
     *,
     allow_question: bool = False,
+    max_words: int | None = None,
 ) -> ValidationResult:
     r = ValidationResult()
     wc = word_count(narration)
-    if wc < target_words - tolerance or wc > target_words + tolerance:
-        r.ok = False
-        r.issues.append(f"word count {wc}, need {target_words}±{tolerance}")
+    if max_words is not None:
+        # cap mode: target_words is the floor, max_words the ceiling
+        if wc < target_words or wc > max_words:
+            r.ok = False
+            r.issues.append(f"word count {wc}, need {target_words}-{max_words}")
+    else:
+        if wc < target_words - tolerance or wc > target_words + tolerance:
+            r.ok = False
+            r.issues.append(f"word count {wc}, need {target_words}±{tolerance}")
     # question-mark policy: the hook may ask, the line after it may ask
     # once; everything later must be statements (no question bank)
     if not allow_question and "?" in narration:

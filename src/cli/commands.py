@@ -129,7 +129,7 @@ def lesson_pick_cmd(
 def lesson_script_cmd(
     book_dir: str = typer.Argument(..., help="Book directory name."),
     lesson_file: str = typer.Argument(..., help="Lesson filename."),
-    seconds: int = typer.Option(45, "--seconds", "-s", help="Target duration."),
+    seconds: int = typer.Option(200, "--seconds", "-s", help="Max duration in seconds (uses only what it needs)."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
     context: int = typer.Option(1, "--context", "-c", help="Neighboring chunks for context."),
     output: str = typer.Option("", "--output", "-o", help="Output slug (default: auto)."),
@@ -281,7 +281,7 @@ def lesson_produce_cmd(
     book_dir: str = typer.Argument(..., help="Book directory name."),
     lesson_file: str = typer.Argument(..., help="Lesson filename."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
-    seconds: int = typer.Option(45, "--seconds", "-s", help="Target duration."),
+    seconds: int = typer.Option(200, "--seconds", "-s", help="Max duration in seconds (uses only what it needs)."),
     context: int = typer.Option(1, "--context", "-c", help="Neighboring chunks for context."),
     output: str = typer.Option("", "--output", "-o", help="Output slug (default: auto)."),
 ) -> None:
@@ -504,7 +504,7 @@ def publish_cmd(
 
 def auto_cmd(
     count: int = typer.Option(2, "--count", "-c", help="Number of videos to produce"),
-    duration: int = typer.Option(45, "--duration", "-d", help="Target duration per video in seconds"),
+    duration: int = typer.Option(200, "--duration", "-d", help="Max duration per video in seconds (uses only what it needs)"),
     book: str = typer.Option(None, "--book", "-b", help="Specific book directory (optional)"),
     sequential: bool = typer.Option(True, "--sequential/--parallel", help="Run videos sequentially (default) or in parallel"),
     gap: int = typer.Option(0, "--gap", "-g", help="Minimum gap between videos in seconds"),
