@@ -116,7 +116,8 @@ def _parse_scene(raw: str) -> tuple[str, str]:
     m2 = re.search(r"VIS\w*\s*:\s*(.*)", raw, re.I | re.S)
     if m2:
         # keep only the first line: free models echo instructions after it
-        vis = m2.group(1).strip().splitlines()[0].strip()
+        vis_lines = m2.group(1).strip().splitlines()
+        vis = vis_lines[0].strip() if vis_lines else ""
         # strip markdown emphasis/code marks; keep '_' (concept-key delimiter)
         vis = re.sub(r"[*<>`]", "", vis).strip()
     # remove any leaked VISUAL/VISION/FOMO labels from narration
