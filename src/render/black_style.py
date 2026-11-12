@@ -373,6 +373,7 @@ def render_black_style(
     # with all subtitle cues burned via enable windows.
     # ------------------------------------------------------------------
     clips = []
+    clip_durations: list[float] = []
     shown_files: set[str] = set()
     tag_i = 0
 
@@ -452,6 +453,7 @@ def render_black_style(
             vf = _subtitle_filter(seg_cues, seg_dur, tag, work)
             if vf is None:
                 clips.append(base)
+                clip_durations.append(seg_dur)
                 continue
 
             out = work / f"seg-{tag}.mp4"
@@ -463,23 +465,91 @@ def render_black_style(
                 "-crf", "20", str(out),
             ])
             clips.append(out)
+            clip_durations.append(seg_dur)
 
     if not clips:
         raise BlockError("black_style: no clips produced (empty narration?)")
 
-    # Build final video
-    silent = _join_cards(clips, work)
-
-    # Mux with audio
+    # Smooth crossfades between images with varied transition techniques
     total = sum(lengths)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    _run([
-        "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
+
+    if len(clips) == 1:
+        silent = clips[0]
+        args = [
+            "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
+            "-t", f"{total:.3f}",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart",
+            str(out_path),
+        ]
+        _run(args)
+        return out_path
+
+    import random as _rnd
+
+    # Favor smooth blends, but mix in varied techniques
+    smooth = [
+        "fade", "dissolve", "fadeblack", "circleopen", "circleclose",
+        "smoothleft", "smoothright", "smoothup", "smoothdown", "radial",
+    ]
+    dynamic = [
+        "wipeleft", "wiperight", "wipeup", "wipedown",
+        "slideleft", "slideright", "slideup", "slidedown",
+        "horzopen", "horzclose", "vertopen", "vertclose",
+        "diagbl", "diagbr", "diagtl", "diagtr",
+        "hlslice", "hrslice", "vuslice", "vdslice",
+        "squeezeh", "squeezev", "circlecrop",
+    ]
+    transitions = smooth * 2 + dynamic
+    rng = _rnd.Random((slug or "nebula") + str(len(clips)))
+
+    args = ["ffmpeg", "-y"]
+    for c in clips:
+        args += ["-i", str(c)]
+
+    # build xfade chain with varied durations/types using real clip durations
+    filters: list[str] = []
+    clip_durs = list(clip_durations) if clip_durations else [total / len(clips)] * len(clips)
+    if len(clip_durs) != len(clips):
+        clip_durs = [total / len(clips)] * len(clips)
+
+    prev = "[0:v]"
+    offset = clip_durs[0]
+    for i in range(1, len(clips)):
+        trans = rng.choice(transitions)
+        # keep transitions smooth and always shorter than neighboring clips
+        limit = min(0.65, clip_durs[i - 1] * 0.4, clip_durs[i] * 0.4)
+        min_t = 0.25 if limit >= 0.35 else max(0.18, limit - 0.05)
+        if limit < min_t:
+            tdur = max(0.12, limit)
+        else:
+            tdur = rng.uniform(min_t, max(min_t, limit))
+        tdur = min(tdur, clip_durs[i - 1] - 0.05, clip_durs[i] - 0.05)
+        if tdur < 0.12:
+            tdur = max(0.08, min(clip_durs[i - 1], clip_durs[i]) * 0.3)
+        xfade_offset = max(0.0, offset - tdur)
+        out_label = f"[v{i}]" if i < len(clips) - 1 else "[vout]"
+        filters.append(
+            f"{prev}[{i}:v]xfade=transition={trans}:duration={tdur:.3f}:offset={xfade_offset:.3f},format=yuv420p{out_label}"
+        )
+        prev = out_label
+        offset = xfade_offset + clip_durs[i]
+
+    vf_chain = ";".join(filters)
+    args += [
+        "-filter_complex", vf_chain,
+        "-map", prev,
+        "-i", str(mixed),
+        "-map", f"{len(clips)}:a",
         "-t", f"{total:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ])
+    ]
+    _run(args)
     return out_path
