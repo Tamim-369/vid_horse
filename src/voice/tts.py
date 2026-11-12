@@ -27,7 +27,7 @@ VOICE_PROMPT = Path("assets/voice/voice_prompt_short.wav")
 
 # when the key of a rendered asset changes shape, older cached wavs must
 # be re-rendered, not silently shipped
-_KEY_VERSION = "s3"
+_KEY_VERSION = "s4"  # per-line wavs include a consistent line-end pause
 
 # sentence boundary: punctuation that ends a spoken sentence, then space.
 # speakable() has already folded colons/semicolons into commas, so these
@@ -181,10 +181,10 @@ class VoiceOver:
         """
 
         amp = wav.abs().amax(dim=0)
-        voiced = (amp > 0.01).nonzero(as_tuple=True)[0]
+        voiced = (amp > 0.004).nonzero(as_tuple=True)[0]
         if voiced.numel() == 0:
             return wav
-        margin = int(0.05 * sr)
+        margin = int(0.10 * sr)
         return wav[..., max(0, voiced[0] - margin) : min(wav.shape[-1], voiced[-1] + margin)]
 
     def _sentence(
@@ -256,8 +256,13 @@ class VoiceOver:
             wav, sr = self._render_line(index, segments[index], out_dir, stem)
             ta.save(str(line_path), wav, sr)
             _atempo(line_path, self._speed)
-            if abs(self._speed - 1.0) >= 0.001:
-                wav, sr = ta.load(str(line_path))
+            wav, sr = ta.load(str(line_path))
+            # append inter-line pause (after speed change so duration is consistent)
+            line_gap = 0.0 if index == len(segments) - 1 else self._line_gap
+            if line_gap > 0:
+                gap = torch.zeros(wav.shape[0], int(sr * line_gap))
+                wav = torch.cat([wav, gap], dim=1)
+                ta.save(str(line_path), wav, sr)
             sidecar.write_text(key, encoding="utf-8")
             logger.info("Line %d rendered (%.1fs)", index, wav.shape[-1] / sr)
             return index, wav, sr
@@ -266,10 +271,7 @@ class VoiceOver:
             results = sorted(pool.map(synthesize, range(len(segments))))
 
         sr = results[0][2]
-        wavs: list[torch.Tensor] = []
-        for _index, wav, _sr in results:
-            wavs.append(wav)
-            wavs.append(torch.zeros(1, int(sr * self._line_gap)))
+        wavs: list[torch.Tensor] = [wav for _index, wav, _sr in results]
 
         joined = torch.cat(wavs, dim=1)
         joined_path = out_dir / f"{stem}.wav"

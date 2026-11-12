@@ -56,15 +56,65 @@ def _black_frame(work: Path, index: int, length: float) -> Path:
     return out
 
 
-def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle) -> Path:
-    """Render a concept asset with its concept-specific motion/grade."""
+def _choose_motion(asset, narration: str, fallback: int, pool: list[int]) -> int:
+    """Pick a motion style that fits what is being shown/said."""
+    t = (narration or "").lower()
+    caption = (getattr(asset, "caption", "") or "").lower()
+    page = (getattr(asset, "page_url", "") or "").lower()
+    extra = getattr(asset, "extra", {}) or {}
+    cat = (extra.get("concept") or page.split(":")[0] or "").lower()
+    hay = f"{t} {caption} {cat}"
+
+    preferred: int | None = None
+
+    # Focus / intimate / screens / scrolling / thinking -> slow push-in
+    if any(k in hay for k in ("scroll", "phone", "screen", "texting", "message", "reading", "doomscroll", "feed", "notification", "typing")):
+        preferred = 0
+    elif cat.startswith("face") or any(k in hay for k in ("face", "eyes", "tear", "mouth", "stare", "expression", "look")):
+        # close/emotional -> push in, otherwise gentle drift
+        if any(k in hay for k in ("close", "stare", "watch", "alone", "silent", "tear", "fear", "worry", "sad", "anger")):
+            preferred = 0
+        else:
+            preferred = 16
+    elif cat.startswith(("crowd", "group", "env", "space")) or any(k in hay for k in ("crowd", "people", "group", "everyone", "room", "street", "office", "meeting", "line", "walk", "together")):
+        # movement / many people -> pan or sweep
+        preferred = 1 if "together" in hay or "crowd" in hay else 12
+    elif cat.startswith(("surv", "control", "diag", "abstract", "system")) or any(k in hay for k in ("watch", "camera", "monitor", "control", "power", "rule", "track", "data", "chart", "system")):
+        preferred = 21  # cold, subtle
+    elif any(k in t for k in ("cost", "trap", "stuck", "without noticing", "steer", "pull", "pressure", "quiet cost")):
+        preferred = 3 if "notice" in t else 0
+    elif any(k in t for k in ("why do you", "you feel", "in your head", "you notice")):
+        preferred = 0
+
+    if preferred is not None and preferred in pool:
+        return preferred
+    if preferred is not None and pool:
+        # keep similar character when exact style not in pool
+        families = [
+            {0, 3, 6, 7, 20},
+            {1, 2, 4, 5, 8, 9, 10, 11},
+            {12, 13, 14, 15, 16, 17},
+            {18, 19, 21, 22, 23},
+        ]
+        for fam in families:
+            if preferred in fam:
+                for cand in pool:
+                    if cand in fam:
+                        return cand
+                break
+    return fallback
+
+
+def _asset_clip(asset, work: Path, tag: str, length: float, style: VideoStyle, narration: str = "") -> Path:
+    """Render a concept asset with content-aware motion and concept grade."""
     from render.cards import _asset_source, _motion_filter, _style_for, _cover_prep
 
     source = _asset_source(asset, work, tag)
 
     frames = max(1, round(length * FPS))
     motion_pool = style.image.motion_pool if style else list(range(24))
-    motion_style = _style_for(tag, motion_pool)
+    fallback = _style_for(tag, motion_pool)
+    motion_style = _choose_motion(asset, narration, fallback, motion_pool)
 
     extra = getattr(asset, "extra", {}) or {}
     grade_emphasis = extra.get("grade_emphasis")
@@ -384,14 +434,14 @@ def render_black_style(
                     if alt is not None:
                         asset = alt
                 try:
-                    base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
+                    base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg, line)
                 except Exception as exc:  # noqa: BLE001 - a broken asset must
                     # never blank the screen: fall back to a pool image
                     logger.warning("asset clip failed for %s (%s); pool fallback", asset.file, exc)
                     alt = _pool_pick(asset.file)
                     if alt is not None:
                         asset = alt
-                        base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg)
+                        base = _asset_clip(asset, work, f"img-{tag}", seg_dur, style_cfg, line)
                     else:
                         base = _black_frame(work, f"img-{tag}", seg_dur)
                 shown_files.add(asset.file)

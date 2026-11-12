@@ -172,8 +172,8 @@ class Settings(BaseSettings):
     voice_exaggeration: float = Field(default=0.4, ge=0.0, le=1.0)
     voice_cfg_weight: float = Field(default=0.4, ge=0.0, le=1.0)
     # Silence between sentences inside one line, and between script lines
-    voice_sentence_gap: float = Field(default=0.24, ge=0.0, le=2.0)
-    voice_line_gap: float = Field(default=0.35, ge=0.0, le=2.0)
+    voice_sentence_gap: float = Field(default=0.28, ge=0.0, le=2.0)
+    voice_line_gap: float = Field(default=0.45, ge=0.0, le=2.0)
     voice_speed: float = Field(
         default=0.97, ge=0.5, le=2.0,
         description="Playback speed for TTS (atempo). <1 slower, >1 faster.",
