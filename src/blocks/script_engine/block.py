@@ -404,45 +404,58 @@ class ScriptEngineBlock:
         beats = generate_beats(self._llm, fs)
         source_text = " ".join(source_chunks or [])
 
-        # words per scene: distribute target seconds
+        # --- simplified: plan, then write the whole script in one call ---
+        # (facts+beats already done above; fewer calls = more coherence)
         wps = 2.5
         total_words = int(self._target_seconds * wps)
-        # 200s+ is a "cap" (use only as many words as needed); shorter
-        # targets are filled to feel paced.
         cap_mode = self._target_seconds >= 120
-        per_scene = max(6, total_words // len(beats))
-
-        def _scene_target(base: int) -> int:
-            # writer hint: aim for a comfortable length, not the hard ceiling
-            if cap_mode:
-                return min(base, 28)
-            return base
+        per_scene_ceiling = max(12, total_words // 6)
+        # writer hint: comfortable length, not something to pad to
+        if cap_mode:
+            target = min(per_scene_ceiling, 30)
+        else:
+            target = max(10, min(per_scene_ceiling, 22))
 
         wm = self._writer_model
+        from blocks.script_engine.writer import write_full_script
 
-        # Generate payoff first, then hook referencing it.
-        payoff_idx = 5 if len(beats) >= 6 else len(beats) - 1
-        payoff_beat = beats[payoff_idx]
-        payoff_raw = write_scene(
-            self._llm, payoff_beat, fs, [], 16 if cap_mode else 12,
-            source_text=source_text, concepts=_CONCEPT_KEYS,
-            plan=beats, beat_index=payoff_idx, model=wm, flexible=cap_mode,
+        raw = write_full_script(
+            self._llm, fs, beats, target,
+            source_text=source_text, model=wm, flexible=cap_mode,
         )
-        payoff_narr, payoff_vis = _parse_scene(payoff_raw)
-        if not payoff_narr or _is_placeholder(payoff_narr):
-            payoff_narr = _clean_speech(payoff_beat)
-        payoff_narr = _ensure_complete(_first_sentence(payoff_narr, max_words=16, min_words=8))
-        if "?" in payoff_narr or len(payoff_narr.split()) > 16:
-            # the payoff closes the loop as a statement, never another question
-            condensed = condense_line(
-                self._llm, payoff_narr, 12, statement=True, model=wm,
-            )
-            if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
-                payoff_narr = condensed
-                logger.info("payoff condensed into a statement")
+
+        # parse numbered lines 1-6
+        lines: list[str] = []
+        for m in re.finditer(r"^\s*(\d+)\s*[.)]\s*(.+)$", raw, re.M):
+            text_line = _clean_speech(m.group(2).strip())
+            if text_line and not _is_placeholder(text_line):
+                lines.append(text_line)
+        # fallback: split by non-empty lines if numbering missing
+        if len(lines) < 6:
+            lines = []
+            for ln in raw.splitlines():
+                ln = re.sub(r"^\s*\d+\s*[.)]\s*", "", ln).strip()
+                ln = _clean_speech(ln)
+                if ln and not _is_placeholder(ln):
+                    lines.append(ln)
+        # dedupe while preserving order
+        seen: set[str] = set()
+        uniq: list[str] = []
+        for ln in lines:
+            key = re.sub(r"\W+", " ", ln.lower()).strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            uniq.append(ln)
+        lines = uniq
+
+        # ensure we have 6 lines (hook + 4 scenes + outro)
+        while len(lines) < 6:
+            idx = len(lines)
+            fb = _clean_speech(beats[idx] if idx < len(beats) else beats[-1])
+            lines.append(_ensure_complete(fb) if fb else "Think about this in your own life.")
 
         def _clean_hook(text: str) -> str:
-            """Strip JSON-like prefixes/labels like {Question} from hook text."""
             if not text:
                 return text
             text = text.strip()
@@ -450,297 +463,72 @@ class ScriptEngineBlock:
             text = re.sub(r'^\[[^\]]+\]\s*', '', text)
             text = re.sub(r'^["\']\s*', '', text)
             text = re.sub(r'\s*["\']$', '', text)
-            # markdown/emphasis noise the small model leaks into hooks
             text = text.replace("*", "").replace("…", "...")
-            text = re.sub(r'\.{3,}', '', text)  # spoken pauses read as noise
-            text = re.sub(r'\s+', ' ', text).strip()
-            return text.strip()
+            text = re.sub(r'\.{3,}', '', text)
+            return re.sub(r'\s+', ' ', text).strip()
 
-        def _hook_ok(text: str) -> bool:
-            # dark-psychology openers are questions; a strong statement
-            # callout is tolerated only as a fallback
-            return (
-                bool(text)
-                and not _is_placeholder(text)
-                and 4 <= len(text.split()) <= 14
-                and not _is_incomplete(text)
-            )
+        hook_narr = _clean_hook(lines[0])
+        if "?" not in hook_narr:
+            hook_narr = hook_narr.rstrip(".! ") + "?"
+        hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=14))
+        if not hook_narr.endswith("?"):
+            hook_narr = hook_narr.rstrip(".! ") + "?"
+        if _is_placeholder(hook_narr) or len(hook_narr.split()) < 4:
+            hook_narr = _ensure_complete(_first_sentence(_clean_speech(beats[0]), max_words=12))
+            if "?" not in hook_narr:
+                hook_narr = hook_narr.rstrip(".! ") + "?"
 
-        def _hook_form_ok(text: str) -> bool:
-            return "?" in text
+        scene_lines = list(lines[1:5])
+        outro_narr = lines[5]
 
-        # The hook is the writer's first regular call. There is no dedicated
-        # hook writer or hook mode: the same writer writes every line, with
-        # the attention craft built into its system prompt. It sees the
-        # payoff first so the opening can promise it without giving it away.
-        hook_beat = beats[0]
-        hook_narr, _hook_vis = _parse_scene(
-            write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
-                        source_text=source_text, concepts=_CONCEPT_KEYS,
-                        plan=beats, beat_index=0, model=wm, flexible=cap_mode)
-        )
-        hook_narr = _clean_hook(hook_narr)
-        # mechanical clamps only (they never invent content)
-        hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
-        if not _hook_ok(hook_narr) or not _hook_form_ok(hook_narr):
-            # single retry: the hook must at least be complete and SHOULD
-            # be a question (dark-psychology openers ask)
-            hook_narr, _hook_vis = _parse_scene(
-                write_scene(self._llm, hook_beat, fs, [payoff_narr], 10,
-                            source_text=source_text, concepts=_CONCEPT_KEYS,
-                            plan=beats, beat_index=0, model=wm, flexible=cap_mode)
-            )
-            hook_narr = _clean_hook(hook_narr)
-            hook_narr = _ensure_complete(_first_sentence(hook_narr, max_words=12))
-        if not _hook_ok(hook_narr):
-            # last resort: the beat itself, spoken plainly (never a generic
-            # template — that reads as canned)
-            hook_narr = _ensure_complete(_first_sentence(
-                _clean_speech(hook_beat), max_words=12))
-            logger.warning("hook fallback used beat text: %s", hook_narr)
+        fixed_scenes: list[str] = []
+        prevs: list[str] = [hook_narr]
+        for i, ln in enumerate(scene_lines):
+            # line 2 (i==0) may ask one question; later must be statements
+            if i >= 1 and "?" in ln:
+                ln = ln.replace("?", ".")
+            if len(ln.split()) > per_scene_ceiling + 4:
+                trimmed = _trim_fresh(ln, per_scene_ceiling, prevs)
+                if not trimmed:
+                    trimmed = _first_sentence(ln, max_words=per_scene_ceiling)
+                if trimmed and not _is_placeholder(trimmed):
+                    ln = trimmed
+            if _is_placeholder(ln) or len(ln.split()) < 5 or repeats_previous(ln, prevs):
+                beat_fb = _clean_speech(beats[i + 1] if i + 1 < len(beats) else beats[-1])
+                if beat_fb and not repeats_previous(beat_fb, prevs):
+                    ln = _ensure_complete(beat_fb)
+            fixed_scenes.append(ln)
+            prevs.append(ln)
 
-        # Generate middle scenes. ONE batch call writes all of them
-        # together (cheaper on CPU-bound local models, and the lines are
-        # composed as a single connected passage). Lines that fail
-        # validation afterwards fall back to individual rewrites.
-        middle_beats = beats[1:5]
-        scenes: list[ScriptScene] = []
-        scene_beats: list[str] = []
-        narrations: list[str] = [hook_narr]
-        batch: dict[int, tuple[str, str]] = {}
-        try:
-            batch_raw = write_middle(
-                self._llm, middle_beats, fs, hook_narr, payoff_narr,
-                _scene_target(per_scene), source_text=source_text, concepts=_CONCEPT_KEYS,
-                model=wm, flexible=cap_mode,
-            )
-            for j, (bn, bv) in _parse_batch(batch_raw, hook_narr, payoff_narr).items():
-                if 0 <= j < len(middle_beats) and bn and not _is_placeholder(bn):
-                    batch[j] = (bn, bv)
-            logger.info(
-                "batch wrote %d/%d middle lines", len(batch), len(middle_beats)
-            )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("batch middle write failed: %s", exc)
-        for i, beat in enumerate(middle_beats):
-            write_target = _scene_target(per_scene)  # what we ask the writer for
-            ceiling = per_scene  # hard upper budget for this slot
-            attempt = 0
-            narr = ""
-            vis = ""
-            feedback: list[str] = []
-            beat_idx = i + 1
-            # the line right after the hook is still prime attention time:
-            # no warm-up, no recap, straight into the proof
-            base_beat = (
-                beat + " (This follows the hook — go straight at the viewer, "
-                "no warm-up, no recapping the hook, keep the tension.)"
-                if i == 0 else beat
-            )
-            best_narr, best_vis, best_gap = "", "", 10**9
-            accepted = False
-            while attempt < self._max_scene_retries:
-                if attempt == 0 and i in batch:
-                    # the batch line is this scene's first attempt
-                    narr, vis = batch[i]
-                else:
-                    write_beat = base_beat
-                    if feedback:
-                        write_beat = (
-                            base_beat + f" (Your previous attempt was rejected: "
-                            f"{'; '.join(feedback)}. Fix it: write 1-2 complete "
-                            "STATEMENTS that add NEW information from the source and "
-                            "continue naturally from the previous line. "
-                            "No question mark in a statement line.)"
-                        )
-                    try:
-                        raw = write_scene(
-                            self._llm, write_beat, fs, narrations, write_target,
-                            source_text=source_text, concepts=_CONCEPT_KEYS,
-                            plan=beats, beat_index=beat_idx, model=wm,
-                            flexible=cap_mode,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning("scene %d write failed: %s", i, exc)
-                        attempt += 1
-                        continue
-                    narr, vis = _parse_scene(raw)
-                if not narr or _is_placeholder(narr):
-                    attempt += 1
-                    feedback = ["empty or placeholder output"]
-                    logger.info("scene %d retry: placeholder/empty output", i)
-                    continue
-                wc = len(narr.split())
-                # mechanical trim when over the per-slot ceiling (or over the
-                # writer target in non-cap mode) — never pad short lines up
-                trim_limit = ceiling if cap_mode else write_target
-                if wc > trim_limit + 2:
-                    trimmed = _trim_fresh(narr, trim_limit, narrations)
-                    if not trimmed:
-                        trimmed = _first_sentence(
-                            narr, max_words=trim_limit, min_words=max(4, min(trim_limit, 12))
-                        )
-                    if trimmed and not _is_placeholder(trimmed):
-                        logger.info(
-                            "scene %d trimmed %d -> %d words",
-                            i, wc, len(trimmed.split()),
-                        )
-                        narr, vis = trimmed, ""
-                        wc = len(narr.split())
-                # rescue pass (LLM) only when clearly under the writer target
-                # in paced mode, or when over ceiling / has a forbidden '?'
-                needs_condense = (wc > ceiling + 2) or (i > 0 and "?" in narr)
-                if not cap_mode:
-                    needs_condense = needs_condense or wc < max(4, write_target - 5)
-                if needs_condense:
-                    condensed = condense_line(
-                        self._llm, narr, write_target, statement=(i > 0),
-                        previous=narrations[-1] if narrations else "",
-                        model=wm,
-                    )
-                    if condensed and not _is_placeholder(condensed) and not _is_incomplete(condensed):
-                        cwc = len(condensed.split())
-                        # keep it if it fixes the problem (closer to target,
-                        # or no longer over ceiling / no question)
-                        better = abs(cwc - write_target) <= abs(wc - write_target)
-                        if cap_mode:
-                            better = cwc <= ceiling + 2 or cwc < wc
-                        if better:
-                            logger.info("scene %d condensed %d -> %d words", i, wc, cwc)
-                            narr, vis, wc = condensed, "", cwc
-                # remember the best complete candidate as fallback
-                gap = abs(wc - write_target)
-                if (
-                    (best_narr == "" or gap < best_gap)
-                    and not (i > 0 and "?" in narr)
-                    and not _is_incomplete(narr)
-                    and not repeats_previous(narr, narrations)
-                    and wc >= 6
-                ):
-                    best_narr, best_vis, best_gap = narr, vis, gap
-                if cap_mode:
-                    res = validate_scene(narr, 6, max_words=ceiling, allow_question=(i == 0))
-                else:
-                    res = validate_scene(narr, write_target, allow_question=(i == 0))
-                if _is_incomplete(narr):
-                    res.ok = False
-                    res.issues.append("incomplete/cut-off narration")
-                if repeats_previous(narr, narrations):
-                    res.ok = False
-                    res.issues.append("repeats an earlier line - add NEW information")
-                if not res.ok:
-                    attempt += 1
-                    feedback = res.issues
-                    logger.info("scene %d retry: %s", i, res.issues)
-                    continue
-                pov = validate_pov([narr])
-                if not pov.ok:
-                    attempt += 1
-                    feedback = pov.issues
-                    logger.info("scene %d retry (POV): %s", i, pov.issues)
-                    continue
-                accepted = True
-                break
-            if not accepted:
-                # never ship a monster line just because retries ran out:
-                # prefer the best attempt we saw
-                if best_narr:
-                    logger.info(
-                        "scene %d: keeping best attempt (%d words)",
-                        i, len(best_narr.split()),
-                    )
-                    narr, vis = best_narr, best_vis
-                if not narr or _is_placeholder(narr) or repeats_previous(narr, narrations):
-                    # a repeated line is as bad as an empty one — the beat
-                    # text is a distinct planned thought, so prefer it
-                    beatline = _clean_speech(beat)
-                    if beatline and not repeats_previous(beatline, narrations):
-                        logger.info("scene %d: falling back to beat text", i)
-                        narr, vis = beatline, ""
-            # final clamp: narration should never blow the budget
-            if narr and len(narr.split()) > ceiling + 3:
-                clamped = _first_sentence(narr, max_words=ceiling)
-                if clamped and not _is_placeholder(clamped):
-                    narr = clamped
-            visual = vis or ""
-            if not visual or _is_placeholder(visual):
-                # small models often skip the VISUAL line; bind the visual to
-                # the concept vocabulary the asset agent matches on
-                found = extract_concepts_from_text(narr)
-                visual = found[0] if found else beat
-            if len(visual.split()) > 5:
-                visual = _visual_keywords(visual)
-            if not visual or _is_placeholder(visual) or _same_text(narr, visual):
-                visual = _visual_keywords(narr)
-            secs = max(3, int(len(narr.split()) / 2.5))
-            scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
-            scene_beats.append(beat)
-            narrations.append(narr)
+        if "?" in outro_narr:
+            outro_narr = outro_narr.replace("?", ".")
+        if len(outro_narr.split()) > per_scene_ceiling + 4:
+            trimmed = _first_sentence(outro_narr, max_words=per_scene_ceiling)
+            if trimmed and not _is_placeholder(trimmed):
+                outro_narr = trimmed
+        if _is_placeholder(outro_narr) or len(outro_narr.split()) < 5:
+            outro_narr = _ensure_complete(_clean_speech(beats[5] if len(beats) > 5 else beats[-1]))
 
-        # POV check — repair first-person slips mechanically
-        all_narrs = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
+        # POV repair
+        all_narrs = [hook_narr] + fixed_scenes + [outro_narr]
         pov_res = validate_pov(all_narrs)
         if not pov_res.ok:
             logger.info("POV drift: %s — repairing", pov_res.issues)
             hook_narr = _fix_pov(hook_narr)
-            payoff_narr = _fix_pov(payoff_narr)
-            for scene in scenes:
-                scene.narration = _fix_pov(scene.narration)
+            outro_narr = _fix_pov(outro_narr)
+            fixed_scenes = [_fix_pov(s) for s in fixed_scenes]
 
-        # coherence polish: one LLM pass rewriting all lines as natural
-        # spoken prose (fixes telegraph fragments and scene-to-scene seams;
-        # falls back to the original lines on any validation failure)
-        raw_lines = [hook_narr] + [s.narration for s in scenes] + [payoff_narr]
-        hook_before_polish = hook_narr
-        polished = polish_script_lines(
-            self._llm, raw_lines, context_note=context_note, model=wm,
-        )
-        if polished != raw_lines:
-            logger.info(
-                "polish pass rewrote %d/%d lines",
-                sum(1 for a, b in zip(raw_lines, polished) if a != b),
-                len(raw_lines),
-            )
-        # the hook is the attention asset: if polish turned it into a
-        # fragment/placeholder, restore the pre-polish line
-        if not _hook_ok(polished[0]) and _hook_ok(hook_before_polish):
-            logger.info("polish mangled the hook; restoring original")
-            polished[0] = hook_before_polish
-        hook_narr, *polished_scenes, payoff_narr = polished
-        for scene, beat, narr in zip(scenes, scene_beats, polished_scenes):
-            # a line that is STILL a fragment or placeholder after polish
-            # gets replaced by its beat text (a complete planned thought)
-            # rather than shipped as cut-off narration
-            if _is_placeholder(narr) or _is_incomplete(narr) or len(narr.split()) < 5:
-                fixed = _clean_speech(beat)
-                if fixed and not _is_placeholder(fixed):
-                    logger.info("polish left garbage %r -> beat text", narr)
-                    narr = fixed
-            scene.narration = narr
-        # same guard for hook and outro
-        if _is_placeholder(hook_narr) or len(hook_narr.split()) < 5:
-            fixed = _clean_speech(hook_beat)
-            if fixed and not _is_placeholder(fixed):
-                logger.info("polish left hook garbage -> beat text")
-                hook_narr = fixed
-        if _is_placeholder(payoff_narr) or len(payoff_narr.split()) < 5:
-            fixed = _clean_speech(payoff_beat)
-            if fixed and not _is_placeholder(fixed):
-                logger.info("polish left outro garbage -> beat text")
-                payoff_narr = fixed
-
-        # claims check
-        full_text = " ".join([hook_narr] + [s.narration for s in scenes] + [payoff_narr])
-        claim_issues = check_claims(full_text, "\n".join(fs.facts) + " " + fs.source)
-        if claim_issues:
-            logger.warning("claims: %s", claim_issues)
-        if source_chunks:
-            score = grounding_score(full_text, " ".join(source_chunks))
-            logger.info("grounding score: %.2f (content words traced to source)", score)
-            if score < 0.3:
-                logger.warning(
-                    "weak grounding (%.2f): script may drift off the book text", score
-                )
+        scenes: list[ScriptScene] = []
+        for i, narr in enumerate(fixed_scenes):
+            beat = beats[i + 1] if i + 1 < len(beats) else narr
+            found = extract_concepts_from_text(narr)
+            visual = found[0] if found else _visual_keywords(narr) or _visual_keywords(beat)
+            if len(visual.split()) > 5:
+                visual = _visual_keywords(visual)
+            if not visual or _is_placeholder(visual):
+                visual = _visual_keywords(beat)
+            secs = max(3, int(len(narr.split()) / 2.5))
+            scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
 
         script = VideoScript(
             title=fs.concept,
@@ -748,16 +536,15 @@ class ScriptEngineBlock:
             format=format,
             target_seconds=self._target_seconds,
             scenes=scenes,
-            outro=payoff_narr,
+            outro=outro_narr,
         )
 
-        # separate review pass: an independent critic checks the draft and
-        # triggers a targeted rewrite if it fails, before assets/images
-        # are assigned.
-        from blocks.script_engine.review import review_and_improve
+        if source_chunks:
+            full_text = " ".join([hook_narr] + fixed_scenes + [outro_narr])
+            score = grounding_score(full_text, " ".join(source_chunks))
+            logger.info("grounding score: %.2f (content words traced to source)", score)
+            if score < 0.3:
+                logger.warning("weak grounding (%.2f): script may drift off the book text", score)
 
-        script = review_and_improve(
-            self._llm, script, source_text=source_text, model=wm,
-        )
-
+        logger.info("script generated in simplified single-write mode")
         return script

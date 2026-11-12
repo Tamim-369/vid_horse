@@ -254,6 +254,84 @@ def write_middle(
         raise BlockError(f"Batch scene write failed: {exc}") from exc
 
 
+FULL_SYSTEM = (
+    "You write a complete dark-psychology short video script from a book's "
+    "idea, for ONE viewer. Write the whole script as ONE connected "
+    "argument — each line follows naturally from the line before it.\n"
+    "Voice: calm, confident, quietly dark — like a friend sharing a "
+    "secret about how people really act. Use the SIMPLEST everyday words "
+    "only. Never copy the book's style or wording. Use concrete real-life "
+    "examples from everyday life (work, friends, family, online, crowds). "
+    "Never theatrical, never hype, never scary. No semicolons, no "
+    "em-dash chains. NEVER invent numbers or statistics; never say "
+    "'studies show'.\n"
+    "SHAPE:\n"
+    "1. HOOK: a short question about a concrete real-life moment that "
+    "shows this pattern, asking WHY it happens (ask about the moment, "
+    "NOT the pattern's name). 8-14 words.\n"
+    "2. Follows the hook: a concrete fact or example, or one more short "
+    "question. Connects to line 1.\n"
+    "3-5. Statements that build the argument: real-life examples, why it "
+    "happens in plain words, what's at stake, a simple thing to do. Each "
+    "adds something new. No question marks.\n"
+    "6. CLOSING: a strong statement that lands the point. No question mark.\n"
+    "Every line must be a complete, clear sentence in plain everyday "
+    "words. No vague 'they found'. Stay true to the book's meaning but "
+    "say it simply.\n"
+    "OUTPUT: exactly 6 lines, numbered 1-6, one per line. Nothing else."
+)
+
+
+def write_full_script(
+    llm: LLMProvider,
+    fact_sheet: FactSheet,
+    beats: list[str],
+    target_words: int,
+    *,
+    source_text: str = "",
+    model: str | None = None,
+    flexible: bool = False,
+) -> str:
+    """Write the complete 6-line script in ONE call for maximum coherence."""
+    outline = "\n".join(f"  {i+1}. {b}" for i, b in enumerate(beats[:6]))
+    source = ""
+    if source_text:
+        source = (
+            "\nSOURCE EXCERPT (stay true to its meaning, but say it in "
+            "simple everyday words and real-life examples):\n"
+            f"'''\n{source_text[:2600]}\n'''\n"
+        )
+    if flexible:
+        length = (
+            f"Each line: up to ~{target_words} words. Use only as many words "
+            "as you need to explain clearly — shorter is fine. You may use "
+            "one or two short sentences in a line if it helps explain."
+        )
+    else:
+        length = f"Each line: about {target_words} words."
+    msgs = [
+        LLMMessage(role="system", content=FULL_SYSTEM),
+        LLMMessage(
+            role="user",
+            content=(
+                f"Topic: {fact_sheet.concept}\n"
+                f"Why it happens: {fact_sheet.mechanism}\n"
+                f"What to do: {fact_sheet.counter_move}\n"
+                f"Beat plan:\n{outline}\n"
+                f"{source}"
+                f"{length}\n"
+                "Write the full 6-line script now (numbered 1-6)."
+            ),
+        ),
+    ]
+    try:
+        per_line = target_words * 4 + 30 if flexible else target_words * 3 + 25
+        max_tokens = max(300, 6 * per_line)
+        return llm.complete(msgs, temperature=0.6, max_tokens=max_tokens, model=model).strip()
+    except (LLMError, BlockError) as exc:
+        raise BlockError(f"Full script write failed: {exc}") from exc
+
+
 def condense_line(
     llm: LLMProvider,
     text: str,
