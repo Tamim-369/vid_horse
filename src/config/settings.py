@@ -53,8 +53,10 @@ class Settings(BaseSettings):
     )
     # Script writing benefits from a model that follows instructions and
     # keeps a coherent thread. Falls back to ollama_model when empty.
+    # llama3.2 writes the most coherent, grounded, plain-word scripts in
+    # local comparisons (qwen3.5/3 4B often return empty or incoherent output).
     ollama_writer_model: str = Field(
-        default="qwen3.5:4b",
+        default="llama3.2:latest",
         validation_alias=AliasChoices(
             "VIDEOAI_OLLAMA_WRITER_MODEL", "OLLAMA_WRITER_MODEL",
             "VIDEOAI_WRITER_MODEL", "WRITER_MODEL",
