@@ -56,6 +56,8 @@ _TRAILING_OPEN = re.compile(
 def _clean_speech(text: str) -> str:
     """Strip labels, markdown, and common instruction/meta leakage from a line."""
     t = (text or "").strip()
+    # drop unreadable/control characters
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]", "", t)
     # strip common field/line labels the model may echo
     t = re.sub(r"^\s*(hook|scene\s*\d+|outro|line\s*\d+|narration)\s*[:\-]\s*", "", t, flags=re.I)
     t = re.sub(r"^\s*\d+\s*[.)]\s*", "", t)

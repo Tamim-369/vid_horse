@@ -30,6 +30,8 @@ def sanitize_for_speech(text: str) -> str:
         return ""
 
     t = str(text)
+    # drop unreadable/control characters (keep normal whitespace/newlines)
+    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]", "", t)
     # normalize common unicode punctuation
     t = t.replace("\u201c", '"').replace("\u201d", '"')
     t = t.replace("\u2018", "'").replace("\u2019", "'")
@@ -83,6 +85,11 @@ def sanitize_for_speech(text: str) -> str:
     t = re.sub(r"\s+", " ", t).strip()
     t = re.sub(r"(,\s*){2,}", ", ", t)
     t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
+    # fix broken punctuation combos that may remain after control-char removal
+    t = re.sub(r"\.\s*,|,\s*\.", ".", t)
+    t = re.sub(r"!\s*,|,\s*!", "!", t)
+    t = re.sub(r"\?\s*,|,\s*\?", "?", t)
+    t = re.sub(r"(,\s*){2,}", ", ", t)
     t = re.sub(r"(?<=\s)[,;:](?=\s|$)", "", t)  # lone separator tokens
     t = re.sub(r"^[\s,;:\-]+", "", t)
     t = re.sub(r"[\s,;:\-]+$", "", t)

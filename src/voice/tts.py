@@ -27,7 +27,7 @@ VOICE_PROMPT = Path("assets/voice/voice_prompt_short.wav")
 
 # when the key of a rendered asset changes shape, older cached wavs must
 # be re-rendered, not silently shipped
-_KEY_VERSION = "s5"  # speech sanitization/spacing normalization for TTS input
+_KEY_VERSION = "s6"  # strip unreadable/control chars and tighten speech sanitization
 
 # sentence boundary: punctuation that ends a spoken sentence, then space.
 # speakable() has already folded colons/semicolons into commas, so these
