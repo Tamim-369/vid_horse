@@ -160,15 +160,18 @@ class VoiceOver:
 
         A monotone gap between every sentence reads as a paragraph recital.
         A sentence that OPENS on a turn ("And", "But", "Then", "So...") is a
-        story beat — the listener gets half a breath of anticipation first.
-        An exclamation closes heavier, so it holds a beat too.
+        story beat — the listener gets a breath of anticipation first.
+        An exclamation or question closes heavier, so it holds a beat too.
         """
 
         gap = self._sentence_gap
         if current.split() and current.split()[0].lower().strip(",") in _TURNING_WORDS:
+            gap += 0.10
+        prev_end = previous.rstrip()
+        if prev_end.endswith("!"):
             gap += 0.08
-        if previous.rstrip().endswith("!"):
-            gap += 0.06
+        elif prev_end.endswith("?"):
+            gap += 0.05
         return round(gap, 3)
 
     def _trimmed(self, wav: torch.Tensor, sr: int) -> torch.Tensor:
