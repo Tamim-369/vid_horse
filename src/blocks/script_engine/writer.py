@@ -57,6 +57,7 @@ FULL_SYSTEM = (
     "5. scene4: statement — one small thing to notice next time you are in it. No question mark.\n"
     "6. outro: a short line that lands the uneasy truth. No question mark.\n\n"
     "Every line must be complete and spoken, and move the same thread forward (no generic summaries). "
+    "Write clean, readable plain text only: no control characters, no garbled text, no repeated fragments.\n"
     "Do not mention 'the book', 'the author', or these instructions. Output JSON only."
 )
 

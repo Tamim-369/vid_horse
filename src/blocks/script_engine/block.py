@@ -53,11 +53,23 @@ _TRAILING_OPEN = re.compile(
 )
 
 
+_CONTROL_CHARS_RE = re.compile(
+    r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]"
+)
+
+
+def _scrub_text(text: str) -> str:
+    """Remove unreadable/control characters and normalize whitespace."""
+    t = _CONTROL_CHARS_RE.sub("", str(text or ""))
+    t = t.replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _clean_speech(text: str) -> str:
-    """Strip labels, markdown, and common instruction/meta leakage from a line."""
-    t = (text or "").strip()
-    # drop unreadable/control characters
-    t = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]", "", t)
+    """Strip labels, markdown, meta leakage, and unreadable/garbled artifacts."""
+    t = _scrub_text(text)
+    if not t:
+        return ""
     # strip common field/line labels the model may echo
     t = re.sub(r"^\s*(hook|scene\s*\d+|outro|line\s*\d+|narration)\s*[:\-]\s*", "", t, flags=re.I)
     t = re.sub(r"^\s*\d+\s*[.)]\s*", "", t)
@@ -70,11 +82,50 @@ def _clean_speech(text: str) -> str:
     m = _META_LEAK_RE.search(t)
     if m and m.start() > 10:
         t = t[: m.start()].strip()
+    # normalize broken/repeated punctuation and spacing
+    t = re.sub(r"\.{3,}", "...", t)
+    t = re.sub(r"!{2,}", "!", t)
+    t = re.sub(r"\?{2,}", "?", t)
+    t = re.sub(r",{2,}", ",", t)
+    t = re.sub(r"\.\s*,|,\s*\.", ".", t)
+    t = re.sub(r"!\s*,|,\s*!", "!", t)
+    t = re.sub(r"\?\s*,|,\s*\?", "?", t)
+    t = re.sub(r",\s*([.!?])", r"\1", t)
+    t = re.sub(r"([.!?])\s*,", r"\1", t)
+    t = re.sub(r"(,\s*){2,}", ", ", t)
     t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
     t = re.sub(r"([,!?;:])(?=[A-Za-z0-9])", r"\1 ", t)
     t = re.sub(r"\.(?=[A-Za-z])", ". ", t)
+    t = re.sub(r"(?<=\s)[,;:](?=\s|$)", "", t)
     t = re.sub(r"\s+", " ", t).strip(" -:;,")
     return t
+
+
+def _is_garbled(text: str) -> bool:
+    """Detect degenerate/corrupted output that should be replaced."""
+    t = (text or "").strip()
+    if not t:
+        return True
+    words = t.split()
+    if not words:
+        return True
+    # broken punctuation clusters signal corruption/degeneration
+    if re.search(r",\s*,|\.\s*,|,\s*\.", t):
+        return True
+    # too many hard sentence breaks for a single narration line
+    if len(re.findall(r"[.!?]", t)) > 3:
+        return True
+    # excessive comma density or very long rambling output
+    commas = t.count(",")
+    if commas >= max(6, len(words) // 3 + 2):
+        return True
+    if len(words) > 90:
+        return True
+    # mostly non-letter content
+    letters = sum(ch.isalpha() for ch in t)
+    if letters < max(10, len(t) * 0.5):
+        return True
+    return False
 
 
 def _is_bad(text: str) -> bool:
@@ -84,6 +135,8 @@ def _is_bad(text: str) -> bool:
     if len(t.split()) < 3:
         return True
     if _META_LEAK_RE.search(t):
+        return True
+    if _is_garbled(t):
         return True
     return False
 
@@ -252,16 +305,22 @@ class ScriptEngineBlock:
         fixed: list[str] = []
         for i, ln in enumerate(lines):
             if _is_bad(ln) or repeats_previous(ln, fixed):
-                fb = _clean_speech(fallbacks[i] if i < len(fallbacks) else fallbacks[-1])
-                if fb and not repeats_previous(fb, fixed):
-                    ln = fb
+                # prefer a clean fallback; try the primary, then the last safe one
+                for fb_src in [fallbacks[i] if i < len(fallbacks) else "", fallbacks[-1]]:
+                    fb = _clean_speech(fb_src)
+                    if fb and not _is_bad(fb) and not repeats_previous(fb, fixed):
+                        ln = fb
+                        break
+                else:
+                    ln = _clean_speech(fallbacks[i] if i < len(fallbacks) else fallbacks[-1])
             if ln:
                 ln = _ensure_sentence(ln, end="?" if i == 0 else ".")
             else:
                 ln = _ensure_sentence(_clean_speech(fallbacks[i]), end="?" if i == 0 else ".")
-            if len(ln.split()) < 3:
+            if len(ln.split()) < 3 or _is_garbled(_clean_speech(ln)):
                 fb = _clean_speech(fallbacks[i]) or ("Why does this happen to you?" if i == 0 else "You feel it before you see it.")
                 ln = _ensure_sentence(fb, end="?" if i == 0 else ".")
+            ln = _scrub_text(ln)
             fixed.append(ln)
 
         # Enforce shape: hook asks "why" about a moment; line 2 may be question or statement;
@@ -292,8 +351,9 @@ class ScriptEngineBlock:
             if len(fixed[i].split()) > soft_cap:
                 fixed[i] = _ensure_sentence(_cap_to_complete(fixed[i], per_scene_ceiling + 4))
 
-        scene_lines = fixed[1:5]
-        outro = fixed[5]
+        scene_lines = [_scrub_text(x) for x in fixed[1:5]]
+        outro = _scrub_text(fixed[5])
+        hook = _scrub_text(hook)
 
         scenes: list[ScriptScene] = []
         for narr in scene_lines:
@@ -302,10 +362,10 @@ class ScriptEngineBlock:
             if len(visual.split()) > 5:
                 visual = _visual_keywords(visual)
             secs = max(3, int(len(narr.split()) / 2.5))
-            scenes.append(ScriptScene(narration=narr, visual=visual, seconds=secs))
+            scenes.append(ScriptScene(narration=_scrub_text(narr), visual=_scrub_text(visual), seconds=secs))
 
         script = VideoScript(
-            title=topic,
+            title=_scrub_text(topic),
             hook=hook,
             format=format,
             target_seconds=self._target_seconds,
