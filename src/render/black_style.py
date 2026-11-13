@@ -163,20 +163,23 @@ def _join_cards(clips: list, work: Path) -> Path:
     return out
 
 
-# transition techniques (xfade names) - varied, smooth, suitable for image segments
+# smooth transition techniques (xfade names) - varied but not jarring
 _TRANSITION_TYPES = [
-    "fade", "dissolve", "fadeblack", "fadegrays",
-    "smoothleft", "smoothright", "smoothup", "smoothdown",
-    "slideleft", "slideright", "slideup", "slidedown",
-    "wipeleft", "wiperight", "wipeup", "wipedown",
-    "wipetl", "wipetr", "wipebl", "wipebr",
-    "circleopen", "circleclose", "circlecrop",
-    "horzopen", "horzclose", "vertopen", "vertclose",
-    "diagtl", "diagtr", "diagbl", "diagbr",
-    "radial", "zoomin",
-    "coverleft", "coverright", "coverup", "coverdown",
-    "revealleft", "revealright", "revealup", "revealdown",
-    "squeezeh", "squeezev",
+    "fade",       # cross-dissolve
+    "dissolve",   # smooth dissolve
+    "fadeblack",  # gentle dip through black
+    "fadegrays",  # gentle dip through gray
+    "smoothleft",
+    "smoothright",
+    "smoothup",
+    "smoothdown",
+    "circleopen",
+    "circleclose",
+    "radial",
+    "horzopen",
+    "horzclose",
+    "vertopen",
+    "vertclose",
 ]
 
 
@@ -222,10 +225,11 @@ def _compose_with_transitions(
     ttype = ["fade"] * (n + 1)
     prev_type = None
     for i in range(1, n):
-        want = 2 * round(rng.uniform(0.35, 0.70) * FPS / 2)
+        # smooth, unhurried transitions (>= ~0.5s when possible)
+        want = 2 * round(rng.uniform(0.50, 0.90) * FPS / 2)
         cap = 2 * (min(F[i - 1], F[i]) // 4)
         t = min(want, cap)
-        if t < 8:
+        if t < 12:  # at least ~0.4s; otherwise keep a clean cut for very short clips
             tf[i] = 0
             continue
         tf[i] = t
@@ -533,22 +537,26 @@ def render_black_style(
     last_file: str | None = None
 
     # ------------------------------------------------------------------
-    # Build clips: per line -> per asset window -> ONE encode per window
-    # with all subtitle cues burned via enable windows.
+    # Build visual clips per asset window (no baked subtitles) and collect
+    # all subtitle cues with absolute timings for a global overlay.
     # ------------------------------------------------------------------
     clips = []
     clip_durations: list[float] = []
     shown_files: set[str] = set()
+    all_cues: list[tuple[str, float, float]] = []
     tag_i = 0
 
     for line_idx, (line, line_dur) in enumerate(zip(narration_lines_full, lengths)):
         if line_dur <= 0:
             continue
 
-        # Line-relative word timings
+        # Line-relative word timings -> line cues
         abs_words = word_lines[line_idx] if line_idx < len(word_lines) else []
         rel_words = [(w, s - offsets[line_idx], e - offsets[line_idx]) for w, s, e in abs_words]
         line_cues = _build_cues(rel_words, line_dur)
+        line_offset = offsets[line_idx]
+        for text, cs, ce in line_cues:
+            all_cues.append((text, line_offset + cs, line_offset + ce))
 
         # Candidate images for this line: dedupe consecutive same-file
         # entries, then prefer files not already shown in this video.
@@ -584,13 +592,6 @@ def render_black_style(
             tag = f"{tag_i:03d}"
             tag_i += 1
 
-            # cues whose midpoint falls inside this window
-            seg_cues = [
-                (t, cs - seg_start, ce - seg_start)
-                for t, cs, ce in line_cues
-                if seg_start <= (cs + ce) / 2 < seg_end or (wi == len(seq) - 1 and cs < seg_end and ce > seg_start)
-            ]
-
             if asset is not None:
                 # never the same image twice in a row, even inside a
                 # repeated shown-image sequence
@@ -614,21 +615,15 @@ def render_black_style(
             else:
                 base = _black_frame(work, f"img-{tag}", seg_dur)
 
-            # render content clip (motion + subtitles), no inter-clip fades;
-            # transitions are composed per-boundary below
-            vf = _subtitle_filter(seg_cues, seg_dur, tag, work)
+            # render visual-only content clip (motion only); subtitles are
+            # burned globally after transition composition to stay in sync
             out = work / f"seg-{tag}.mp4"
-            args = [
+            _run([
                 "ffmpeg", "-y", "-i", str(base),
-            ]
-            if vf:
-                args += ["-vf", vf]
-            args += [
                 "-t", f"{seg_dur:.3f}", "-r", str(FPS),
                 "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
                 "-crf", "20", str(out),
-            ]
-            _run(args)
+            ])
             clips.append(out)
             clip_durations.append(seg_dur)
 
@@ -639,13 +634,17 @@ def render_black_style(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     silent = _compose_with_transitions(clips, clip_durations, work, slug=slug, total=total)
 
-    _run([
-        "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
+    sub_vf = _global_subtitle_filter(all_cues, total, work)
+    mux_args = ["ffmpeg", "-y", "-i", str(silent), "-i", str(mixed)]
+    if sub_vf:
+        mux_args += ["-vf", sub_vf]
+    mux_args += [
         "-t", f"{total:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ])
+    ]
+    _run(mux_args)
     return out_path
