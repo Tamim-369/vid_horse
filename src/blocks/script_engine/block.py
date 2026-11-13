@@ -48,7 +48,12 @@ _META_LEAK_RE = re.compile(
 )
 
 _TRAILING_OPEN = re.compile(
-    r"\b(when|if|because|before|after|while|that|which|who|to|and|but|or|so|than|as)\s*[.!?]?\s*$",
+    r"\b(when|if|because|before|after|while|that|which|who|to|and|but|or|so|than|as|what|how|where|why)\s*[.!?]?\s*$",
+    re.I,
+)
+
+_TRAILING_DANGLING = re.compile(
+    r"[,;:]?\s*\b(?:the|a|an|of|to|and|but|or|is|are|was|were|in|on|at|for|with|that|which|who|when|while|as|so|because|if|than|into|about|their|your|my|our|its|his|her|this|these|those|what|how|where|why)\b\s*$",
     re.I,
 )
 
@@ -62,6 +67,33 @@ def _scrub_text(text: str) -> str:
     """Remove unreadable/control characters and normalize whitespace."""
     t = _CONTROL_CHARS_RE.sub("", str(text or ""))
     t = t.replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", t).strip()
+
+
+def _normalize_punctuation(text: str) -> str:
+    """Normalize punctuation/spacing for clear, readable spoken lines."""
+    t = str(text or "")
+    # normalize ellipsis to clear pauses/stops (avoid trailing-off ambiguity)
+    def _ellipsis(m: re.Match[str]) -> str:
+        rest = t[m.end() :].lstrip()
+        if not rest or rest[0] in ".!?":
+            return ". "
+        return ", "
+
+    t = re.sub(r"\.{3,}|…", _ellipsis, t)
+    t = re.sub(r"!{2,}", "!", t)
+    t = re.sub(r"\?{2,}", "?", t)
+    t = re.sub(r",{2,}", ",", t)
+    t = re.sub(r"\.\s*,|,\s*\.", ".", t)
+    t = re.sub(r"!\s*,|,\s*!", "!", t)
+    t = re.sub(r"\?\s*,|,\s*\?", "?", t)
+    t = re.sub(r",\s*([.!?])", r"\1", t)
+    t = re.sub(r"([.!?])\s*,", r"\1", t)
+    t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
+    t = re.sub(r"([,!?;:])(?=[A-Za-z0-9])", r"\1 ", t)
+    t = re.sub(r"\.(?=[A-Za-z])", ". ", t)
+    t = re.sub(r"(,\s*){2,}", ", ", t)
+    t = re.sub(r"(?<=\s)[,;:](?=\s|$)", "", t)
     return re.sub(r"\s+", " ", t).strip()
 
 
@@ -82,23 +114,9 @@ def _clean_speech(text: str) -> str:
     m = _META_LEAK_RE.search(t)
     if m and m.start() > 10:
         t = t[: m.start()].strip()
-    # normalize broken/repeated punctuation and spacing
-    t = re.sub(r"\.{3,}", "...", t)
-    t = re.sub(r"!{2,}", "!", t)
-    t = re.sub(r"\?{2,}", "?", t)
-    t = re.sub(r",{2,}", ",", t)
-    t = re.sub(r"\.\s*,|,\s*\.", ".", t)
-    t = re.sub(r"!\s*,|,\s*!", "!", t)
-    t = re.sub(r"\?\s*,|,\s*\?", "?", t)
-    t = re.sub(r",\s*([.!?])", r"\1", t)
-    t = re.sub(r"([.!?])\s*,", r"\1", t)
-    t = re.sub(r"(,\s*){2,}", ", ", t)
-    t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
-    t = re.sub(r"([,!?;:])(?=[A-Za-z0-9])", r"\1 ", t)
-    t = re.sub(r"\.(?=[A-Za-z])", ". ", t)
-    t = re.sub(r"(?<=\s)[,;:](?=\s|$)", "", t)
-    t = re.sub(r"\s+", " ", t).strip(" -:;,")
-    return t
+    t = _normalize_punctuation(t)
+    t = re.sub(r"^[\s\-:;,]+|[\s\-:;,]+$", "", t)
+    return re.sub(r"\s+", " ", t).strip()
 
 
 def _is_garbled(text: str) -> bool:
@@ -123,7 +141,7 @@ def _is_garbled(text: str) -> bool:
         return True
     # mostly non-letter content
     letters = sum(ch.isalpha() for ch in t)
-    if letters < max(10, len(t) * 0.5):
+    if letters < 6 or (len(words) >= 5 and letters < len(t) * 0.4):
         return True
     return False
 
@@ -141,20 +159,81 @@ def _is_bad(text: str) -> bool:
     return False
 
 
+def _strip_trailing_open(text: str) -> str:
+    """Drop a trailing incomplete clause, keeping earlier complete sentences."""
+    t = re.sub(r"\s+", " ", (text or "").strip())
+    if not t or not _TRAILING_OPEN.search(t):
+        return t
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+    if len(parts) > 1 and _TRAILING_OPEN.search(parts[-1]):
+        kept = " ".join(parts[:-1]).strip()
+        if kept:
+            return kept
+    # single fragment ending open: remove dangling tail markers
+    for _ in range(3):
+        new = _TRAILING_OPEN.sub("", t).strip(" ,;:-.!?")
+        new = _TRAILING_DANGLING.sub("", new).strip(" ,;:-.!?")
+        new = re.sub(r"\s+", " ", new).strip()
+        if new == t or not new:
+            t = new
+            break
+        t = new
+        if not _TRAILING_OPEN.search(t):
+            break
+    return re.sub(r"\s+", " ", t).strip()
+
+
 def _ensure_sentence(text: str, end: str = ".") -> str:
-    t = (text or "").strip()
+    t = _normalize_punctuation(_scrub_text(text))
     if not t:
         return t
+    t = _strip_trailing_open(t)
+    if not t:
+        return ""
     if t[-1] not in ".!?":
         t += end
     # avoid ending on a dangling connector
     t = re.sub(
-        r"[,;:]?\s*(?:and|but|or|so|because|which|that|to|like|as|when|if|than)\s*[.!?]\s*$",
+        r"[,;:]?\s*\b(?:and|but|or|so|because|which|that|to|like|as|when|if|than)\b\s*[.!?]?\s*$",
         end,
         t,
         flags=re.I,
     )
-    return re.sub(r"\s+", " ", t).strip()
+    t = _normalize_punctuation(t)
+    # if we stripped down to almost nothing, let caller decide fallback
+    if len(t.split()) < 2:
+        return ""
+    return t.strip()
+
+
+def _shape_fallback(text: str, *, end: str = ".", max_words: int = 26) -> str:
+    """Turn fallback/brief text into a clear, complete spoken line."""
+    t = _clean_speech(text)
+    if not t:
+        return ""
+    # prefer the first clear sentence/fragment
+    parts = [p.strip() for p in re.split(r"(?<=[.!?])\s+", t) if p.strip()]
+    if parts:
+        t = parts[0]
+    t = _strip_trailing_open(t)
+    # if still long, take a sensible leading chunk at a clause boundary
+    words = t.split()
+    if len(words) > max_words:
+        chunk = " ".join(words[:max_words]).rstrip(" ,;:.-!?")
+        cut = max(chunk.rfind(","), chunk.rfind(";"), chunk.rfind("."))
+        if cut >= max(12, len(chunk) // 2):
+            chunk = chunk[:cut].rstrip()
+        t = chunk
+    # trim dangling tail words so the fallback ends as a complete thought
+    for _ in range(4):
+        stripped = _TRAILING_DANGLING.sub("", t).strip(" ,;:-.!?")
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+        if not stripped or stripped == t:
+            t = stripped or t
+            break
+        t = stripped
+    t = _ensure_sentence(t, end=end)
+    return _normalize_punctuation(t)
 
 
 def _cap_to_complete(text: str, max_words: int) -> str:
@@ -304,23 +383,33 @@ class ScriptEngineBlock:
 
         fixed: list[str] = []
         for i, ln in enumerate(lines):
+            end = "?" if i == 0 else "."
+            # resolve trailing-open/incomplete lines before acceptance
+            ln = _strip_trailing_open(ln)
             if _is_bad(ln) or repeats_previous(ln, fixed):
-                # prefer a clean fallback; try the primary, then the last safe one
+                replacement = ""
                 for fb_src in [fallbacks[i] if i < len(fallbacks) else "", fallbacks[-1]]:
-                    fb = _clean_speech(fb_src)
+                    fb = _shape_fallback(fb_src, end=end, max_words=target)
                     if fb and not _is_bad(fb) and not repeats_previous(fb, fixed):
-                        ln = fb
+                        replacement = fb
                         break
-                else:
-                    ln = _clean_speech(fallbacks[i] if i < len(fallbacks) else fallbacks[-1])
-            if ln:
-                ln = _ensure_sentence(ln, end="?" if i == 0 else ".")
-            else:
-                ln = _ensure_sentence(_clean_speech(fallbacks[i]), end="?" if i == 0 else ".")
-            if len(ln.split()) < 3 or _is_garbled(_clean_speech(ln)):
-                fb = _clean_speech(fallbacks[i]) or ("Why does this happen to you?" if i == 0 else "You feel it before you see it.")
-                ln = _ensure_sentence(fb, end="?" if i == 0 else ".")
-            ln = _scrub_text(ln)
+                ln = replacement or _shape_fallback(
+                    fallbacks[i] if i < len(fallbacks) else fallbacks[-1],
+                    end=end,
+                    max_words=target,
+                )
+            ln = _ensure_sentence(ln, end=end)
+            if not ln or len(ln.split()) < 3 or _is_garbled(ln):
+                fb = _shape_fallback(
+                    fallbacks[i] if i < len(fallbacks) else "",
+                    end=end,
+                    max_words=target,
+                ) or _ensure_sentence(
+                    "Why does this happen to you?" if i == 0 else "You feel it before you see it.",
+                    end=end,
+                )
+                ln = fb
+            ln = _normalize_punctuation(_scrub_text(ln))
             fixed.append(ln)
 
         # Enforce shape: hook asks "why" about a moment; line 2 may be question or statement;
@@ -337,23 +426,27 @@ class ScriptEngineBlock:
         hook = _cap_to_complete(hook, 16)
         if "?" not in hook:
             hook = hook.rstrip(".! ") + "?"
-        hook = re.sub(r"\s+", " ", hook).strip()
+        hook = _normalize_punctuation(_scrub_text(hook))
         fixed[0] = hook
 
-        fixed[1] = _ensure_sentence(fixed[1])
+        fixed[1] = _ensure_sentence(fixed[1]) or _shape_fallback(fallbacks[1], end=".", max_words=target)
         for i in range(2, 6):  # scene2, scene3, scene4, outro -> statements
             fixed[i] = fixed[i].replace("?", ".")
-            fixed[i] = _ensure_sentence(fixed[i])
+            fixed[i] = _ensure_sentence(fixed[i]) or _shape_fallback(
+                fallbacks[i] if i < len(fallbacks) else fallbacks[-1], end=".", max_words=target
+            )
 
         # Only shorten very overlong lines, and never by cutting mid-thought
         soft_cap = per_scene_ceiling + (12 if cap_mode else 8)
         for i in range(1, 6):
             if len(fixed[i].split()) > soft_cap:
-                fixed[i] = _ensure_sentence(_cap_to_complete(fixed[i], per_scene_ceiling + 4))
+                capped = _ensure_sentence(_cap_to_complete(fixed[i], per_scene_ceiling + 4))
+                if capped:
+                    fixed[i] = capped
 
-        scene_lines = [_scrub_text(x) for x in fixed[1:5]]
-        outro = _scrub_text(fixed[5])
-        hook = _scrub_text(hook)
+        scene_lines = [_normalize_punctuation(_scrub_text(x)) for x in fixed[1:5]]
+        outro = _normalize_punctuation(_scrub_text(fixed[5]))
+        hook = _normalize_punctuation(_scrub_text(fixed[0]))
 
         scenes: list[ScriptScene] = []
         for narr in scene_lines:
