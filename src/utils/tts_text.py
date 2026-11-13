@@ -6,6 +6,10 @@ voice model is pre-expanded: numbers become words, years read flat
 ("F-35" -> "eff thirty five", "MiG-29" -> "mick twenty nine"), molecules get
 their common names ("CO2" -> "carbon dioxide"), and common symbols are
 spoken.
+
+Before expansion, text is mechanically sanitized for speech: spacing and
+punctuation artifacts that confuse prosody are normalized without changing
+the wording or meaning.
 """
 
 from __future__ import annotations
@@ -13,6 +17,78 @@ from __future__ import annotations
 import re
 
 from num2words import num2words
+
+
+def sanitize_for_speech(text: str) -> str:
+    """Clean script punctuation/spacing for clear, unambiguous TTS.
+
+    Meaning-preserving and mechanical only: fixes symbol/spacing artifacts
+    that can make the voice pause or group words in confusing ways.
+    """
+
+    if not text:
+        return ""
+
+    t = str(text)
+    # normalize common unicode punctuation
+    t = t.replace("\u201c", '"').replace("\u201d", '"')
+    t = t.replace("\u2018", "'").replace("\u2019", "'")
+    t = t.replace("\u2026", "...")
+    t = t.replace("\u2014", ", ").replace("\u2013", ", ")  # em/en dash
+    t = t.replace("\u00a0", " ")
+
+    # protect decimals so spacing rules don't split them (e.g. 3.14)
+    t = re.sub(r"(?<=\d)\.(?=\d)", "<DOT>", t)
+
+    # ellipsis / multi-dots: avoid trailing-off prosody
+    def _ellipsis(match: re.Match[str]) -> str:
+        rest = t[match.end() :].lstrip()
+        # terminal or before a sentence-ending mark -> clear stop; else a pause
+        if not rest or rest[0] in ".!?":
+            return ". "
+        return ", "
+
+    t = re.sub(r"\.{2,}", _ellipsis, t)
+
+    # parentheses/brackets: keep aside text but set it off (don't fuse words)
+    t = re.sub(r"\(([^)]*)\)", r", \1, ", t)
+    t = re.sub(r"\[([^\]]*)\]", r", \1, ", t)
+    t = re.sub(r"\{([^}]*)\}", r", \1, ", t)
+
+    # slashes and dash artifacts
+    t = re.sub(r"\band/or\b", "and or", t, flags=re.I)
+    t = re.sub(r"(?<=\w)/(?=\w)", " ", t)
+    t = re.sub(r"\s+--\s+|\s+-\s+", ", ", t)
+    t = re.sub(r"--+", ", ", t)
+
+    # collapse repeated/broken punctuation (preserve ? and ! intent)
+    t = re.sub(r"!{2,}", "!", t)
+    t = re.sub(r"\?{2,}", "?", t)
+    t = re.sub(r",{2,}", ",", t)
+    t = re.sub(r"\.{2,}", ".", t)
+    t = re.sub(r",\s*([.!?])", r"\1", t)
+    t = re.sub(r"([.!?])\s*,", r"\1", t)
+
+    # spacing: no space before punctuation, single space after where needed
+    t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
+    # space after , ! ? ; : when followed by a letter/digit (start of next token)
+    t = re.sub(r"([,!?;:])(?=[A-Za-z0-9])", r"\1 ", t)
+    # space after period when followed by a letter (decimals already protected)
+    t = re.sub(r"\.(?=[A-Za-z])", ". ", t)
+
+    # restore protected decimals
+    t = t.replace("<DOT>", ".")
+
+    # tidy artifacts introduced by replacements
+    t = re.sub(r"\s+", " ", t).strip()
+    t = re.sub(r"(,\s*){2,}", ", ", t)
+    t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
+    t = re.sub(r"(?<=\s)[,;:](?=\s|$)", "", t)  # lone separator tokens
+    t = re.sub(r"^[\s,;:\-]+", "", t)
+    t = re.sub(r"[\s,;:\-]+$", "", t)
+    t = re.sub(r"\s+", " ", t).strip()
+
+    return t
 
 _CARDINAL = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d+\b")
 _DECIMAL = re.compile(r"\b\d+\.\d+\b")
@@ -160,9 +236,11 @@ def _raw_formula(match: re.Match) -> str:
 def speakable(text: str) -> str:
     """Expand numbers, years, symbols and designators into spoken words."""
 
+    text = sanitize_for_speech(text)
     text = text.replace("‑", "-")
     text = text.replace(":", ",").replace(";", ",").replace("—", ",")
-    text = text.replace("(", "").replace(")", "")
+    # asides are already set off by sanitize_for_speech; drop any leftover parens
+    text = text.replace("(", ", ").replace(")", ", ")
     text = re.sub(r"[₀-₉]", lambda m: _SUB.get(m.group(0), m.group(0)), text)
     for symbol, spoken in _SYMBOLS:
         text = text.replace(symbol, spoken)
@@ -191,4 +269,8 @@ def speakable(text: str) -> str:
     # Years read as fully separate words: "two thousand twenty two", never
     # hyphenated, since chained hyphen tokens garble the voice model.
     text = text.replace("twenty-two", "twenty two").replace("thirty-two", "thirty two")
+    # final tidy in case normalization introduced double separators
+    text = re.sub(r"(,\s*){2,}", ", ", text)
+    text = re.sub(r"\s+([,\.!?;:])", r"\1", text)
+    text = re.sub(r"\s+", " ", text).strip(" ,")
     return text

@@ -68,6 +68,9 @@ def _clean_speech(text: str) -> str:
     m = _META_LEAK_RE.search(t)
     if m and m.start() > 10:
         t = t[: m.start()].strip()
+    t = re.sub(r"\s+([,\.!?;:])", r"\1", t)
+    t = re.sub(r"([,!?;:])(?=[A-Za-z0-9])", r"\1 ", t)
+    t = re.sub(r"\.(?=[A-Za-z])", ". ", t)
     t = re.sub(r"\s+", " ", t).strip(" -:;,")
     return t
 
