@@ -454,9 +454,35 @@ def render_black_style(
             else:
                 base = _black_frame(work, f"img-{tag}", seg_dur)
 
-            # soft fade in/out so image changes are never abrupt (lightweight)
-            fd = min(0.25, max(0.12, seg_dur * 0.12))
-            fade = f"fade=t=in:st=0:d={fd:.3f},fade=t=out:st={max(0.0, seg_dur - fd):.3f}:d={fd:.3f}"
+            # varied soft transitions so image changes aren't uniform/repetitive
+            # (lightweight concat-safe: randomized fade character per segment)
+            _trng = _random.Random(f"{slug or 'nebula'}:{line_idx}:{wi}:{tag_i}:{int(seg_dur * 1000)}")
+            roll = _trng.random()
+            if roll < 0.18:
+                fd_in = _trng.uniform(0.08, 0.14)
+                fd_out = _trng.uniform(0.20, 0.34)
+            elif roll < 0.36:
+                fd_in = _trng.uniform(0.20, 0.34)
+                fd_out = _trng.uniform(0.08, 0.14)
+            elif roll < 0.50:
+                fd_in = _trng.uniform(0.24, 0.36)
+                fd_out = _trng.uniform(0.24, 0.36)
+            elif roll < 0.68:
+                fd_in = _trng.uniform(0.10, 0.18)
+                fd_out = _trng.uniform(0.10, 0.18)
+            elif roll < 0.84:
+                fd_in = _trng.uniform(0.14, 0.22)
+                fd_out = _trng.uniform(0.22, 0.32)
+            else:
+                fd_in = _trng.uniform(0.22, 0.32)
+                fd_out = _trng.uniform(0.14, 0.22)
+            limit = max(0.08, seg_dur * 0.28)
+            fd_in = max(0.06, min(fd_in, limit, seg_dur * 0.45))
+            fd_out = max(0.06, min(fd_out, limit, max(0.06, seg_dur - fd_in - 0.05)))
+            fade = (
+                f"fade=t=in:st=0:d={fd_in:.3f},"
+                f"fade=t=out:st={max(0.0, seg_dur - fd_out):.3f}:d={fd_out:.3f}"
+            )
             vf = _subtitle_filter(seg_cues, seg_dur, tag, work)
             if vf:
                 vf = f"{vf},{fade}"
