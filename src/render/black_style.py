@@ -393,6 +393,31 @@ def _subtitle_filter(cues: list[tuple[str, float, float]], seg_dur: float, tag: 
     return ",".join(filters) if filters else None
 
 
+def _global_subtitle_filter(cues: list[tuple[str, float, float]], total: float, work: Path) -> str | None:
+    """Build drawtext chain for all cues with absolute video timings."""
+    filters: list[str] = []
+    line_h = SUB_FONT * 1.25
+    for ci, (text, cs, ce) in enumerate(cues):
+        cs = max(0.0, cs)
+        ce = min(total, ce)
+        if ce - cs < 0.08:
+            continue
+        rows = [r for r in text.split("\n") if r.strip()]
+        block_h = len(rows) * line_h
+        base_y = (HEIGHT - block_h) / 2
+        for ri, row in enumerate(rows):
+            f = work / f"gcue-{ci:04d}-{ri}.txt"
+            f.write_text(row, encoding="utf-8")
+            y = base_y + ri * line_h
+            filters.append(
+                f"drawtext=textfile={f}:fontcolor=white:fontsize={SUB_FONT}:"
+                f"fontfile={FONT}:borderw={_BORDER}:bordercolor=black@0.85:"
+                f"x=(w-text_w)/2:y={y:.0f}:"
+                f"enable='between(t,{cs:.2f},{ce:.2f})'"
+            )
+    return ",".join(filters) if filters else None
+
+
 def render_black_style(
     script,
     pack,
