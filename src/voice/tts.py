@@ -56,6 +56,29 @@ def _sentences(text: str) -> list[str]:
     return merged
 
 
+def beat_gap(previous: str, current: str, base: float) -> float:
+    """The pause between two sentences of one line, tuned like a storyteller.
+
+    A monotone gap between every sentence reads as a paragraph recital.
+    A sentence that OPENS on a turn ("And", "But", "Then", "So...") is a
+    story beat — the listener gets a breath of anticipation first.
+    An exclamation or question closes heavier, so it holds a beat too.
+
+    Module-level so the subtitle aligner can recompute the exact same
+    structure from the rendered sentence wavs.
+    """
+
+    gap = base
+    if current.split() and current.split()[0].lower().strip(",") in _TURNING_WORDS:
+        gap += 0.10
+    prev_end = previous.rstrip()
+    if prev_end.endswith("!"):
+        gap += 0.08
+    elif prev_end.endswith("?"):
+        gap += 0.05
+    return round(gap, 3)
+
+
 def _text_key(text: str, voice_tag: str = "", speed: float = 1.0) -> str:
     """Content key for a narration line: the exact text the model sees.
 
@@ -156,23 +179,7 @@ class VoiceOver:
         )
 
     def _beat_gap(self, previous: str, current: str) -> float:
-        """The pause between two sentences of one line, tuned like a storyteller.
-
-        A monotone gap between every sentence reads as a paragraph recital.
-        A sentence that OPENS on a turn ("And", "But", "Then", "So...") is a
-        story beat — the listener gets a breath of anticipation first.
-        An exclamation or question closes heavier, so it holds a beat too.
-        """
-
-        gap = self._sentence_gap
-        if current.split() and current.split()[0].lower().strip(",") in _TURNING_WORDS:
-            gap += 0.10
-        prev_end = previous.rstrip()
-        if prev_end.endswith("!"):
-            gap += 0.08
-        elif prev_end.endswith("?"):
-            gap += 0.05
-        return round(gap, 3)
+        return beat_gap(previous, current, self._sentence_gap)
 
     def _trimmed(self, wav: torch.Tensor, sr: int) -> torch.Tensor:
         """Cut leading/trailing silence so the inserted gaps are the only pauses.

@@ -449,8 +449,10 @@ def render_black_style(
             raise FileNotFoundError(f"Missing narration {wav}")
         wavs.append(wav)
 
-    # Get word-level timing from whisper
-    from voice.subtitles import align_speech
+    # Get word-level timing: prefer the deterministic sentence-wav timeline
+    # (exact sentence boundaries from the TTS structure; whisper only times
+    # words inside short clean sentences), fall back to full-line ASR.
+    from voice.subtitles import align_speech, align_speech_deterministic
     from render.media import _duration
 
     lengths = [_duration(w) for w in wavs]
@@ -461,10 +463,13 @@ def render_black_style(
         start += l
     line_ends = offsets[1:] + [start]
 
-    word_lines, _cues = align_speech(
-        narration_lines, wavs, offsets, line_ends,
-        model_size="base.en",
-    )
+    word_lines = align_speech_deterministic(narration_lines, audio_dir, offsets)
+    if word_lines is None:
+        logger.info("sentence-wav alignment unavailable; using full-line ASR")
+        word_lines, _cues = align_speech(
+            narration_lines, wavs, offsets, line_ends,
+            model_size="base.en",
+        )
 
     # Load music (variety: different bed per video; with a MusicPlan the
     # director's base_role varies per video AND scene_roles change the track

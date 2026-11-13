@@ -428,6 +428,122 @@ def align_cues(
     )[1]
 
 
+def _audio_duration(path: Path) -> float | None:
+    """Seconds of audio from the file header alone (no decode)."""
+
+    try:
+        metadata = torchaudio.info(str(path))
+    except Exception:  # noqa: BLE001 - unreadable header -> caller falls back
+        return None
+    if hasattr(metadata, "num_frames"):
+        frames, rate = metadata.num_frames, metadata.sample_rate
+    elif hasattr(metadata, "frames"):
+        frames, rate = metadata.frames, metadata.samplerate
+    else:
+        return None
+    if not frames or not rate:
+        return None
+    return frames / rate
+
+
+def align_speech_deterministic(
+    lines: list[str],
+    audio_dir: Path,
+    offsets: list[float],
+    *,
+    stem: str = "voice",
+    model_size: str = "base.en",
+    device: str = "cpu",
+) -> list[list[tuple[str, float, float]]] | None:
+    """Word timings rebuilt from the per-sentence TTS wavs, not full-line ASR.
+
+    The voice renders each line as trimmed sentence wavs joined by known
+    beat gaps, then time-stretches the whole line (atempo). Sentence
+    boundaries on the final timeline are therefore exact arithmetic:
+    sentence start = (sum of preceding pieces) / speed. Whisper supplies
+    only WORD times inside one short, clean sentence wav — no whole-line
+    timeline to drift on, no trailing line-gap silence to hallucinate in,
+    and any residual error is bounded by the sentence span.
+
+    Returns one ``(word, abs_start, abs_end)`` list per line (absolute
+    times), or ``None`` when the sentence wavs are missing, or the on-disk
+    line wav doesn't match the recomputed structure (voice settings changed
+    since the render) — the caller then falls back to full-line ASR.
+    """
+
+    from config.settings import get_settings
+    from utils.tts_text import speakable
+    from voice.tts import _sentences, beat_gap
+
+    settings = get_settings()
+    speed = settings.voice_speed if settings.voice_speed > 0.05 else 1.0
+    scale = 1.0 / speed
+
+    # structure sanity: sentence wavs must all exist and the recomputed
+    # line duration must match the actual wav (gaps + speed unchanged)
+    structure: list[list[tuple[str, Path, float]]] = []
+    for index, line in enumerate(lines):
+        spoken = speakable(line)
+        sentences = _sentences(spoken) or [spoken]
+        pieces: list[tuple[str, Path, float]] = []
+        raw_total = 0.0
+        for position, sentence in enumerate(sentences):
+            wav = audio_dir / f"{stem}-{index:02d}.s{position:02d}.wav"
+            duration = _audio_duration(wav)
+            if duration is None:
+                logger.debug("sentence wav missing for line %d.%d", index, position)
+                return None
+            pieces.append((sentence, wav, raw_total))
+            raw_total += duration
+            if position:
+                raw_total += beat_gap(
+                    sentences[position - 1], sentence, settings.voice_sentence_gap
+                )
+        line_wav = audio_dir / f"{stem}-{index:02d}.wav"
+        line_dur = _audio_duration(line_wav)
+        expected = raw_total * scale + (
+            0.0 if index == len(lines) - 1 else settings.voice_line_gap
+        )
+        tolerance = 0.08 + 0.01 * len(sentences)
+        if line_dur is None or abs(line_dur - expected) > tolerance:
+            logger.debug(
+                "line %d structure mismatch (wav %.3fs vs expected %.3fs)",
+                index, line_dur or -1.0, expected,
+            )
+            return None
+        structure.append(pieces)
+
+    model = _whisper_model(model_size, device)
+    word_lines: list[list[tuple[str, float, float]]] = []
+    for index, pieces in enumerate(structure):
+        offset = offsets[index] if index < len(offsets) else 0.0
+        timed: list[tuple[str, float, float]] = []
+        for sentence, wav, sentence_start in pieces:
+            words, starts, ends = _transcribe_words(sentence, wav, 0.0, model)
+            if words:
+                timed.extend(
+                    (word, sentence_start + s, sentence_start + e)
+                    for word, s, e in zip(words, starts, ends, strict=False)
+                )
+                continue
+            # whisper gave nothing usable: lay the sentence's own words
+            # evenly across its EXACT span — the words shown are always
+            # the spoken ones, the timing is bounded by the sentence
+            duration = _audio_duration(wav) or 0.0
+            tokens = sentence.split()
+            if not tokens or duration <= 0:
+                continue
+            span = max(0.2, duration - 0.06)
+            step = span / len(tokens)
+            for i, token in enumerate(tokens):
+                timed.append((token, sentence_start + i * step, sentence_start + (i + 1) * step))
+        word_lines.append([
+            (word, offset + start * scale, offset + end * scale)
+            for word, start, end in timed
+        ])
+    return word_lines
+
+
 def _ass_time(seconds: float) -> str:
     centis = max(0, round(seconds * 100))
     hours, rest = divmod(centis, 360000)
