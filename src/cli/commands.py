@@ -181,7 +181,9 @@ def lesson_script_cmd(
     # Generate output slug
     if not output:
         import re
-        lesson_slug = lesson_file.replace(".txt", "")
+        # basename only: the part_XX directory must not leak into the slug
+        # (it would nest output dirs and the final mp4 path)
+        lesson_slug = Path(lesson_file).stem
         output = f"{book_dir[:40]}--{lesson_slug}"
 
     out_dir = Path(settings.output_dir) / output
@@ -320,7 +322,9 @@ def lesson_produce_cmd(
 
     if not output:
         import re
-        lesson_slug = lesson_file.replace(".txt", "")
+        # basename only: the part_XX directory must not leak into the slug
+        # (it would nest output dirs and the final mp4 path)
+        lesson_slug = Path(lesson_file).stem
         output = f"{book_dir[:40]}--{lesson_slug}"
 
     out_dir = Path(settings.output_dir) / output
