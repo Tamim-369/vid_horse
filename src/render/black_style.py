@@ -265,17 +265,19 @@ def _compose_with_transitions(
         if i < n - 1 and tf[i + 1] > 0:
             TF = tf[i + 1]
             D = (TF - 1) / FPS
-            NA = F[i] - TF // 2
-            NB_end = TF // 2
+            H = TF // 2
             tout = work / f"trans-{i + 1:03d}.mp4"
             trans = ttype[i + 1]
+            # freeze handles: pad by FRAME COUNT and pad BEFORE trimming —
+            # setpts zeroes the last frame's duration metadata, so tpad
+            # after setpts stacks clones on one timestamp and fps drops them
             fc = (
-                f"[0:v]trim=start_frame={NA},setpts=PTS-STARTPTS,"
-                f"tpad=stop_mode=clone:stop_duration={TF/2/FPS:.6f},"
-                f"fps={FPS},format=yuv420p[a];"
-                f"[1:v]trim=end_frame={NB_end},setpts=PTS-STARTPTS,"
-                f"tpad=start_mode=clone:start_duration={TF/2/FPS:.6f},"
-                f"fps={FPS},format=yuv420p[b];"
+                f"[0:v]tpad=stop_mode=clone:stop={H},"
+                f"trim=start_frame={F[i] - H}:end_frame={F[i] + H},"
+                f"setpts=PTS-STARTPTS,fps={FPS},format=yuv420p[a];"
+                f"[1:v]tpad=start_mode=clone:start={H},"
+                f"trim=end_frame={TF},"
+                f"setpts=PTS-STARTPTS,fps={FPS},format=yuv420p[b];"
                 f"[a][b]xfade=transition={trans}:duration={D:.6f}:offset=0,format=yuv420p[v]"
             )
             _run([
