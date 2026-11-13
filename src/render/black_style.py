@@ -15,6 +15,7 @@ Editing logic:
 from __future__ import annotations
 
 import logging
+import random as _random
 import subprocess
 from pathlib import Path
 
@@ -160,6 +161,140 @@ def _join_cards(clips: list, work: Path) -> Path:
         "-pix_fmt", "yuv420p", str(out),
     ])
     return out
+
+
+# transition techniques (xfade names) - varied, smooth, suitable for image segments
+_TRANSITION_TYPES = [
+    "fade", "dissolve", "fadeblack", "fadegrays",
+    "smoothleft", "smoothright", "smoothup", "smoothdown",
+    "slideleft", "slideright", "slideup", "slidedown",
+    "wipeleft", "wiperight", "wipeup", "wipedown",
+    "wipetl", "wipetr", "wipebl", "wipebr",
+    "circleopen", "circleclose", "circlecrop",
+    "horzopen", "horzclose", "vertopen", "vertclose",
+    "diagtl", "diagtr", "diagbl", "diagbr",
+    "radial", "zoomin",
+    "coverleft", "coverright", "coverup", "coverdown",
+    "revealleft", "revealright", "revealup", "revealdown",
+    "squeezeh", "squeezev",
+]
+
+
+def _compose_with_transitions(
+    clips: list[Path], durations: list[float], work: Path, *, slug: str | None, total: float
+) -> Path:
+    """Join segment clips with varied per-boundary xfade transitions.
+
+    Uses freeze-handle composition so total duration stays sync-safe:
+    bodies + transition pieces sum to the original total.
+    """
+    n = len(clips)
+    if n == 1:
+        out = work / "cards-transitions.mp4"
+        _run([
+            "ffmpeg", "-y", "-i", str(clips[0]),
+            "-vf", "fade=t=in:st=0:d=0.35,fade=t=out:st={:.3f}:d=0.35".format(max(0.0, durations[0] - 0.35)),
+            "-t", f"{total:.3f}", "-r", str(FPS),
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+            str(out),
+        ])
+        return out
+
+    rng = _random.Random(slug or "nebula")
+
+    # frame-accurate planning
+    cum = 0.0
+    bounds = [0]
+    for d in durations:
+        cum += d
+        bounds.append(round(cum * FPS))
+    F = [bounds[i + 1] - bounds[i] for i in range(n)]
+    # ensure exact total frames
+    total_frames = round(total * FPS)
+    diff = total_frames - sum(F)
+    if diff != 0 and F:
+        F[-1] += diff
+        for i in range(1, len(bounds)):
+            bounds[i] = bounds[i - 1] + F[i - 1]
+
+    # choose transition length (frames, even) and type per boundary
+    tf = [0] * (n + 1)
+    ttype = ["fade"] * (n + 1)
+    prev_type = None
+    for i in range(1, n):
+        want = 2 * round(rng.uniform(0.35, 0.70) * FPS / 2)
+        cap = 2 * (min(F[i - 1], F[i]) // 4)
+        t = min(want, cap)
+        if t < 8:
+            tf[i] = 0
+            continue
+        tf[i] = t
+        choices = [x for x in _TRANSITION_TYPES if x != prev_type]
+        chosen = rng.choice(choices or _TRANSITION_TYPES)
+        ttype[i] = chosen
+        prev_type = chosen
+
+    enc = [
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-r", str(FPS), "-g", "30", "-bf", "0",
+        "-an",
+    ]
+
+    pieces: list[Path] = []
+    for i in range(n):
+        s = tf[i] // 2
+        e = F[i] - tf[i + 1] // 2
+        length = e - s
+        if length <= 0:
+            length = max(1, F[i])
+            s = 0
+            e = F[i]
+        out = work / f"body-{i:03d}.mp4"
+        _run([
+            "ffmpeg", "-y", "-i", str(clips[i]),
+            "-vf", f"trim=start_frame={s}:end_frame={e},setpts=PTS-STARTPTS,fps={FPS},format=yuv420p",
+            "-frames:v", str(length),
+            *enc, str(out),
+        ])
+        pieces.append(out)
+
+        if i < n - 1 and tf[i + 1] > 0:
+            TF = tf[i + 1]
+            D = (TF - 1) / FPS
+            NA = F[i] - TF // 2
+            NB_end = TF // 2
+            tout = work / f"trans-{i + 1:03d}.mp4"
+            trans = ttype[i + 1]
+            fc = (
+                f"[0:v]trim=start_frame={NA},setpts=PTS-STARTPTS,"
+                f"tpad=stop_mode=clone:stop_duration={TF/2/FPS:.6f},"
+                f"fps={FPS},format=yuv420p[a];"
+                f"[1:v]trim=end_frame={NB_end},setpts=PTS-STARTPTS,"
+                f"tpad=start_mode=clone:start_duration={TF/2/FPS:.6f},"
+                f"fps={FPS},format=yuv420p[b];"
+                f"[a][b]xfade=transition={trans}:duration={D:.6f}:offset=0,format=yuv420p[v]"
+            )
+            _run([
+                "ffmpeg", "-y", "-i", str(clips[i]), "-i", str(clips[i + 1]),
+                "-filter_complex", fc,
+                "-map", "[v]", "-frames:v", str(TF),
+                *enc, str(tout),
+            ])
+            pieces.append(tout)
+
+    concat_list = work / "trans-concat.txt"
+    concat_list.write_text("\n".join(f"file '{p.resolve()}'" for p in pieces), encoding="utf-8")
+    silent = work / "cards-transitions.mp4"
+    # global fade in/out for polished edges
+    fade_out_st = max(0.0, total - 0.4)
+    _run([
+        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+        "-vf", f"fade=t=in:st=0:d=0.35,fade=t=out:st={fade_out_st:.3f}:d=0.4",
+        "-r", str(FPS),
+        "-c:v", "libx264", "-preset", "fast", "-crf", "20",
+        "-pix_fmt", "yuv420p", "-an", str(silent),
+    ])
+    return silent
 
 
 def _wrap_subtitle_text(text: str, max_chars: int = _ROW_CHARS, max_rows: int = _MAX_ROWS) -> str:
@@ -454,72 +589,30 @@ def render_black_style(
             else:
                 base = _black_frame(work, f"img-{tag}", seg_dur)
 
-            # varied soft transitions so image changes aren't uniform/repetitive
-            # (lightweight concat-safe: randomized fade character per segment)
-            _trng = _random.Random(f"{slug or 'nebula'}:{line_idx}:{wi}:{tag_i}:{int(seg_dur * 1000)}")
-            roll = _trng.random()
-            if roll < 0.18:
-                fd_in = _trng.uniform(0.08, 0.14)
-                fd_out = _trng.uniform(0.20, 0.34)
-            elif roll < 0.36:
-                fd_in = _trng.uniform(0.20, 0.34)
-                fd_out = _trng.uniform(0.08, 0.14)
-            elif roll < 0.50:
-                fd_in = _trng.uniform(0.24, 0.36)
-                fd_out = _trng.uniform(0.24, 0.36)
-            elif roll < 0.68:
-                fd_in = _trng.uniform(0.10, 0.18)
-                fd_out = _trng.uniform(0.10, 0.18)
-            elif roll < 0.84:
-                fd_in = _trng.uniform(0.14, 0.22)
-                fd_out = _trng.uniform(0.22, 0.32)
-            else:
-                fd_in = _trng.uniform(0.22, 0.32)
-                fd_out = _trng.uniform(0.14, 0.22)
-            limit = max(0.08, seg_dur * 0.28)
-            fd_in = max(0.06, min(fd_in, limit, seg_dur * 0.45))
-            fd_out = max(0.06, min(fd_out, limit, max(0.06, seg_dur - fd_in - 0.05)))
-            fade = (
-                f"fade=t=in:st=0:d={fd_in:.3f},"
-                f"fade=t=out:st={max(0.0, seg_dur - fd_out):.3f}:d={fd_out:.3f}"
-            )
+            # render content clip (motion + subtitles), no inter-clip fades;
+            # transitions are composed per-boundary below
             vf = _subtitle_filter(seg_cues, seg_dur, tag, work)
-            if vf:
-                vf = f"{vf},{fade}"
-            else:
-                vf = fade
-
             out = work / f"seg-{tag}.mp4"
-            _run([
+            args = [
                 "ffmpeg", "-y", "-i", str(base),
-                "-vf", vf,
+            ]
+            if vf:
+                args += ["-vf", vf]
+            args += [
                 "-t", f"{seg_dur:.3f}", "-r", str(FPS),
                 "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "fast",
                 "-crf", "20", str(out),
-            ])
+            ]
+            _run(args)
             clips.append(out)
             clip_durations.append(seg_dur)
 
     if not clips:
-        raise BlockError("black_style: no clips produced (empty narration?)")
+        raise RuntimeError("black_style: no clips produced (empty narration?)")
 
-    # Smooth, lightweight transitions: every clip already has soft fade
-    # in/out (applied per-clip above), so concatenation never hard-cuts and
-    # stays light on CPU/RAM (reliable on this machine).
     total = sum(lengths)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if len(clips) == 1:
-        silent = clips[0]
-    else:
-        concat_list = work / "concat.txt"
-        concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
-        silent = work / "cards-soft.mp4"
-        _run([
-            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p", str(silent),
-        ])
+    silent = _compose_with_transitions(clips, clip_durations, work, slug=slug, total=total)
 
     _run([
         "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
