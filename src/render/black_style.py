@@ -40,7 +40,11 @@ _BORDER = 7             # outline scales with the font
 
 
 def _run(args: list[str]) -> None:
-    subprocess.run(args, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    result = subprocess.run(args, capture_output=True, text=True)
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        tail = stderr[-2000:] if len(stderr) > 2000 else stderr
+        raise RuntimeError(f"ffmpeg failed (code {result.returncode}):\n{tail}")
 
 
 def _black_frame(work: Path, index: int, length: float) -> Path:
@@ -473,33 +477,15 @@ def render_black_style(
     if not clips:
         raise BlockError("black_style: no clips produced (empty narration?)")
 
-    # Smooth transitions between images. Every clip has soft fade in/out
-    # (cheap, per-clip) so changes are never abrupt. For shorter videos we
-    # also blend with varied xfade techniques; for longer/heavier ones we
-    # concat the softened clips to keep CPU/RAM use reasonable.
+    # Smooth, lightweight transitions: every clip already has soft fade
+    # in/out (applied per-clip above), so concatenation never hard-cuts and
+    # stays light on CPU/RAM (reliable on this machine).
     total = sum(lengths)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if len(clips) == 1:
         silent = clips[0]
-        args = [
-            "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
-            "-t", f"{total:.3f}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_path),
-        ]
-        _run(args)
-        return out_path
-
-    clip_durs = list(clip_durations) if clip_durations else [total / len(clips)] * len(clips)
-    if len(clip_durs) != len(clips):
-        clip_durs = [total / len(clips)] * len(clips)
-
-    # lightweight path: concat softened clips (always smooth, low CPU/RAM)
-    if len(clips) > 24:
+    else:
         concat_list = work / "concat.txt"
         concat_list.write_text("\n".join(f"file '{c.resolve()}'" for c in clips), encoding="utf-8")
         silent = work / "cards-soft.mp4"
@@ -508,74 +494,14 @@ def render_black_style(
             "-c:v", "libx264", "-preset", "fast", "-crf", "20",
             "-pix_fmt", "yuv420p", str(silent),
         ])
-        _run([
-            "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
-            "-t", f"{total:.3f}",
-            "-c:v", "libx264", "-preset", "fast", "-crf", "20",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac", "-b:a", "192k",
-            "-movflags", "+faststart",
-            str(out_path),
-        ])
-        return out_path
 
-    import random as _rnd
-
-    # Favor smooth blends, but mix in varied techniques
-    smooth = [
-        "fade", "dissolve", "fadeblack", "circleopen", "circleclose",
-        "smoothleft", "smoothright", "smoothup", "smoothdown", "radial",
-    ]
-    dynamic = [
-        "wipeleft", "wiperight", "wipeup", "wipedown",
-        "slideleft", "slideright", "slideup", "slidedown",
-        "horzopen", "horzclose", "vertopen", "vertclose",
-        "diagbl", "diagbr", "diagtl", "diagtr",
-        "hlslice", "hrslice", "vuslice", "vdslice",
-        "squeezeh", "squeezev", "circlecrop",
-    ]
-    transitions = smooth * 2 + dynamic
-    rng = _rnd.Random((slug or "nebula") + str(len(clips)))
-
-    args = ["ffmpeg", "-y"]
-    for c in clips:
-        args += ["-i", str(c)]
-
-    # build xfade chain with varied durations/types using real clip durations
-    filters: list[str] = []
-    prev = "[0:v]"
-    offset = clip_durs[0]
-    for i in range(1, len(clips)):
-        trans = rng.choice(transitions)
-        limit = min(0.6, clip_durs[i - 1] * 0.35, clip_durs[i] * 0.35)
-        min_t = 0.22 if limit >= 0.32 else max(0.16, limit - 0.04)
-        if limit < min_t:
-            tdur = max(0.1, limit)
-        else:
-            tdur = rng.uniform(min_t, max(min_t, limit))
-        tdur = min(tdur, clip_durs[i - 1] - 0.05, clip_durs[i] - 0.05)
-        if tdur < 0.1:
-            tdur = max(0.08, min(clip_durs[i - 1], clip_durs[i]) * 0.25)
-        xfade_offset = max(0.0, offset - tdur)
-        out_label = f"[v{i}]" if i < len(clips) - 1 else "[vout]"
-        filters.append(
-            f"{prev}[{i}:v]xfade=transition={trans}:duration={tdur:.3f}:offset={xfade_offset:.3f},format=yuv420p{out_label}"
-        )
-        prev = out_label
-        offset = xfade_offset + clip_durs[i]
-
-    vf_chain = ";".join(filters)
-    args += [
-        "-filter_complex", vf_chain,
-        "-map", prev,
-        "-i", str(mixed),
-        "-map", f"{len(clips)}:a",
+    _run([
+        "ffmpeg", "-y", "-i", str(silent), "-i", str(mixed),
         "-t", f"{total:.3f}",
         "-c:v", "libx264", "-preset", "fast", "-crf", "20",
         "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(out_path),
-    ]
-    _run(args)
+    ])
     return out_path
