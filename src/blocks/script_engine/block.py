@@ -64,8 +64,11 @@ _CONTROL_CHARS_RE = re.compile(
 
 
 def _scrub_text(text: str) -> str:
-    """Remove unreadable/control characters and normalize whitespace."""
+    """Remove unreadable/control characters, JSON/markdown artifacts, and normalize whitespace."""
     t = _CONTROL_CHARS_RE.sub("", str(text or ""))
+    # braces/brackets/backslashes are never prose: the writer sometimes
+    # leaks a JSON closing brace into a field ("...join its current.}.")
+    t = re.sub(r"[{}\[\]\\`|]+", "", t)
     t = t.replace("\u00a0", " ")
     return re.sub(r"\s+", " ", t).strip()
 
@@ -80,7 +83,7 @@ def _normalize_punctuation(text: str) -> str:
             return ". "
         return ", "
 
-    t = re.sub(r"\.{3,}|…", _ellipsis, t)
+    t = re.sub(r"\.{2,}|…", _ellipsis, t)
     t = re.sub(r"!{2,}", "!", t)
     t = re.sub(r"\?{2,}", "?", t)
     t = re.sub(r",{2,}", ",", t)
