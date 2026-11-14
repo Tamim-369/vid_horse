@@ -115,49 +115,98 @@ ROLE_KEYWORDS = {
 # Build valid roles string for validation
 VALID_ROLES_STRING = ", ".join(f'"{role}"' for role in ROLES)
 
-# ─── Enhanced System Prompt ─────────────────────────────────────────────
+# ─── Track Vibe Catalog ────────────────────────────────────────────────
 
-MOOD_SYSTEM = f"""You are the music director of a short-form video channel (documentary and dark-psychology teaching).
+def _catalog_tracks() -> list[dict]:
+    """The selectable tracks with their vibe descriptions, from music.json."""
 
-You get a video script (hook, scenes, outro). Choose its BACKGROUND MUSIC
-by labelling roles. A role describes WHAT IS HAPPENING, never the channel:
+    return _load_music_catalog().get("tracks", [])
 
-{ROLE_DESC_STRING}
 
-For DARK PSYCHOLOGY / MANIPULATION TEACHING lessons, map by feel:
-- manipulation tactic, control, pressure, being trapped → threat or dread-mission
-- hidden mechanism, "why this works on you", the trick revealed → mystery
-- the "aha" turn, naming the tactic, learning to see it → discovery
-- calm warning / protective advice → default or investigation-calm pacing (use discovery)
-- the sheer scale of a phenomenon → big-event
-- the vastness of the phenomenon → vast-reveal
+def _track_files() -> list[str]:
+    return [t["file"] for t in _catalog_tracks() if t.get("file")]
 
-VALID ROLES (must use EXACTLY one of these): {VALID_ROLES_STRING}.
+
+def _recent_beds(n: int = 3) -> list[str]:
+    """Track file names used as base beds in the most recent videos.
+
+    Read from the output dirs' short.json so the director can AVOID
+    repeating beds and every track in the rack gets airtime. Old plans
+    with only roles resolve through the role table.
+    """
+
+    from config.settings import get_settings
+
+    beds: list[str] = []
+    try:
+        out_dir = Path(get_settings().output_dir)
+        scripts = sorted(out_dir.glob("*/short.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in scripts:
+            if len(beds) >= n:
+                break
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                continue
+            plan = data.get("music") or {}
+            track = str(plan.get("base_track") or "").strip()
+            if not track:
+                role = str(plan.get("base_role") or "default")
+                track = _role_track_name(role)
+            if track and track not in beds:
+                beds.append(track)
+    except OSError:
+        return []
+    return beds
+
+
+# ─── Vibe System Prompt ────────────────────────────────────────────────
+
+def _build_system(recent: list[str]) -> str:
+    # HARD rotation: recently used beds are removed from the catalog the
+    # director even sees — a small model cannot be trusted to politely
+    # avoid them when one track vibes strongly. Whatever remains is still
+    # a curated dark bed, so the vibe match stays meaningful.
+    allowed = [t for t in _catalog_tracks() if t.get("file") and t["file"] not in recent]
+    if not allowed:
+        allowed = _catalog_tracks()
+    vibe_lines = []
+    for t in allowed:
+        if not t.get("file"):
+            continue
+        mood = t.get("mood", "")
+        genres = ", ".join(t.get("genres", []))
+        vibe_lines.append(f"- {t['file']}: {mood}" + (f" [{genres}]" if genres else ""))
+    vibe_block = "\n".join(vibe_lines)
+
+    return f"""You are the music director of a short-form dark-psychology video channel.
+
+You get the video's narration (hook, scenes, outro). Choose its BACKGROUND MUSIC
+by VIBE: pick the track whose FEELING matches what the video does to the viewer.
+You MUST pick from these tracks — exactly these file names:
+
+{vibe_block}
+
+How to feel your way (guides, not rules — the vibe decides):
+- steady, calm, neutral warning or protective advice -> the neutral pulse (normal.mp3)
+- something pressing on you, being watched, quietly controlled -> a closing-in unease (unease-suspense.mp3) or a menacing calm (forest-deep-drone.mp3)
+- hidden machinery, an unexplained pattern, the trick under the surface -> a deep still drone (forest-deep-drone.mp3) or vast quiet space (ancient-airy-mist.mp3)
+- finding out: the lesson unfolding, "look closer", the reveal paced -> an investigating level drone (investigation-calm.mp3)
+- awe, scale, something bigger than you -> airy vast space (ancient-airy-mist.mp3) or a rising cinematic swell (swell-tension.mp3)
+- a turn: the moment the truth lands and the ground shifts -> the swells (swell-tension.mp3)
+- raw, heavier, edgier energy -> the distinct heavy top-end piece (decrease_volume.mp3)
+- the longest videos (3min+) may use the extended pulse (full.mp3)
 
 RULES
-1. `base_role` labels the video's DOMINANT content — what plays under most
-   of the runtime. MUST be one of the valid roles above.
-2. Labelling hints:
-   - A video whose spine is one catastrophic or enormous event, or the
-     sheer scale of an immense thing, is big-event — NOT discovery.
-   - A video about venturing into or landing on a dangerous, deep or
-     barely-explored place (a descent, a landing, a probe mission) is
-     dread-mission even when it also explains findings.
-   - lone wandering objects far from home (probes streaking out of the
-     solar system) are vast-reveal — distance and scale, not discovery.
-   - discovery needs a teaching rhythm: question, half-answer, question,
-     half-answer, throughout. Without that rhythm use a scale role.
-3. `scene_roles` is RARE: only scenes whose content is a different KIND of
-   moment than the base (the reveal scene of a discovery video becomes
-   vast-reveal; an attack mention inside a calm explainer becomes threat;
-   a lurking-monster scene becomes dread-mission). Most videos need zero
-   or one override — never override the hook scene.
-4. Scene keys are scene indexes starting at 0, as strings.
+1. `base_track` labels the video's DOMINANT vibe — what plays under most
+   of the runtime. MUST be one of the exact file names above.
+2. `scene_tracks` is RARE: only scenes whose feeling is genuinely a
+   different KIND of moment than the base (the reveal scene rises to a
+   swell; a moment of being cornered gets the closing-in track). Most
+   videos need zero or one override — never override the hook scene.
+3. Scene keys are scene indexes starting at 0, as strings.
 
-CRITICAL: Your response MUST use EXACTLY one of these roles for base_role: {VALID_ROLES_STRING}.
-Do NOT use synonyms like "manipulation tactic" — use "threat" instead.
-
-Respond with JSON only: {{"base_role": "...", "scene_roles": {{"0": "..."}}}}
+Respond with JSON only: {{"base_track": "...", "scene_tracks": {{"0": "..."}}}}
 """
 
 # ─── Keyword-Based Fallback Classifier ──────────────────────────────────
@@ -204,11 +253,24 @@ _TEMPERATURE = 0.25
 
 
 def annotate_music(llm, script: VideoScript) -> VideoScript:
-    """Attach a :class:`MusicPlan` to ``script``; never blocks the pipeline."""
+    """Attach a vibe-based :class:`MusicPlan` to ``script``; never blocks.
+
+    The director chooses TRACKS by the feeling each one carries (the mood
+    lines in ``assets/music/music.json``), and avoids the beds the last
+    videos used so the whole rack gets airtime. Every failure path
+    resolves to SOME valid track — a plan-less script would drop the
+    renderer into its legacy keyword path, which is not an intelligent
+    choice either.
+    """
 
     from blocks.music.schema import MusicAnnotation
     from core.errors import LLMError
 
+    files = _track_files()
+    if not files:
+        return script
+
+    recent = _recent_beds()
     payload = {
         "hook": script.hook,
         "scenes": [
@@ -220,7 +282,7 @@ def annotate_music(llm, script: VideoScript) -> VideoScript:
     try:
         answer = llm.complete_json(
             [
-                {"role": "system", "content": MOOD_SYSTEM},
+                {"role": "system", "content": _build_system(recent)},
                 {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
             ],
             MusicAnnotation,
@@ -228,22 +290,52 @@ def annotate_music(llm, script: VideoScript) -> VideoScript:
         )
     except LLMError as error:
         logger.warning("Music direction failed (%s); using keyword fallback.", error)
-        # Fallback to keyword-based classification
         scores = _analyze_script_content(script)
         base = max(scores, key=scores.get)
-        return script.model_copy(update={"music": MusicPlan(base_role=base, scene_roles={})})
+        track = _role_track_name(base)
+        if track in set(recent):
+            allowed = [t for t in files if t not in set(recent)] or files
+            import hashlib
 
-    roles = {
-        key: role
-        for key, role in answer.scene_roles.items()
-        if role in ROLES and key.isdigit() and int(key) < len(script.scenes)
+            seed_text = " ".join([script.hook, *(s.narration for s in script.scenes), script.outro])
+            digest = int.from_bytes(hashlib.sha256(seed_text.encode("utf-8")).digest()[:4], "big")
+            track = allowed[digest % len(allowed)]
+        return script.model_copy(update={"music": MusicPlan(base_role=base, base_track=track, scene_roles={}, scene_tracks={})})
+
+    # validate: unknown track OR a recently used track -> the model ignored
+    # the restricted catalog; fall back deterministically among the allowed
+    base_track = (answer.base_track or "").strip()
+    if base_track not in files and base_track + ".mp3" in files:
+        base_track += ".mp3"  # tolerate a missing extension
+    recent_set = set(recent)
+    if base_track not in files or base_track in recent_set:
+        logger.warning(
+            "music director picked %r (unknown or recent); deterministic fallback", base_track
+        )
+        allowed = [t for t in files if t not in recent_set] or files
+        import hashlib
+
+        seed_text = " ".join([script.hook, *(s.narration for s in script.scenes), script.outro])
+        digest = int.from_bytes(hashlib.sha256(seed_text.encode("utf-8")).digest()[:4], "big")
+        base_track = allowed[digest % len(allowed)]
+        return script.model_copy(update={"music": MusicPlan(base_track=base_track, scene_tracks={})})
+
+    scene_tracks = {
+        key: (name.strip() if name.strip() in files else name.strip() + ".mp3")
+        for key, name in (answer.scene_tracks or {}).items()
+        if (name.strip() in files or name.strip() + ".mp3" in files)
+        and key.isdigit() and int(key) < len(script.scenes)
     }
-    base = answer.base_role if answer.base_role in ROLES else "default"
+    logger.info("music bed: %s (recent: %s)", base_track, recent or "none")
+    return script.model_copy(update={"music": MusicPlan(base_track=base_track, scene_tracks=scene_tracks)})
 
-    # Always attach the plan — even a plain "default" must resolve to the
-    # default role's track. Leaving music unset makes the renderer fall
-    # back to its legacy random bed, which is NOT an intelligent choice.
-    return script.model_copy(update={"music": MusicPlan(base_role=base, scene_roles=roles)})
+
+def _role_track_name(role: str) -> str:
+    """Role -> track file (the music.json role table)."""
+
+    catalog = _load_music_catalog()
+    entry = (catalog.get("roles") or {}).get(role) or (catalog.get("roles") or {}).get("default") or {}
+    return entry.get("track", "normal.mp3")
 
 
 def get_track_for_role(role: str) -> str:

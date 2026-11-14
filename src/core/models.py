@@ -201,6 +201,14 @@ class MusicPlan(StrictModel):
 
     base_role: str = "default"
     scene_roles: dict[str, str] = Field(default_factory=dict)
+    # Direct track choice (vibe-based director). When set it wins over the
+    # role fields; old scripts with only roles keep resolving through the
+    # music.json role table.
+    base_track: str = Field(default="", description="Base bed track file name, chosen by vibe.")
+    scene_tracks: dict[str, str] = Field(
+        default_factory=dict,
+        description="Rare per-scene track overrides: scene index -> track file name.",
+    )
 
 
 class HorrorStylePack(StrictModel):

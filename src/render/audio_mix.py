@@ -205,6 +205,9 @@ def _pick_music(
         return Path("assets/music") / override, MUSIC_GAIN
     plan = script.music
     if plan is not None:
+        # vibe-direct track when the plan carries one, else role table
+        if getattr(plan, "base_track", ""):
+            return _track_gain(_shelf(), plan.base_track)
         return _track_gain(_shelf(), _role_track(plan.base_role))
     # Plan-less legacy path: classify the script's content by keyword and
     # resolve the matching role track — never a blind genre guess.
@@ -241,12 +244,19 @@ def _bed_tracks(
         path, gain = _pick_music(script, genre)
         return [(path, gain)] * (len(script.scenes) + 2)
     shelf = _shelf()
-    base_path, base_gain = _track_gain(shelf, _role_track(plan.base_role, shelf))
+    base_name = getattr(plan, "base_track", "") or _role_track(plan.base_role, shelf)
+    base_path, base_gain = _track_gain(shelf, base_name)
+    scene_tracks = getattr(plan, "scene_tracks", None) or {}
     cards: list[tuple[Path, float]] = []
     for card in range(len(script.scenes) + 2):
-        role = plan.scene_roles.get(str(card - 1)) if card >= 1 else None
-        if role:
-            cards.append(_track_gain(shelf, _role_track(role, shelf)))
+        # per-scene override: a direct track name wins, else a role label
+        scene_key = str(card - 1) if card >= 1 else None
+        override = scene_tracks.get(scene_key, "") if scene_key else ""
+        if not override and scene_key:
+            role = plan.scene_roles.get(scene_key, "")
+            override = _role_track(role, shelf) if role else ""
+        if override:
+            cards.append(_track_gain(shelf, override))
         else:
             cards.append((base_path, base_gain))
     return cards
