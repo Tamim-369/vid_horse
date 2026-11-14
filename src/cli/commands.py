@@ -633,40 +633,65 @@ def auto_cmd(
     else:
         book_paths = sorted([p for p in books_root.iterdir() if p.is_dir()])
 
-    for book_path in book_paths:
-        if produced >= count:
-            break
+    # Round-robin over books: each produced video comes from the NEXT book,
+    # and a book whose remaining sections all teach already-taught territory
+    # (the variety guard blocks them) cannot stall the run — its slot passes
+    # to the next book. Draining one book chunk-by-chunk took hours of
+    # blocked picks before the first video ever came from another book.
+    from collections import deque
 
-        console.print(f"\n[bold cyan]Processing book: {book_path.name}[/bold cyan]")
+    remaining_books: deque = deque(book_paths)
+    blocked_streak = 0
 
-        while produced < count:
-            lesson_path = next_untaken(book_path, ledger, skip=skip_this_run)
-            if lesson_path is None:
-                console.print(f"  No more available lessons in {book_path.name}")
-                break
+    while produced < count and remaining_books:
+        book_path = remaining_books.popleft()
 
-            # Get lesson info
-            rel_lesson = lesson_path.relative_to(book_path)
-            console.print(f"\n[cyan]Producing: {rel_lesson}[/cyan]")
+        lesson_path = next_untaken(book_path, ledger, skip=skip_this_run)
+        if lesson_path is None:
+            console.print(f"  No more available lessons in {book_path.name}")
+            blocked_streak = 0
+            continue
 
-            # Generate output slug
-            lesson_slug = lesson_path.stem
-            book_name = book_path.name
-            output_slug = f"{book_name[:40]}--{lesson_slug}"
-            out_dir = Path(settings.output_dir) / output_slug
-            out_dir.mkdir(parents=True, exist_ok=True)
-            audio_dir = out_dir / "audio"
-            audio_dir.mkdir(parents=True, exist_ok=True)
+        console.print(f"\n[bold cyan]Book: {book_path.name}[/bold cyan]")
 
-            try:
-                recent_notes = ledger.recent_notes(6)
-                from blocks.lesson_picker import judge_lesson_duplicate, screen_similar_lessons
-                # the judge is a yes/no decision -> decision-model role
-                judge_model = settings.ollama_decision_model
+        # Get lesson info
+        rel_lesson = lesson_path.relative_to(book_path)
+        console.print(f"\n[cyan]Producing: {rel_lesson}[/cyan]")
 
-                # 1. Pick lesson (recent notes steer the picker away from angles
-                # the last videos already taught)
-                console.print(f"  [1/5] Picking lesson...")
+        # Generate output slug
+        lesson_slug = lesson_path.stem
+        book_name = book_path.name
+        output_slug = f"{book_name[:40]}--{lesson_slug}"
+        out_dir = Path(settings.output_dir) / output_slug
+        out_dir.mkdir(parents=True, exist_ok=True)
+        audio_dir = out_dir / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            recent_notes = ledger.recent_notes(6)
+            from blocks.lesson_picker import judge_lesson_duplicate, screen_similar_lessons
+            # the judge is a yes/no decision -> decision-model role
+            judge_model = settings.ollama_decision_model
+
+            # 1. Pick lesson (recent notes steer the picker away from angles
+            # the last videos already taught)
+            console.print(f"  [1/5] Picking lesson...")
+            idea = pick_lesson(
+                llm,
+                lesson_path,
+                context_paths=neighbours(lesson_path, ledger=ledger),
+                ledger=ledger,
+                recent_lessons=recent_notes or None,
+            )
+
+            # Variety guard — full channel history, not just the last
+            # videos: embeddings rank ALL taken lessons and the judge
+            # compares only the most similar candidates (cheap, constant
+            # cost). The same lesson reworded is the fastest way to read
+            # as a template channel and get flagged as repetitive.
+            candidates = screen_similar_lessons(idea.lesson, ledger.all_notes())
+            if judge_lesson_duplicate(llm, idea.lesson, candidates, model=judge_model):
+                console.print("  [yellow]lesson too similar to a past video; re-picking...[/yellow]")
                 idea = pick_lesson(
                     llm,
                     lesson_path,
@@ -674,105 +699,107 @@ def auto_cmd(
                     ledger=ledger,
                     recent_lessons=recent_notes or None,
                 )
-
-                # Variety guard — full channel history, not just the last
-                # videos: embeddings rank ALL taken lessons and the judge
-                # compares only the most similar candidates (cheap, constant
-                # cost). The same lesson reworded is the fastest way to read
-                # as a template channel and get flagged as repetitive.
                 candidates = screen_similar_lessons(idea.lesson, ledger.all_notes())
                 if judge_lesson_duplicate(llm, idea.lesson, candidates, model=judge_model):
-                    console.print("  [yellow]lesson too similar to a past video; re-picking...[/yellow]")
-                    idea = pick_lesson(
-                        llm,
-                        lesson_path,
-                        context_paths=neighbours(lesson_path, ledger=ledger),
-                        ledger=ledger,
-                        recent_lessons=recent_notes or None,
+                    console.print(
+                        "  [yellow]chunk only supports an already-taught idea; trying the next book[/yellow]"
                     )
-                    candidates = screen_similar_lessons(idea.lesson, ledger.all_notes())
-                    if judge_lesson_duplicate(llm, idea.lesson, candidates, model=judge_model):
-                        console.print(
-                            "  [yellow]chunk only supports an already-taught idea; skipping for this run[/yellow]"
-                        )
-                        skip_this_run.add(str(lesson_path))
-                        continue
-
-                # 2. Write script
-                console.print(f"  [2/5] Writing script...")
-                script = engine.run(
-                    idea.topic,
-                    format="short",
-                    lesson=idea.lesson,
-                    hook_moment=idea.hook_moment,
-                    why_plain=idea.why_plain,
-                    takeaway=idea.takeaway,
-                    key_quotes=idea.source_chunks,
-                    target_text=idea.target_text,
-                    context_text=idea.context_text,
-                    context_note=idea.context_notes or "",
-                    shape_seed=str(len(ledger.taken_paths())),
-                )
-                script = script.model_copy(update={"title": idea.topic})
-                script = annotate_music(llm, script)
-
-                script_path = out_dir / "short.json"
-                script_path.write_text(script.model_dump_json(indent=2), encoding="utf-8")
-
-                # 3. Select assets
-                console.print(f"  [3/5] Selecting assets...")
-                pack = build_asset_pack(script, slug=output_slug)
-                assets_path = out_dir / "assets-short.json"
-                assets_path.write_text(pack.model_dump_json(indent=2), encoding="utf-8")
-
-                # 4. Voice
-                console.print(f"  [4/5] Generating narration...")
-                from voice.pacing import ensure_pacing
-
-                pac = ensure_pacing(output_slug)
-                vo = VoiceOver(**pac)
-                with console.status("Generating narration..."):
-                    vo.render_script(script, audio_dir, stem="voice")
-
-                # 5. Render
-                console.print(f"  [5/5] Rendering video...")
-                stem = "voice"
-                out_path = out_dir / f"{output_slug}-short-black.mp4"
-                with console.status("Rendering video..."):
-                    render_black_style(script, pack, audio_dir, out_path, stem=stem, music="", slug=output_slug)
-
-                # Mark lesson as taken
-                ledger.mark(str(lesson_path), script_dir=str(out_dir), note=idea.lesson)
-
-                console.print(f"[bold green]Done![/bold green] {out_path}")
-                produced += 1
-
-                # Gap between videos
-                if produced < count and gap > 0:
-                    console.print(f"  Waiting {gap}s before next video...")
-                    time.sleep(gap)
-
-            except Exception as e:
-                console.print(f"[red]Failed: {e}[/red]")
-                message = str(e)
-                if "no teachable idea" in message:
-                    # permanently unteachable chunk (imprint/TOC/OCR noise):
-                    # consume it so the runner makes progress
-                    ledger.mark(str(lesson_path), script_dir=str(out_dir), note="unteachable — no teachable idea")
                     skip_this_run.add(str(lesson_path))
-                    console.print("  [yellow]marked unteachable, moving on[/yellow]")
-                else:
-                    # transient failure: retry budget, then abandon the chunk
-                    abandoned = ledger.fail(str(lesson_path), note=message[:200])
-                    if abandoned:
-                        console.print("  [red]chunk failed repeatedly; abandoned[/red]")
-                        skip_this_run.add(str(lesson_path))
-                import traceback
-                traceback.print_exc()
+                    remaining_books.append(book_path)
+                    blocked_streak += 1
+                    if blocked_streak >= 2 * max(1, len(remaining_books)):
+                        console.print(
+                            "[red]every book's next lesson is already-taught territory; "
+                            "nothing fresh to produce this run[/red]"
+                        )
+                        return
+                    continue
+
+            # 2. Write script
+            console.print(f"  [2/5] Writing script...")
+            script = engine.run(
+                idea.topic,
+                format="short",
+                lesson=idea.lesson,
+                hook_moment=idea.hook_moment,
+                why_plain=idea.why_plain,
+                takeaway=idea.takeaway,
+                key_quotes=idea.source_chunks,
+                target_text=idea.target_text,
+                context_text=idea.context_text,
+                context_note=idea.context_notes or "",
+                shape_seed=str(len(ledger.taken_paths())),
+            )
+            script = script.model_copy(update={"title": idea.topic})
+            script = annotate_music(llm, script)
+
+            script_path = out_dir / "short.json"
+            script_path.write_text(script.model_dump_json(indent=2), encoding="utf-8")
+
+            # 3. Select assets
+            console.print(f"  [3/5] Selecting assets...")
+            pack = build_asset_pack(script, slug=output_slug)
+            assets_path = out_dir / "assets-short.json"
+            assets_path.write_text(pack.model_dump_json(indent=2), encoding="utf-8")
+
+            # 4. Voice
+            console.print(f"  [4/5] Generating narration...")
+            from voice.pacing import ensure_pacing
+
+            pac = ensure_pacing(output_slug)
+            vo = VoiceOver(**pac)
+            with console.status("Generating narration..."):
+                vo.render_script(script, audio_dir, stem="voice")
+
+            # 5. Render
+            console.print(f"  [5/5] Rendering video...")
+            stem = "voice"
+            out_path = out_dir / f"{output_slug}-short-black.mp4"
+            with console.status("Rendering video..."):
+                render_black_style(script, pack, audio_dir, out_path, stem=stem, music="", slug=output_slug)
+
+            # Mark lesson as taken
+            ledger.mark(str(lesson_path), script_dir=str(out_dir), note=idea.lesson)
+
+            console.print(f"[bold green]Done![/bold green] {out_path}")
+            produced += 1
+            blocked_streak = 0
+
+            # rotate: this book's next video goes after the others
+            remaining_books.append(book_path)
+
+            # Gap between videos
+            if produced < count and gap > 0:
+                console.print(f"  Waiting {gap}s before next video...")
+                time.sleep(gap)
+
+        except Exception as e:
+            console.print(f"[red]Failed: {e}[/red]")
+            message = str(e)
+            if "no teachable idea" in message:
+                # permanently unteachable chunk (imprint/TOC/OCR noise):
+                # consume it so the runner makes progress
+                ledger.mark(str(lesson_path), script_dir=str(out_dir), note="unteachable — no teachable idea")
+                skip_this_run.add(str(lesson_path))
+                console.print("  [yellow]marked unteachable, moving on[/yellow]")
+            else:
+                # transient failure: retry budget, then abandon the chunk
+                abandoned = ledger.fail(str(lesson_path), note=message[:200])
+                if abandoned:
+                    console.print("  [red]chunk failed repeatedly; abandoned[/red]")
+                    skip_this_run.add(str(lesson_path))
+            import traceback
+            traceback.print_exc()
+
+            # rotate regardless: a broken chunk must not stall the slot
+            remaining_books.append(book_path)
+            blocked_streak = 0  # a crash is not a variety verdict
 
     console.print(f"\n[bold cyan]{'='*60}")
     console.print(f"Completed: {produced}/{count} videos")
     console.print(f"[bold cyan]{'='*60}[/bold cyan]")
+
+    settings.auto_publish = original_auto_publish
 
 
 # ============================================================================

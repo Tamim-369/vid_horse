@@ -39,13 +39,20 @@ SYSTEM = (
     "academic. Stay true to what the target text means; do not invent numbers, studies, or "
     "facts it does not support.\n"
     "Return a grounded brief as JSON with: topic (2-5 plain words), lesson (one plain "
-    "spoken sentence stating the hidden truth about what you do or why — not a textbook "
-    "definition), hook_moment (a concrete everyday moment/situation that shows it — work, "
+    "spoken sentence stating a SPECIFIC mechanism or observation about what you do or why "
+    "— never a generic topic label like 'crowd psychology'; not a textbook definition), "
+    "hook_moment (a concrete everyday moment/situation that shows it — work, "
     "friends, family, online, or a crowd), why_plain (why you do it, in simple words), "
     "takeaway (one simple thing to notice or do), source_chunks (1-3 short verbatim "
     "passages from the TARGET text), context_notes (one sentence, or empty).\n"
-    "If the target is too fragmentary to teach from (imprint, table of contents, pure OCR "
-    "noise under ~40 words), return topic and lesson as empty strings. Output JSON only."
+    "If the target has NO real idea to teach, return topic and lesson as empty strings. "
+    "Judge the TARGET text AS A WHOLE: if most of it is publisher, copyright, title, "
+    "edition or dedication noise (proper nouns, dates, ALL-CAPS lines, garbled OCR) with "
+    "only a stray quote or salutation, it is front matter — NOT teachable, even if one "
+    "sentence looks quotable. Also return empty for: imprint, table of contents, letters "
+    "addressed to a person, author bios, lists of illustrations, and any text under ~40 "
+    "real words. Do not invent a generic lesson to fill the gap — empty is the correct "
+    "answer. Output JSON only."
 )
 
 
@@ -326,6 +333,61 @@ def lesson_files(book_dir: str | Path) -> list[Path]:
     return sorted(p for p in root.rglob("*.txt") if p.is_file())
 
 
+def is_junk_chunk(text: str) -> bool:
+    """Cheap deterministic front-matter / OCR-noise detector.
+
+    The 4B picker rationalizes a lesson out of ANY stray quotable line
+    (a copyright page's epigraph became 'Belief & Influence'), so junk
+    must be filtered before it ever reaches an LLM call. High precision:
+    when unsure, return False — a missed junk chunk still gets caught by
+    the variety judge, but a wrongly eaten real chunk is lost forever.
+    """
+
+    import re
+
+    body = text.strip()
+    words = body.split()
+    if len(words) < 60:
+        return True  # matches the builder's own minimum
+
+    low = body.lower()
+    markers = sum(
+        1
+        for m in (
+            "all rights reserved", "copyright", "isbn", "published by",
+            "printed by", "printed in", "first impression", "publisher in ordinary",
+            "translated by", "new york:", "london:", "boston:",
+        )
+        if m in low
+    )
+    if markers >= 2:
+        return True
+
+    tokens = re.findall(r"[A-Za-z0-9']+", body)
+    real = [t for t in tokens if len(t) >= 3 and any(c.isalpha() for c in t)]
+    if not real:
+        return len(tokens) >= 5  # pure noise
+    caps = sum(1 for t in real if t.isupper() and len(t) >= 3)
+    if caps / len(real) > 0.25:
+        return True  # title-page shouting: "MEMOIRS OF ... BY CHARLES MACKAY"
+    # OCR garbage: mid-token case switches ("acozroRareD") or vowel-less tokens
+    garbage = sum(
+        1
+        for t in real
+        if len(t) >= 5 and any(c.isupper() for c in t[1:-1])
+        or (len(t) >= 5 and not any(c in "aeiouAEIOU" for c in t))
+    )
+    if garbage / len(real) > 0.12:
+        return True
+
+    # letters: a salutation plus a sign-off in the same chunk
+    if re.search(r"\bdear (mrs|mr|miss|dr|sir)\b", low) and re.search(
+        r"yours (most |truly |sincerely |faithfully )", low
+    ):
+        return True
+    return False
+
+
 def next_untaken(
     book_dir: str | Path,
     ledger: TakenLedger,
@@ -337,8 +399,16 @@ def next_untaken(
     for path in lesson_files(book_dir):
         if str(path) in banned:
             continue
-        if not ledger.is_taken(path):
-            return path
+        if ledger.is_taken(path):
+            continue
+        # front matter / OCR junk never reaches an LLM call: it would be
+        # re-detected (for free) on every later run, so no ledger write
+        try:
+            if is_junk_chunk(path.read_text(encoding="utf-8", errors="replace")):
+                continue
+        except OSError:
+            pass
+        return path
     return None
 
 

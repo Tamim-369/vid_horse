@@ -254,11 +254,12 @@ def _compose_with_transitions(
     ttype = ["fade"] * (n + 1)
     prev_type = None
     for i in range(1, n):
-        # smooth, unhurried transitions (>= ~0.5s when possible)
-        want = 2 * round(rng.uniform(0.50, 0.90) * FPS / 2)
-        cap = 2 * (min(F[i - 1], F[i]) // 4)
+        # slow, gradual blends (1.0-1.5s): the previous image holds and
+        # eases into the next instead of flashing past
+        want = 2 * round(rng.uniform(1.0, 1.5) * FPS / 2)
+        cap = 2 * (min(F[i - 1], F[i]) // 3)
         t = min(want, cap)
-        if t < 12:  # at least ~0.4s; otherwise keep a clean cut for very short clips
+        if t < 12:  # shorter than ~0.4s of material: keep a clean cut
             tf[i] = 0
             continue
         tf[i] = t
@@ -629,7 +630,7 @@ def render_black_style(
         # Show multiple images per line/sentence, but keep each on screen
         # long enough to register (don't flash). If the line is too short
         # for every assigned image, show as many as fit in order.
-        MIN_IMG_DUR = 1.8
+        MIN_IMG_DUR = 2.5
         if len(seq) > 1 and line_dur / len(seq) < MIN_IMG_DUR:
             keep = max(1, int(line_dur / MIN_IMG_DUR))
             seq = seq[:keep]
