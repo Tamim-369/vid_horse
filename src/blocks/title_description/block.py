@@ -17,7 +17,7 @@ class TitleDescriptionBlock(Block):
     def __init__(self, llm: LLMProvider) -> None:
         self._llm = llm
 
-    def run(self, script: VideoScript, topic: str = "") -> TitlePack:
+    def run(self, script: VideoScript, topic: str = "", source: str = "") -> TitlePack:
 
         messages = [
             {"role": "system", "content": TITLE_SYSTEM},
@@ -30,7 +30,9 @@ class TitleDescriptionBlock(Block):
                     + "\n".join(f"- {s.narration}" for s in script.scenes)
                     + f"\nOutro: {script.outro}\n"
                     f"Format: {script.format}\n"
-                    "Produce the title, description, tags, hashtags and pinned comment."
+                    + (f"Source attribution line (include verbatim in the description): {source}\n"
+                       if source else "")
+                    + "Produce the title, description, tags, hashtags and pinned comment."
                 ),
             },
         ]

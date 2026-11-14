@@ -473,6 +473,43 @@ def render_regen_cmd(
     console.print(f"[green]Video ready[/green] -> {out_path}")
 
 
+def _book_credit(slug: str) -> str:
+    """Attribution line for the description: adapted from a public-domain book.
+
+    Reads assets/books/credits.json (keyed by the book part of the slug);
+    falls back to the book title derived from the manifest entry.
+    """
+
+    import json as _json
+
+    book_id = slug.split("--", 1)[0]
+    raw_title = ""
+    manifest = Path("content/psychology_books") / book_id / "manifest.json"
+    if manifest.exists():
+        try:
+            raw_title = str(_json.loads(manifest.read_text(encoding="utf-8")).get("book", ""))
+        except Exception:  # noqa: BLE001 - credit is best-effort
+            raw_title = ""
+    raw_title = raw_title.removesuffix(".pdf").replace(".", " ").replace("-", " ").strip()
+
+    credit: dict = {}
+    credits_file = Path("assets/books/credits.json")
+    if credits_file.exists():
+        try:
+            credit = _json.loads(credits_file.read_text(encoding="utf-8")).get(book_id, {})
+        except Exception:  # noqa: BLE001
+            credit = {}
+    author = str(credit.get("author", "")).strip()
+    title = str(credit.get("title", "")).strip() or raw_title
+    year = credit.get("year", "")
+
+    if not title:
+        return ""
+    if author:
+        return f"Ideas adapted from {author}, {title}" + (f" ({year})" if year else "") + " — public domain."
+    return f"Ideas adapted from the public-domain book {title!r}" + (f" ({year})" if year else "") + "."
+
+
 def youtube_auth_cmd() -> None:
     """One-time browser consent: store the YouTube refresh token locally."""
     from publish import YouTubePublisher
@@ -515,7 +552,9 @@ def publish_cmd(
         if not script_path.exists():
             _fail(f"No {format} script at {script_path}")
         script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
-        pack = TitleDescriptionBlock(create_llm_provider(settings)).run(script, topic=script.title)
+        pack = TitleDescriptionBlock(create_llm_provider(settings)).run(
+            script, topic=script.title, source=_book_credit(slug)
+        )
 
     from publish import YouTubePublisher
 

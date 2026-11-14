@@ -90,6 +90,14 @@ class YouTubePublisher:
             "status": {
                 "privacyStatus": self._settings.youtube_privacy_status,
                 "selfDeclaredMadeForKids": False,
+                # YouTube's "altered or synthetic content" disclosure is only
+                # required for REALISTIC content that could mislead viewers
+                # (fake real people/events). These videos are stylized
+                # illustrative imagery + a voice clone of the creator's own
+                # voice narrating book lessons — no disclosure is required,
+                # and false positive labels add an unnecessary viewer warning.
+                # Flip to True if videos ever depict real people or events.
+                "containsSyntheticMedia": False,
             },
         }
         # a flaky connection can abort a resumable upload mid-chunk; retrying

@@ -213,7 +213,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("YOUTUBE_REDIRECT_PORT"),
     )
     youtube_category_id: str = Field(
-        default="22",
+        default="27",  # 27 = Education (fits book-based psychology lessons)
         validation_alias=AliasChoices("YOUTUBE_CATEGORY_ID"),
     )
     auto_publish: bool = Field(
