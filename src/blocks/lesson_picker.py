@@ -90,32 +90,81 @@ def _read(path: Path, max_chars: int) -> str:
     return text[:max_chars]
 
 
-_PAIR_SYSTEM = (
-    "You compare two short lesson summaries from psychology videos. SAME point means "
-    "a viewer who learned lesson A would learn nothing new from lesson B: the same "
-    "mechanism, the same cause-effect, merely reworded. DIFFERENT means same broad "
-    "theme, but a different mechanism, setting or consequence.\n\n"
-    "Examples:\n"
-    "A: \"People follow what seems popular because groups erase individual identity.\" "
-    "B: \"People react on instinct instead of reasoning; they follow whatever feels "
-    "right in the group.\" -> SAME (both: instinct/emotion replaces reasoning inside a group).\n"
-    "A: \"People follow trends blindly because emotion beats reason.\" "
-    "B: \"In an argument, staying calm while the opponent grows irritated makes them "
-    "defeat themselves.\" -> DIFFERENT (B is one-on-one argument tactics, not group behavior).\n"
-    "A: \"People follow the crowd because emotion beats reason.\" "
-    "B: \"Crowds think in images, never in reasoning; one striking picture outweighs a "
-    "hundred facts.\" -> DIFFERENT (B is about HOW ideas enter the mind — images vs "
-    "arguments — not why people follow).\n"
-    "A: \"Crowds adopt ideas as images, never through reasoning.\" "
-    "B: \"Crowds demand illusions and never thank anyone who tells them the truth.\" "
-    "-> DIFFERENT (both about crowds, but two distinct mechanisms).\n\n"
-    "Judge the concrete cause-and-effect story, never the general theme. "
-    'Answer the JSON only: {"same_point": true or false}.'
+_LIST_SYSTEM = (
+    "Lesson A was already published as a video. Lesson B is proposed. List ONLY the "
+    "concrete things B teaches that A does not already teach: a different mechanism, "
+    "cause, consequence, setting or practical insight. Short phrases. If B is just A's "
+    "point reworded, the list is EMPTY — a restatement of A's own mechanism in other "
+    "words is NOT new.\n\n"
+    "Example: A \"People follow what seems popular because groups erase individual "
+    "identity.\" B \"People react on instinct instead of reasoning; they follow whatever "
+    "feels right in the group.\" -> new_in_b: [] (instinct replacing reasoning IS A's "
+    "mechanism).\n"
+    "Example: A \"People follow the crowd because emotion beats reason.\" B \"Crowds "
+    "think in images, never in reasoning.\" -> new_in_b: [\"crowd thinking uses images\"].\n"
+    'Answer JSON only: {"new_in_b": ["...", ...]}.'
+)
+
+_KNOWN_SYSTEM = (
+    "Lesson A is published. Below are CLAIMS of things a new lesson would teach. For each "
+    "claim, decide whether A's viewer ALREADY knows it: the same mechanism, cause or "
+    "consequence in other words = already known (true). A genuinely different mechanism, "
+    "setting, consequence or insight = not known (false). Judge each claim separately, "
+    "against A's words, not against the general topic.\n\n"
+    "Example: A \"People don't think for themselves; they follow what seems appealing "
+    "because large groups influence them without conscious reasoning.\" "
+    "Claim \"in a group you stop reasoning\" -> true (that is exactly A's 'without "
+    "conscious reasoning'). Claim \"leaders steer crowds with slogans\" -> false (A says "
+    "nothing about leaders or slogans).\n"
+    "Example: A \"Crowds demand illusions and punish whoever tells the truth.\" "
+    "Claim \"people hate being told the plain truth while comfortable in a shared "
+    "fantasy\" -> true. Claim \"crowds think in images, never in reasoning\" -> false.\n\n"
+    'Answer JSON only: {"known": [true/false, ...]} — one per claim, same order.'
 )
 
 
-class PairVerdict(StrictModel):
-    same_point: bool = Field(default=False)
+class PairNewItems(StrictModel):
+    new_in_b: list[str] = Field(default_factory=list)
+
+
+class PairKnown(StrictModel):
+    known: list[bool] = Field(default_factory=list)
+
+
+def _pair_is_duplicate(llm, note_a: str, lesson_b: str, *, model: str | None) -> bool | None:
+    """One A-vs-B comparison in two small stages; None when a call fails.
+
+    Stage 1 asks what B teaches BEYOND A (models list far better than they
+    judge — the boolean judge merged every crowd/authority/influence lesson
+    into one theme and blocked whole books). Stage 2 checks each short
+    listed item against A's words: short concrete phrases compare
+    reliably, whole paragraphs do not.
+    """
+
+    msgs = [
+        LLMMessage(role="system", content=_LIST_SYSTEM),
+        LLMMessage(
+            role="user",
+            content=f"LESSON A:\n{note_a.strip()}\n\nLESSON B:\n{lesson_b.strip()}\n\nList.",
+        ),
+    ]
+    listed = llm.complete_json(msgs, PairNewItems, temperature=0.0, model=model)
+    items = [x.strip() for x in listed.new_in_b if x and x.strip()][:3]
+    if not items:
+        return True  # nothing beyond A -> duplicate
+    msgs = [
+        LLMMessage(role="system", content=_KNOWN_SYSTEM),
+        LLMMessage(
+            role="user",
+            content=f"LESSON A:\n{note_a.strip()}\n\nCLAIMS:\n"
+            + "\n".join(f"{i + 1}. {x}" for i, x in enumerate(items)),
+        ),
+    ]
+    verdict = llm.complete_json(msgs, PairKnown, temperature=0.0, model=model)
+    flags = [bool(v) for v in verdict.known[: len(items)]]
+    if not flags:
+        return None  # unusable answer; treat as failed comparison
+    return all(flags)
 
 
 def screen_similar_lessons(
@@ -173,35 +222,28 @@ def judge_lesson_duplicate(
     *,
     model: str | None = None,
 ) -> bool:
-    """One small local LLM call per recent lesson: same point, reworded?
+    """One small local comparison per recent lesson: same point, reworded?
 
     Word/embedding overlap cannot detect paraphrase ("don't think for
     themselves" vs "react instinctively on impression" share nothing but
-    mean the same), so a model judges. Judged as direct A-vs-B pairs
-    (not against a numbered list) because a 4B model handles one binary
-    comparison reliably and a list with a "closest" index poorly. Cheap
-    and local; short-circuits on the first duplicate found.
+    mean the same), so a model judges — two tiny stages per A-vs-B pair
+    (list what is new, then check those items against A). Short-circuits
+    on the first duplicate found. Failures never block production: a
+    failed pair counts as different.
     """
 
     new_text = new_lesson.strip()
     if not new_text or not recent_notes:
         return False
     for note in recent_notes:
-        msgs = [
-            LLMMessage(role="system", content=_PAIR_SYSTEM),
-            LLMMessage(
-                role="user",
-                content=f"LESSON A:\n{note.strip()}\n\nLESSON B:\n{new_text}\n\nDoes B teach the SAME point as A?",
-            ),
-        ]
         try:
-            verdict = llm.complete_json(msgs, PairVerdict, temperature=0.0, model=model)
+            dup = _pair_is_duplicate(llm, note, new_text, model=model)
         except (LLMError, BlockError) as exc:
             # the judge must never block production: treat this pair as
             # different and keep going
             logger.warning("lesson-duplicate pair judge failed (%s); assuming different", exc)
             continue
-        if verdict.same_point:
+        if dup is True:
             return True
     return False
 
