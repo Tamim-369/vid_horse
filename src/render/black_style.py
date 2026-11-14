@@ -48,6 +48,30 @@ def _run(args: list[str]) -> None:
         raise RuntimeError(f"ffmpeg failed (code {result.returncode}):\n{tail}")
 
 
+def _clip_frames(path: Path) -> int:
+    """Actual video frame count of a rendered clip (metadata, decode fallback)."""
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        n = int((out.stdout or "").strip())
+    except ValueError:
+        n = 0
+    if n > 0:
+        return n
+    out = subprocess.run(
+        ["ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+         "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True,
+    )
+    try:
+        return int((out.stdout or "").strip())
+    except ValueError:
+        return 0
+
+
 def _black_frame(work: Path, index: int, length: float) -> Path:
     """Pure black frame for given length."""
     out = work / f"black-{index}.mp4"
@@ -205,20 +229,25 @@ def _compose_with_transitions(
 
     rng = _random.Random(slug or "nebula")
 
-    # frame-accurate planning
-    cum = 0.0
+    # Plan from the ACTUAL material. Each seg clip was rendered with a
+    # 3-decimal `-t`, so its real frame count can sit a frame off the
+    # float plan; cutting at planned positions inside shorter material
+    # silently drops frames (bodies/trans come out short and the loss
+    # walks into the final concat).
+    materials = [_clip_frames(c) for c in clips]
+    F = list(materials)
     bounds = [0]
-    for d in durations:
-        cum += d
-        bounds.append(round(cum * FPS))
-    F = [bounds[i + 1] - bounds[i] for i in range(n)]
-    # ensure exact total frames
+    for f in F:
+        bounds.append(bounds[-1] + f)
+    # absorb the (tiny) rounding difference between the material total
+    # and the audio total in the LAST clip: when that asks for more
+    # frames than the material has, its body pads clone frames first
     total_frames = round(total * FPS)
-    diff = total_frames - sum(F)
+    diff = total_frames - bounds[-1]
     if diff != 0 and F:
         F[-1] += diff
-        for i in range(1, len(bounds)):
-            bounds[i] = bounds[i - 1] + F[i - 1]
+        bounds[-1] += diff
+    last_material = materials[-1]
 
     # choose transition length (frames, even) and type per boundary
     tf = [0] * (n + 1)
@@ -254,9 +283,14 @@ def _compose_with_transitions(
             s = 0
             e = F[i]
         out = work / f"body-{i:03d}.mp4"
+        # the LAST clip may need a frame or two more than its material
+        # (the total-frames absorption above); pad BEFORE trimming —
+        # tpad after setpts stacks clones on one timestamp in ffmpeg 7.1
+        pad = F[i] - last_material if i == n - 1 and F[i] > last_material else 0
+        pre = f"tpad=stop_mode=clone:stop={pad}," if pad else ""
         _run([
             "ffmpeg", "-y", "-i", str(clips[i]),
-            "-vf", f"trim=start_frame={s}:end_frame={e},setpts=PTS-STARTPTS,fps={FPS},format=yuv420p",
+            "-vf", f"{pre}trim=start_frame={s}:end_frame={e},setpts=PTS-STARTPTS,fps={FPS},format=yuv420p",
             "-frames:v", str(length),
             *enc, str(out),
         ])
