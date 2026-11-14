@@ -71,3 +71,8 @@ assets/music/.lead_in.json
 
 # Extracted book lesson chunks (regenerate)
 content/
+
+# YouTube OAuth secrets and stored token (never commit)
+client_secret*.json
+token.json
+assets/youtube/

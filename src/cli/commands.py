@@ -43,6 +43,7 @@ def register(app: typer.Typer) -> None:
     # Single-stage re-runs
     app.command(name="voice-regen")(voice_regen_cmd)
     app.command(name="render-regen")(render_regen_cmd)
+    app.command(name="youtube-auth")(youtube_auth_cmd)
     app.command(name="publish")(publish_cmd)
 
 
@@ -472,6 +473,22 @@ def render_regen_cmd(
     console.print(f"[green]Video ready[/green] -> {out_path}")
 
 
+def youtube_auth_cmd() -> None:
+    """One-time browser consent: store the YouTube refresh token locally."""
+    from publish import YouTubePublisher
+
+    settings = get_settings()
+    if not settings.youtube_client_secrets_path.exists():
+        _fail(
+            f"Client secrets not found: {settings.youtube_client_secrets_path}\n"
+            "Save the downloaded OAuth client JSON and set YOUTUBE_CLIENT_SECRETS in .env"
+        )
+    console.print("Opening browser for YouTube consent (type: Desktop app)...")
+    YouTubePublisher().authenticate()
+    console.print(f"[green]Token saved to {settings.youtube_token_path}.[/green]")
+    console.print("You can now upload: [bold]nebula publish SLUG --push[/bold]")
+
+
 def publish_cmd(
     slug: str = typer.Argument(..., help="Output slug."),
     format: str = typer.Option("short", "--format", "-f", help="short|long"),
@@ -686,4 +703,5 @@ def register(app: typer.Typer) -> None:
     # Single-stage re-runs
     app.command(name="voice-regen")(voice_regen_cmd)
     app.command(name="render-regen")(render_regen_cmd)
+    app.command(name="youtube-auth")(youtube_auth_cmd)
     app.command(name="publish")(publish_cmd)
