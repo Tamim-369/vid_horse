@@ -105,6 +105,32 @@ def sanitize_for_speech(text: str) -> str:
     t = re.sub(r"[\s,;:\-]+$", "", t)
     t = re.sub(r"\s+", " ", t).strip()
 
+    # a trailing tag question with no comma ("that's how it goes isn't it?")
+    # is rushed straight into the sentence: set the tag off with a comma so
+    # the question split below can give it its own breath
+    t = re.sub(
+        r"(?<!,)\s+(isn't it|isn't that|doesn't it|doesn't that|don't you|"
+        r"aren't they|can't you|won't you)\?",
+        lambda m: ", " + m.group(1) + "?",
+        t,
+        flags=re.IGNORECASE,
+    )
+
+    # a question tacked onto a statement with a comma ("..., what's pulling
+    # you in?") is synthesized as ONE blob: the voice anchors on the opening
+    # clause's declarative shape and never gives the question its own rise,
+    # so it sounds welded to the sentence. Give the question its own
+    # sentence: a breath before it and a full contour to make the rise.
+    t = _QUESTION_TAIL.sub(
+        lambda m: ". " + m.group(1)[:1].upper() + m.group(1)[1:] + "?", t
+    )
+
+    # the same weld when the question is a short "because ...?" punch glued
+    # to a long statement ("...without complaint because someone just told
+    # you?"): give the punch its own sentence too. Skip "just because" so
+    # a bare "just." is never left dangling.
+    t = _BECAUSE_TAIL.sub(lambda m: ". Because " + m.group(1) + "?", t)
+
     # a sentence break starts a sentence: capitalize the word after it so
     # the voice treats it as a new sentence and the subtitle shows it as one
     t = re.sub(r"([.!?])\s+([a-z])", lambda m: f"{m.group(1)} {m.group(2).upper()}", t)
@@ -115,6 +141,20 @@ def sanitize_for_speech(text: str) -> str:
 
 
 _CARDINAL = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d+\b")
+
+# tail of a comma-glued question: the clause after the comma must start
+# with a question word/auxiliary and have at least one more word, so list
+# commas and asides never trigger a false split
+_QUESTION_TAIL = re.compile(
+    r",\s+((?:what(?:'s|s)?|why(?:'s|s)?|how|who(?:'s|s)?|when|where|which|"
+    r"do(?:es|n't)?|did|is|are|was|were|can|could|would|will|should|has|have|"
+    r"isn't|aren't|doesn't|don't|didn't)\b\s+[^.!?]+)\?",
+    re.IGNORECASE,
+)
+
+# short "because ...?" question punch at the end of a statement (tail kept
+# to a handful of words so long subordinate clauses are never split)
+_BECAUSE_TAIL = re.compile(r"(?<!just)\s+because\s+([^,.!?]{4,45}?)\s*\?", re.IGNORECASE)
 _DECIMAL = re.compile(r"\b\d+\.\d+\b")
 _EXPONENT = re.compile(r"(\d+)\s*?([⁰¹²³⁴⁵⁶⁷⁷⁸⁹⁰]+)")
 _YEAR = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b")

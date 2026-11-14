@@ -28,6 +28,10 @@ VOICE_PROMPT = Path("assets/voice/voice_prompt_short.wav")
 # when the key of a rendered asset changes shape, older cached wavs must
 # be re-rendered, not silently shipped
 _KEY_VERSION = "s7"  # slower, more deliberate pacing and longer pauses
+# the JOIN of sentence wavs (gap profile) is versioned separately: changing
+# it must re-join every line, but never re-synthesize sentence wavs whose
+# text and recipe are unchanged
+_JOIN_VERSION = "g2"  # question anticipation + short-unit landing gaps
 
 # sentence boundary: punctuation that ends a spoken sentence, then space.
 # speakable() has already folded colons/semicolons into commas, so these
@@ -71,6 +75,13 @@ def beat_gap(previous: str, current: str, base: float) -> float:
     gap = base
     if current.split() and current.split()[0].lower().strip(",") in _TURNING_WORDS:
         gap += 0.10
+    # a question gets its own anticipation breath: without it the model's
+    # flatter delivery welds the question onto the previous sentence
+    if current.rstrip().endswith("?"):
+        gap += 0.10
+    # a short unit lands as its own beat, not as a tail of the previous one
+    if 0 < len(current.split()) <= 4:
+        gap += 0.05
     prev_end = previous.rstrip()
     if prev_end.endswith("!"):
         gap += 0.08
@@ -252,7 +263,7 @@ class VoiceOver:
         def synthesize(index: int) -> tuple[int, torch.Tensor, int]:
             line_path = out_dir / f"{stem}-{index:02d}.wav"
             sidecar = out_dir / f"{stem}-{index:02d}.key"
-            key = _text_key(segments[index], self._key_tag, self._speed)
+            key = f"{_text_key(segments[index], self._key_tag, self._speed)}|{_JOIN_VERSION}"
             # content-keyed cache: reuse the line only when the wav exists
             # AND it was synthesized from exactly this text; a stale wav
             # from an edited script must re-render, not silently ship
