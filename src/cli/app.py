@@ -50,7 +50,7 @@ register(app)
 def main_callback(
     ctx: typer.Context,
     target: int = typer.Option(2, "--target", "-t", help="Number of videos to generate"),
-    duration: int = typer.Option(45, "--duration", "-d", help="Target duration per video in seconds"),
+    duration: int = typer.Option(200, "--duration", "-d", help="Max duration per video in seconds (uses only what it needs)"),
     book: str = typer.Option(None, "--book", "-b", help="Specific book directory (optional)"),
     gap: int = typer.Option(0, "--gap", "-g", help="Minimum gap between videos in seconds"),
     no_upload: bool = typer.Option(False, "--no-upload", help="Never upload to YouTube (ignore AUTO_PUBLISH)"),

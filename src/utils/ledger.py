@@ -83,14 +83,16 @@ class TakenLedger:
             if self._status(entry) == "done"
         ]
 
+    def all_notes(self) -> list[str]:
+        """Every non-empty lesson note ever taken, in ledger (book) order."""
+
+        notes = [str(entry.get("note", "")).strip() for entry in self._data.values()]
+        return [x for x in notes if x and not x.startswith("unteachable")]
+
     def recent_notes(self, n: int = 6) -> list[str]:
         """The last n non-empty lesson notes, in ledger (book) order."""
 
-        notes = [str(entry.get("note", "")).strip() for entry in self._data.values()]
-        return [
-            x for x in notes
-            if x and not x.startswith("unteachable")
-        ][-n:]
+        return self.all_notes()[-n:]
 
     def failed_paths(self) -> list[str]:
         return [

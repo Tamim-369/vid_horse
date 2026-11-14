@@ -75,7 +75,8 @@ FULL_SYSTEM = (
 # scene-by-scene plan for lines 2-6 (line 1 is always the same hook rule).
 _SHAPES: dict[str, str] = {
     "mechanism": (
-        "SHAPE OF THIS VIDEO — mechanism: hook (the moment + why-question). "
+        "SHAPE OF THIS VIDEO — mechanism. "
+        "hook: the moment mid-action + why-question about what you just did. "
         "scene1: stay in the moment, show what you do or feel right there. "
         "scene2: the hidden reason pulling you, in plain words. "
         "scene3: what that reason quietly costs you or where it steers you. "
@@ -83,7 +84,8 @@ _SHAPES: dict[str, str] = {
         "outro: land the uneasy truth in one short line."
     ),
     "mirror": (
-        "SHAPE OF THIS VIDEO — mirror: hook (the moment + why-question). "
+        "SHAPE OF THIS VIDEO — mirror. "
+        "hook: what everyone around you is doing + why-question about why you join them. "
         "scene1: YOUR side — what you do or feel in that moment. "
         "scene2: the OTHER side — what is really happening around you that you barely register. "
         "scene3: the connecting truth — how the two sides feed each other without anyone deciding to. "
@@ -91,7 +93,8 @@ _SHAPES: dict[str, str] = {
         "outro: land the uneasy truth in one short line."
     ),
     "funnel": (
-        "SHAPE OF THIS VIDEO — funnel: hook (a tiny everyday habit of yours + why-question about it). "
+        "SHAPE OF THIS VIDEO — funnel. "
+        "hook: a tiny everyday habit of yours + why-question about it. "
         "scene1: the habit itself, smaller and more specific than anyone would admit. "
         "scene2: why the brain likes it — what it quietly gives you. "
         "scene3: what it builds into when it repeats, without you noticing. "
@@ -99,7 +102,8 @@ _SHAPES: dict[str, str] = {
         "outro: land the uneasy truth in one short line."
     ),
     "earn-it": (
-        "SHAPE OF THIS VIDEO — earn-it: hook (the moment + why-question). "
+        "SHAPE OF THIS VIDEO — earn-it. "
+        "hook: a moment where you disagree with something that turns out true + why-question. "
         "scene1: open on the counterintuitive point as a plain statement — something that sounds wrong at first. "
         "scene2: the everyday evidence that it is true, from the same moment. "
         "scene3: why it is true — the plain mechanism under it. "
@@ -111,13 +115,22 @@ _SHAPES: dict[str, str] = {
 _SHAPE_ORDER = list(_SHAPES)
 
 
-def pick_shape(seed: str) -> tuple[str, str]:
-    """Deterministic shape (name, instruction) for one video."""
+def pick_shape(seed: str | int) -> tuple[str, str]:
+    """Deterministic shape (name, instruction) for one video.
+
+    An integer (or numeric string) seed CYCLES the shapes in order —
+    used by the auto pipeline with the production count so two videos
+    produced back to back never share a shape. Any other seed hashes.
+    """
 
     import hashlib
 
-    digest = int.from_bytes(hashlib.sha256(str(seed).encode("utf-8")).digest()[:4], "big")
-    name = _SHAPE_ORDER[digest % len(_SHAPE_ORDER)]
+    try:
+        index = int(seed)  # exact cycle for auto production order
+    except (ValueError, TypeError):
+        digest = int.from_bytes(hashlib.sha256(str(seed).encode("utf-8")).digest()[:4], "big")
+        index = digest
+    name = _SHAPE_ORDER[index % len(_SHAPE_ORDER)]
     return name, _SHAPES[name]
 
 

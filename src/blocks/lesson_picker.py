@@ -111,6 +111,54 @@ class PairVerdict(StrictModel):
     same_point: bool = Field(default=False)
 
 
+def screen_similar_lessons(
+    new_lesson: str,
+    all_notes: list[str],
+    *,
+    top_k: int = 4,
+    always_include_last: int = 2,
+) -> list[str]:
+    """Pick which past lessons the LLM judge should compare against.
+
+    Embeddings cannot DECIDE whether two lessons teach the same point
+    (their similarity distributions overlap), but they RANK well: the
+    same-family pair scores 0.68-0.75 where cross-family sits lower.
+    So the screener ranks the ENTIRE channel history and hands the judge
+    only the top candidates plus the most recent lessons — full-history
+    duplicate coverage at a small, constant number of judge calls.
+
+    On any failure (embed server down, etc.) it degrades to the recent
+    window so production never blocks.
+    """
+
+    recent = all_notes[-always_include_last:] if all_notes else []
+    if not new_lesson.strip() or len(all_notes) <= top_k:
+        return list(all_notes)
+    try:
+        import ollama as _ollama
+
+        from ingestion.ingest import EMBED_MODEL
+
+        texts = [new_lesson.strip(), *all_notes]
+        embs = _ollama.embed(model=EMBED_MODEL, input=texts)["embeddings"]
+        new_emb = embs[0]
+        sims = []
+        for i, emb in enumerate(embs[1:]):
+            dot = sum(a * b for a, b in zip(new_emb, emb))
+            na = sum(a * a for a in new_emb) ** 0.5
+            nb = sum(b * b for b in emb) ** 0.5
+            sims.append((dot / (na * nb), i))
+        sims.sort(reverse=True)
+        ranked = [all_notes[i] for _, i in sims[:top_k]]
+        # merge: most recent lessons always judged, top-ranked added after
+        merged = list(dict.fromkeys(recent + ranked))
+        logger.info("duplicate screen: %d candidates from %d notes", len(merged), len(all_notes))
+        return merged
+    except Exception as exc:  # noqa: BLE001 - screening must never block
+        logger.warning("lesson similarity screening failed (%s); using recent window", exc)
+        return list(recent) or list(all_notes)
+
+
 def judge_lesson_duplicate(
     llm: LLMProvider,
     new_lesson: str,

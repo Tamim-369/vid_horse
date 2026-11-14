@@ -660,7 +660,7 @@ def auto_cmd(
 
             try:
                 recent_notes = ledger.recent_notes(6)
-                from blocks.lesson_picker import judge_lesson_duplicate
+                from blocks.lesson_picker import judge_lesson_duplicate, screen_similar_lessons
                 # the judge is a yes/no decision -> decision-model role
                 judge_model = settings.ollama_decision_model
 
@@ -675,11 +675,14 @@ def auto_cmd(
                     recent_lessons=recent_notes or None,
                 )
 
-                # Variety guard: the same lesson reworded is the fastest way
-                # to read as a template channel. Word overlap cannot detect
-                # paraphrase, so a small local judge call decides.
-                if judge_lesson_duplicate(llm, idea.lesson, recent_notes, model=judge_model):
-                    console.print("  [yellow]lesson too similar to a recent video; re-picking...[/yellow]")
+                # Variety guard — full channel history, not just the last
+                # videos: embeddings rank ALL taken lessons and the judge
+                # compares only the most similar candidates (cheap, constant
+                # cost). The same lesson reworded is the fastest way to read
+                # as a template channel and get flagged as repetitive.
+                candidates = screen_similar_lessons(idea.lesson, ledger.all_notes())
+                if judge_lesson_duplicate(llm, idea.lesson, candidates, model=judge_model):
+                    console.print("  [yellow]lesson too similar to a past video; re-picking...[/yellow]")
                     idea = pick_lesson(
                         llm,
                         lesson_path,
@@ -687,7 +690,8 @@ def auto_cmd(
                         ledger=ledger,
                         recent_lessons=recent_notes or None,
                     )
-                    if judge_lesson_duplicate(llm, idea.lesson, recent_notes, model=judge_model):
+                    candidates = screen_similar_lessons(idea.lesson, ledger.all_notes())
+                    if judge_lesson_duplicate(llm, idea.lesson, candidates, model=judge_model):
                         console.print(
                             "  [yellow]chunk only supports an already-taught idea; skipping for this run[/yellow]"
                         )
@@ -707,7 +711,7 @@ def auto_cmd(
                     target_text=idea.target_text,
                     context_text=idea.context_text,
                     context_note=idea.context_notes or "",
-                    shape_seed=output_slug,
+                    shape_seed=str(len(ledger.taken_paths())),
                 )
                 script = script.model_copy(update={"title": idea.topic})
                 script = annotate_music(llm, script)
