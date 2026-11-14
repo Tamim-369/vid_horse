@@ -36,8 +36,18 @@ def sanitize_for_speech(text: str) -> str:
     t = t.replace("\u201c", '"').replace("\u201d", '"')
     t = t.replace("\u2018", "'").replace("\u2019", "'")
     t = t.replace("\u2026", "...")
-    t = t.replace("\u2014", ", ").replace("\u2013", ", ")  # em/en dash
     t = t.replace("\u00a0", " ")
+
+    # dash separators: a LONE dash between clauses is a sentence break the
+    # writer used instead of a period; paired dashes are an aside and stay
+    # a pause. Decide on the whole line BEFORE replacing anything.
+    t = re.sub(r"\s*(?:--|\u2014|\u2013)\s*|\s-\s", " <DASH> ", t)
+    dash_joiner = " . " if t.count(" <DASH> ") == 1 else " , "
+    t = t.replace(" <DASH> ", dash_joiner)
+
+    # semicolon joins two complete thoughts: a real sentence break, not a
+    # comma pause (a comma splice erases the break the writer intended)
+    t = re.sub(r"\s*;\s*", ". ", t)
 
     # protect decimals so spacing rules don't split them (e.g. 3.14)
     t = re.sub(r"(?<=\d)\.(?=\d)", "<DOT>", t)
@@ -95,7 +105,14 @@ def sanitize_for_speech(text: str) -> str:
     t = re.sub(r"[\s,;:\-]+$", "", t)
     t = re.sub(r"\s+", " ", t).strip()
 
+    # a sentence break starts a sentence: capitalize the word after it so
+    # the voice treats it as a new sentence and the subtitle shows it as one
+    t = re.sub(r"([.!?])\s+([a-z])", lambda m: f"{m.group(1)} {m.group(2).upper()}", t)
+    if t and t[0].islower():
+        t = t[0].upper() + t[1:]
+
     return t
+
 
 _CARDINAL = re.compile(r"\b\d{1,3}(?:,\d{3})+\b|\b\d+\b")
 _DECIMAL = re.compile(r"\b\d+\.\d+\b")
@@ -245,7 +262,7 @@ def speakable(text: str) -> str:
 
     text = sanitize_for_speech(text)
     text = text.replace("‑", "-")
-    text = text.replace(":", ",").replace(";", ",").replace("—", ",")
+    text = text.replace(":", ",").replace("—", ",")
     # asides are already set off by sanitize_for_speech; drop any leftover parens
     text = text.replace("(", ", ").replace(")", ", ")
     text = re.sub(r"[₀-₉]", lambda m: _SUB.get(m.group(0), m.group(0)), text)
