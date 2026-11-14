@@ -489,6 +489,7 @@ def render_black_style(
     # (exact sentence boundaries from the TTS structure; whisper only times
     # words inside short clean sentences), fall back to full-line ASR.
     from voice.subtitles import align_speech, align_speech_deterministic
+    from voice.pacing import load_pacing
     from render.media import _duration
 
     lengths = [_duration(w) for w in wavs]
@@ -499,7 +500,17 @@ def render_black_style(
         start += l
     line_ends = offsets[1:] + [start]
 
-    word_lines = align_speech_deterministic(narration_lines, audio_dir, offsets)
+    # use the pacing this video's voice was rendered with (falls back to
+    # global settings when unknown) so the recomputed structure matches
+    pac = load_pacing(slug) or {}
+    word_lines = align_speech_deterministic(
+        narration_lines,
+        audio_dir,
+        offsets,
+        voice_speed=pac.get("speed"),
+        sentence_gap=pac.get("sentence_gap"),
+        line_gap=pac.get("line_gap"),
+    )
     if word_lines is None:
         logger.info("sentence-wav alignment unavailable; using full-line ASR")
         word_lines, _cues = align_speech(

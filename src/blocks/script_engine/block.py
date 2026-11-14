@@ -307,6 +307,7 @@ class ScriptEngineBlock:
         context_text: str = "",
         source_chunks: list[str] | None = None,
         context_note: str = "",
+        shape_seed: str = "",
     ) -> VideoScript:
         # Optional RAG (non-lesson flows)
         if not target_text and source_chunks is None and self._retriever is not None:
@@ -336,8 +337,10 @@ class ScriptEngineBlock:
         per_scene_ceiling = max(12, total_words // 6)
         target = min(per_scene_ceiling, 30) if cap_mode else max(10, min(per_scene_ceiling, 22))
 
-        from blocks.script_engine.writer import write_full_script
+        from blocks.script_engine.writer import write_full_script, pick_shape
 
+        shape_name, shape_text = pick_shape(shape_seed or topic)
+        logger.info("script shape: %s", shape_name)
         result = write_full_script(
             self._llm,
             topic=topic,
@@ -351,6 +354,7 @@ class ScriptEngineBlock:
             target_words=target,
             model=self._writer_model,
             flexible=cap_mode,
+            shape=shape_text,
         )
 
         raw = [

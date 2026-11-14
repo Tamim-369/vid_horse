@@ -68,6 +68,58 @@ FULL_SYSTEM = (
     "Do not mention 'the book', 'the author', or these instructions. Output JSON only."
 )
 
+# Shape-of-the-day rotation: every video follows the same quality rules
+# (why-question hook, declarative lines, "you" voice) but progresses
+# differently, so the channel never reads as one template. The shape is
+# chosen deterministically per video and handed to the writer as the
+# scene-by-scene plan for lines 2-6 (line 1 is always the same hook rule).
+_SHAPES: dict[str, str] = {
+    "mechanism": (
+        "SHAPE OF THIS VIDEO — mechanism: hook (the moment + why-question). "
+        "scene1: stay in the moment, show what you do or feel right there. "
+        "scene2: the hidden reason pulling you, in plain words. "
+        "scene3: what that reason quietly costs you or where it steers you. "
+        "scene4: one small thing to notice next time. "
+        "outro: land the uneasy truth in one short line."
+    ),
+    "mirror": (
+        "SHAPE OF THIS VIDEO — mirror: hook (the moment + why-question). "
+        "scene1: YOUR side — what you do or feel in that moment. "
+        "scene2: the OTHER side — what is really happening around you that you barely register. "
+        "scene3: the connecting truth — how the two sides feed each other without anyone deciding to. "
+        "scene4: one small thing to notice next time. "
+        "outro: land the uneasy truth in one short line."
+    ),
+    "funnel": (
+        "SHAPE OF THIS VIDEO — funnel: hook (a tiny everyday habit of yours + why-question about it). "
+        "scene1: the habit itself, smaller and more specific than anyone would admit. "
+        "scene2: why the brain likes it — what it quietly gives you. "
+        "scene3: what it builds into when it repeats, without you noticing. "
+        "scene4: one small thing to notice next time. "
+        "outro: land the uneasy truth in one short line."
+    ),
+    "earn-it": (
+        "SHAPE OF THIS VIDEO — earn-it: hook (the moment + why-question). "
+        "scene1: open on the counterintuitive point as a plain statement — something that sounds wrong at first. "
+        "scene2: the everyday evidence that it is true, from the same moment. "
+        "scene3: why it is true — the plain mechanism under it. "
+        "scene4: one small thing to notice next time. "
+        "outro: land the uneasy truth in one short line."
+    ),
+}
+
+_SHAPE_ORDER = list(_SHAPES)
+
+
+def pick_shape(seed: str) -> tuple[str, str]:
+    """Deterministic shape (name, instruction) for one video."""
+
+    import hashlib
+
+    digest = int.from_bytes(hashlib.sha256(str(seed).encode("utf-8")).digest()[:4], "big")
+    name = _SHAPE_ORDER[digest % len(_SHAPE_ORDER)]
+    return name, _SHAPES[name]
+
 
 def _join_quotes(quotes: list[str] | None) -> str:
     if not quotes:
@@ -92,6 +144,7 @@ def write_full_script(
     target_words: int = 22,
     model: str | None = None,
     flexible: bool = False,
+    shape: str = "",
 ) -> FullScript:
     """Write the complete 6-line script in ONE call from a grounded lesson brief."""
 
@@ -143,7 +196,8 @@ def write_full_script(
                 f"{target_block}"
                 f"{ctx_block}\n"
                 f"{length}\n"
-                "Write the full 6-line script now as JSON (hook, scene1, scene2, scene3, scene4, outro)."
+                + (f"{shape}\n" if shape else "")
+                + "Write the full 6-line script now as JSON (hook, scene1, scene2, scene3, scene4, outro)."
             ),
         ),
     ]

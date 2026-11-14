@@ -176,6 +176,7 @@ def lesson_script_cmd(
         target_text=idea.target_text,
         context_text=idea.context_text,
         context_note=idea.context_notes or "",
+        shape_seed=str(lesson_path),
     )
     script = script.model_copy(update={"title": idea.topic})
 
@@ -247,7 +248,9 @@ def lesson_voice_cmd(
     from core.models import VideoScript
     script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
 
-    vo = VoiceOver()
+    from voice.pacing import ensure_pacing
+    pac = ensure_pacing(slug)
+    vo = VoiceOver(**pac)
     with console.status(f"Narrating {slug} ({format})..."):
         path = vo.render_script(script, audio_dir, stem="voice" if format == "short" else f"voice-{format}")
     console.print(f"[green]Voiceover ready[/green] -> {path}")
@@ -352,6 +355,7 @@ def lesson_produce_cmd(
         target_text=idea.target_text,
         context_text=idea.context_text,
         context_note=idea.context_notes or "",
+        shape_seed=str(lesson_path),
     )
     script = script.model_copy(update={"title": idea.topic})
     script = annotate_music(llm, script)
@@ -367,7 +371,9 @@ def lesson_produce_cmd(
 
     # 4. Voice
     console.print("[cyan]4/5 Generating narration...[/cyan]")
-    vo = VoiceOver()
+    from voice.pacing import ensure_pacing
+    pac = ensure_pacing(slug)
+    vo = VoiceOver(**pac)
     with console.status("Generating narration..."):
         vo.render_script(script, audio_dir, stem="voice" if format == "short" else f"voice-{format}")
 
@@ -434,7 +440,9 @@ def voice_regen_cmd(
     from core.models import VideoScript
     script = VideoScript.model_validate_json(script_path.read_text(encoding="utf-8"))
 
-    vo = VoiceOver()
+    from voice.pacing import ensure_pacing
+    pac = ensure_pacing(slug)
+    vo = VoiceOver(**pac)
     with console.status(f"Re-generating narration for {slug}..."):
         path = vo.render_script(script, audio_dir, stem="voice" if format == "short" else f"voice-{format}")
     console.print(f"[green]Voiceover ready[/green] -> {path}")
@@ -611,6 +619,7 @@ def auto_cmd(
     engine = ScriptEngineBlock(llm, target_seconds=duration)
 
     produced = 0
+    skip_this_run: set[str] = set()
 
     # Temporarily disable auto_publish if --no-upload is set
     original_auto_publish = settings.auto_publish
@@ -631,7 +640,7 @@ def auto_cmd(
         console.print(f"\n[bold cyan]Processing book: {book_path.name}[/bold cyan]")
 
         while produced < count:
-            lesson_path = next_untaken(book_path, ledger)
+            lesson_path = next_untaken(book_path, ledger, skip=skip_this_run)
             if lesson_path is None:
                 console.print(f"  No more available lessons in {book_path.name}")
                 break
@@ -650,9 +659,40 @@ def auto_cmd(
             audio_dir.mkdir(parents=True, exist_ok=True)
 
             try:
-                # 1. Pick lesson
+                recent_notes = ledger.recent_notes(6)
+                from blocks.lesson_picker import judge_lesson_duplicate
+                # the judge is a yes/no decision -> decision-model role
+                judge_model = settings.ollama_decision_model
+
+                # 1. Pick lesson (recent notes steer the picker away from angles
+                # the last videos already taught)
                 console.print(f"  [1/5] Picking lesson...")
-                idea = pick_lesson(llm, lesson_path, context_paths=neighbours(lesson_path, ledger=ledger), ledger=ledger)
+                idea = pick_lesson(
+                    llm,
+                    lesson_path,
+                    context_paths=neighbours(lesson_path, ledger=ledger),
+                    ledger=ledger,
+                    recent_lessons=recent_notes or None,
+                )
+
+                # Variety guard: the same lesson reworded is the fastest way
+                # to read as a template channel. Word overlap cannot detect
+                # paraphrase, so a small local judge call decides.
+                if judge_lesson_duplicate(llm, idea.lesson, recent_notes, model=judge_model):
+                    console.print("  [yellow]lesson too similar to a recent video; re-picking...[/yellow]")
+                    idea = pick_lesson(
+                        llm,
+                        lesson_path,
+                        context_paths=neighbours(lesson_path, ledger=ledger),
+                        ledger=ledger,
+                        recent_lessons=recent_notes or None,
+                    )
+                    if judge_lesson_duplicate(llm, idea.lesson, recent_notes, model=judge_model):
+                        console.print(
+                            "  [yellow]chunk only supports an already-taught idea; skipping for this run[/yellow]"
+                        )
+                        skip_this_run.add(str(lesson_path))
+                        continue
 
                 # 2. Write script
                 console.print(f"  [2/5] Writing script...")
@@ -667,6 +707,7 @@ def auto_cmd(
                     target_text=idea.target_text,
                     context_text=idea.context_text,
                     context_note=idea.context_notes or "",
+                    shape_seed=output_slug,
                 )
                 script = script.model_copy(update={"title": idea.topic})
                 script = annotate_music(llm, script)
@@ -682,7 +723,10 @@ def auto_cmd(
 
                 # 4. Voice
                 console.print(f"  [4/5] Generating narration...")
-                vo = VoiceOver()
+                from voice.pacing import ensure_pacing
+
+                pac = ensure_pacing(output_slug)
+                vo = VoiceOver(**pac)
                 with console.status("Generating narration..."):
                     vo.render_script(script, audio_dir, stem="voice")
 
@@ -706,7 +750,19 @@ def auto_cmd(
 
             except Exception as e:
                 console.print(f"[red]Failed: {e}[/red]")
-                # Don't mark as taken if failed - allow retry
+                message = str(e)
+                if "no teachable idea" in message:
+                    # permanently unteachable chunk (imprint/TOC/OCR noise):
+                    # consume it so the runner makes progress
+                    ledger.mark(str(lesson_path), script_dir=str(out_dir), note="unteachable — no teachable idea")
+                    skip_this_run.add(str(lesson_path))
+                    console.print("  [yellow]marked unteachable, moving on[/yellow]")
+                else:
+                    # transient failure: retry budget, then abandon the chunk
+                    abandoned = ledger.fail(str(lesson_path), note=message[:200])
+                    if abandoned:
+                        console.print("  [red]chunk failed repeatedly; abandoned[/red]")
+                        skip_this_run.add(str(lesson_path))
                 import traceback
                 traceback.print_exc()
 

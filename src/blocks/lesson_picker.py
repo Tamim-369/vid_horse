@@ -83,12 +83,81 @@ def _read(path: Path, max_chars: int) -> str:
     return text[:max_chars]
 
 
+_PAIR_SYSTEM = (
+    "You compare two short lesson summaries from psychology videos. SAME point means "
+    "a viewer who learned lesson A would learn nothing new from lesson B: the same "
+    "mechanism, the same cause-effect, merely reworded. DIFFERENT means same broad "
+    "theme, but a different mechanism, setting or consequence.\n\n"
+    "Examples:\n"
+    "A: \"People follow what seems popular because groups erase individual identity.\" "
+    "B: \"People react on instinct instead of reasoning; they follow whatever feels "
+    "right in the group.\" -> SAME (both: instinct/emotion replaces reasoning inside a group).\n"
+    "A: \"People follow trends blindly because emotion beats reason.\" "
+    "B: \"In an argument, staying calm while the opponent grows irritated makes them "
+    "defeat themselves.\" -> DIFFERENT (B is one-on-one argument tactics, not group behavior).\n"
+    "A: \"People follow the crowd because emotion beats reason.\" "
+    "B: \"Crowds think in images, never in reasoning; one striking picture outweighs a "
+    "hundred facts.\" -> DIFFERENT (B is about HOW ideas enter the mind — images vs "
+    "arguments — not why people follow).\n"
+    "A: \"Crowds adopt ideas as images, never through reasoning.\" "
+    "B: \"Crowds demand illusions and never thank anyone who tells them the truth.\" "
+    "-> DIFFERENT (both about crowds, but two distinct mechanisms).\n\n"
+    "Judge the concrete cause-and-effect story, never the general theme. "
+    'Answer the JSON only: {"same_point": true or false}.'
+)
+
+
+class PairVerdict(StrictModel):
+    same_point: bool = Field(default=False)
+
+
+def judge_lesson_duplicate(
+    llm: LLMProvider,
+    new_lesson: str,
+    recent_notes: list[str],
+    *,
+    model: str | None = None,
+) -> bool:
+    """One small local LLM call per recent lesson: same point, reworded?
+
+    Word/embedding overlap cannot detect paraphrase ("don't think for
+    themselves" vs "react instinctively on impression" share nothing but
+    mean the same), so a model judges. Judged as direct A-vs-B pairs
+    (not against a numbered list) because a 4B model handles one binary
+    comparison reliably and a list with a "closest" index poorly. Cheap
+    and local; short-circuits on the first duplicate found.
+    """
+
+    new_text = new_lesson.strip()
+    if not new_text or not recent_notes:
+        return False
+    for note in recent_notes:
+        msgs = [
+            LLMMessage(role="system", content=_PAIR_SYSTEM),
+            LLMMessage(
+                role="user",
+                content=f"LESSON A:\n{note.strip()}\n\nLESSON B:\n{new_text}\n\nDoes B teach the SAME point as A?",
+            ),
+        ]
+        try:
+            verdict = llm.complete_json(msgs, PairVerdict, temperature=0.0, model=model)
+        except (LLMError, BlockError) as exc:
+            # the judge must never block production: treat this pair as
+            # different and keep going
+            logger.warning("lesson-duplicate pair judge failed (%s); assuming different", exc)
+            continue
+        if verdict.same_point:
+            return True
+    return False
+
+
 def pick_lesson(
     llm: LLMProvider,
     lesson_path: str | Path,
     *,
     context_paths: list[str | Path] | None = None,
     ledger: TakenLedger | None = None,
+    recent_lessons: list[str] | None = None,
 ) -> LessonIdea:
     """Read one lesson chunk (plus surrounding section context) and return one idea."""
 
@@ -118,7 +187,15 @@ def pick_lesson(
         f"\"\"\"\n{target}\n\"\"\"\n"
         f"SURROUNDING SECTION PARTS (for understanding/continuity only; "
         f"[ALREADY USED] parts must not be the idea source):{context or ' (none)'}\n\n"
-        "Pick ONE teachable idea from the TARGET lesson and return the lesson brief JSON."
+        + (
+            "RECENT VIDEOS ALREADY TAUGHT these ideas — do NOT repeat their point. "
+            "Pick a clearly DIFFERENT mechanism, cause or consequence, or return empty "
+            "topic/lesson if the target text only supports one of them:\n"
+            + "\n".join(f"- {x}" for x in recent_lessons)
+            + "\n\n"
+            if recent_lessons else ""
+        )
+        + "Pick ONE teachable idea from the TARGET lesson and return the lesson brief JSON."
     )
     msgs = [
         LLMMessage(role="system", content=SYSTEM),

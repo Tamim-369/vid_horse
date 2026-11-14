@@ -140,6 +140,9 @@ class VoiceOver:
         *,
         exaggeration: float | None = None,
         cfg_weight: float | None = None,
+        speed: float | None = None,
+        sentence_gap: float | None = None,
+        line_gap: float | None = None,
     ) -> None:
         settings = get_settings()
         self._device = device
@@ -156,9 +159,14 @@ class VoiceOver:
         self._cfg_weight = (
             settings.voice_cfg_weight if cfg_weight is None else cfg_weight
         )
-        self._sentence_gap = settings.voice_sentence_gap
-        self._line_gap = settings.voice_line_gap
-        self._speed = settings.voice_speed
+        # per-video pacing overrides (voice/pacing.py): None -> settings
+        self._sentence_gap = (
+            settings.voice_sentence_gap if sentence_gap is None else float(sentence_gap)
+        )
+        self._line_gap = (
+            settings.voice_line_gap if line_gap is None else float(line_gap)
+        )
+        self._speed = settings.voice_speed if speed is None else float(speed)
         self._local = threading.local()
         # Don't reset torch threads if parallel work has already started
         try:

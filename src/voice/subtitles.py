@@ -454,6 +454,9 @@ def align_speech_deterministic(
     stem: str = "voice",
     model_size: str = "base.en",
     device: str = "cpu",
+    voice_speed: float | None = None,
+    sentence_gap: float | None = None,
+    line_gap: float | None = None,
 ) -> list[list[tuple[str, float, float]]] | None:
     """Word timings rebuilt from the per-sentence TTS wavs, not full-line ASR.
 
@@ -476,8 +479,15 @@ def align_speech_deterministic(
     from voice.tts import _sentences, beat_gap
 
     settings = get_settings()
-    speed = settings.voice_speed if settings.voice_speed > 0.05 else 1.0
+    # per-video pacing overrides must match the values the voice was
+    # rendered with (voice/pacing.py); None -> global settings
+    speed = (settings.voice_speed if voice_speed is None else float(voice_speed))
+    speed = speed if speed > 0.05 else 1.0
     scale = 1.0 / speed
+    used_sentence_gap = (
+        settings.voice_sentence_gap if sentence_gap is None else float(sentence_gap)
+    )
+    used_line_gap = settings.voice_line_gap if line_gap is None else float(line_gap)
 
     # structure sanity: sentence wavs must all exist and the recomputed
     # line duration must match the actual wav (gaps + speed unchanged)
@@ -497,12 +507,12 @@ def align_speech_deterministic(
             raw_total += duration
             if position:
                 raw_total += beat_gap(
-                    sentences[position - 1], sentence, settings.voice_sentence_gap
+                    sentences[position - 1], sentence, used_sentence_gap
                 )
         line_wav = audio_dir / f"{stem}-{index:02d}.wav"
         line_dur = _audio_duration(line_wav)
         expected = raw_total * scale + (
-            0.0 if index == len(lines) - 1 else settings.voice_line_gap
+            0.0 if index == len(lines) - 1 else used_line_gap
         )
         tolerance = 0.08 + 0.01 * len(sentences)
         if line_dur is None or abs(line_dur - expected) > tolerance:
